@@ -1,0 +1,55 @@
+# NarrateAI — Cursor Rules
+
+## Project Overview
+NarrateAI — AI faceless video generation platform.
+Next.js 14+ App Router, TypeScript, Tailwind CSS, Prisma, BullMQ.
+
+## Code Style
+- TypeScript strict mode, no `any` types
+- Named exports only (no default exports)
+- Functional components with typed props interfaces
+- Use `async/await` over `.then()` chains
+- Prefer `const` over `let`, never use `var`
+
+## File Conventions
+- Components: PascalCase.tsx
+- Utils/services: kebab-case.ts
+- Types: kebab-case.ts in src/types/
+- API routes: route.ts in app/api/ directory structure
+
+## Component Guidelines
+- Use shadcn/ui for all UI primitives (Button, Input, Card, Dialog, etc.)
+- Use Tailwind CSS for styling — no CSS modules or styled-components
+- Use Lucide React for icons
+- Use Framer Motion for animations
+- Use React Hook Form + Zod for forms
+
+## API Guidelines
+- Validate all inputs with Zod schemas
+- Always check authentication via getServerSession()
+- Return consistent JSON: { data: ... } or { error: string }
+- Use proper HTTP status codes
+- Wrap handlers in try/catch
+
+## Roles & Permissions
+- Three roles: owner, admin, user (stored in User.role, default: user)
+- Owner/admin bypass all plan limits — check isPrivilegedRole() before enforcing quotas
+- Admin routes: guard with requireRole("admin") middleware
+- Owner identified by OWNER_EMAIL env var, promoted via seed script (no credentials in env)
+- Passwords always hashed with bcrypt, never stored or transmitted in plaintext
+
+## Database
+- Always use Prisma client from src/lib/db.ts
+- Use transactions for multi-step mutations
+- Never write raw SQL unless absolutely necessary
+
+## AI Pipeline Services
+- Each stage is a standalone function in src/services/
+- Always implement retry logic with exponential backoff
+- Log all AI API calls with input/output sizes for cost tracking
+- Use multi-provider fallback (primary → secondary)
+
+## Key Files to Reference
+- PLAN.md — project plan, DB schema, API endpoints
+- ARCHITECTURE.md — system design, pipeline flow
+- TECH_STACK.md — technology decisions
