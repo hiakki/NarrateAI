@@ -117,6 +117,7 @@ model Video {
   scheduledPostTime DateTime?
   postedPlatforms  Json             @default("[]")
   errorMessage     String?
+  checkpointData   Json?
 
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt

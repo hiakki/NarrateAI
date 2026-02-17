@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import IORedis from "ioredis";
 
 export interface VideoJobData {
   videoId: string;
@@ -9,30 +10,38 @@ export interface VideoJobData {
   artStyle: string;
   artStylePrompt: string;
   voiceId: string;
+  musicPath?: string;
   duration: number;
 }
 
-export const videoGenerationQueue = new Queue<VideoJobData>("video-generation", {
-  connection: {
-    host: process.env.REDIS_URL?.includes("://")
-      ? new URL(process.env.REDIS_URL).hostname
-      : "localhost",
-    port: process.env.REDIS_URL?.includes("://")
-      ? parseInt(new URL(process.env.REDIS_URL).port || "6379")
-      : 6379,
-    maxRetriesPerRequest: null,
-  },
-  defaultJobOptions: {
-    attempts: 2,
-    backoff: { type: "exponential", delay: 5000 },
-    removeOnComplete: { count: 100 },
-    removeOnFail: { count: 50 },
-  },
-});
+function createRedisConnection() {
+  const url = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const conn = new IORedis(url, { maxRetriesPerRequest: null, lazyConnect: false });
+  conn.on("error", (err) => console.error("[Queue Redis] Error:", err.message));
+  return conn;
+}
+
+let queueInstance: Queue<VideoJobData> | null = null;
+
+function getQueue(): Queue<VideoJobData> {
+  if (!queueInstance) {
+    queueInstance = new Queue<VideoJobData>("video-generation", {
+      connection: createRedisConnection() as never,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
+      },
+    });
+  }
+  return queueInstance;
+}
 
 export async function enqueueVideoGeneration(data: VideoJobData): Promise<string> {
-  const job = await videoGenerationQueue.add("generate", data, {
-    jobId: data.videoId,
-  });
-  return job.id ?? data.videoId;
+  const queue = getQueue();
+  const jobId = `${data.videoId}-${Date.now()}`;
+  console.log(`[Queue] Enqueuing job ${jobId}`);
+  const job = await queue.add("generate", data, { jobId });
+  console.log(`[Queue] Job enqueued: ${job.id}`);
+  return job.id ?? jobId;
 }

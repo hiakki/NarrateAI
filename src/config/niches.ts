@@ -6,6 +6,7 @@ export interface Niche {
   sampleTopics: string[];
   defaultTone: string;
   defaultArtStyle: string;
+  defaultMusic: string;
 }
 
 export const NICHES: Niche[] = [
@@ -21,6 +22,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "dark-cinematic",
+    defaultMusic: "dramatic",
   },
   {
     id: "mythology",
@@ -34,6 +36,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "oil-painting",
+    defaultMusic: "dramatic",
   },
   {
     id: "history",
@@ -47,6 +50,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "educational",
     defaultArtStyle: "realistic",
+    defaultMusic: "ambient",
   },
   {
     id: "true-crime",
@@ -60,6 +64,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "dark-cinematic",
+    defaultMusic: "dramatic",
   },
   {
     id: "anime-recaps",
@@ -73,6 +78,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "casual",
     defaultArtStyle: "anime",
+    defaultMusic: "upbeat",
   },
   {
     id: "life-hacks",
@@ -86,6 +92,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "casual",
     defaultArtStyle: "pixar-3d",
+    defaultMusic: "upbeat",
   },
   {
     id: "motivation",
@@ -99,6 +106,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "realistic",
+    defaultMusic: "dramatic",
   },
   {
     id: "science-facts",
@@ -112,6 +120,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "educational",
     defaultArtStyle: "realistic",
+    defaultMusic: "ambient",
   },
   {
     id: "conspiracy-theories",
@@ -125,6 +134,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "dark-cinematic",
+    defaultMusic: "dramatic",
   },
   {
     id: "biblical-stories",
@@ -138,6 +148,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "oil-painting",
+    defaultMusic: "dramatic",
   },
   {
     id: "urban-legends",
@@ -151,6 +162,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "dark-cinematic",
+    defaultMusic: "dramatic",
   },
   {
     id: "heists",
@@ -164,6 +176,7 @@ export const NICHES: Niche[] = [
     ],
     defaultTone: "dramatic",
     defaultArtStyle: "comic-book",
+    defaultMusic: "dramatic",
   },
 ];
 

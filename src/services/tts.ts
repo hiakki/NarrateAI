@@ -19,6 +19,7 @@ export async function generateSpeech(
   scenes: { text: string }[]
 ): Promise<TTSResult> {
   const ai = getAI();
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
     contents: scriptText,
@@ -45,8 +46,9 @@ export async function generateSpeech(
   await fs.writeFile(audioPath, audioBuffer);
 
   const durationMs = await getAudioDuration(audioPath);
-
   const sceneTimings = estimateSceneTimings(scenes, durationMs);
+
+  console.log(`[TTS] Audio saved: ${audioPath} (${durationMs}ms, ${(audioBuffer.length / 1024).toFixed(0)}KB)`);
 
   return { audioPath, durationMs, sceneTimings };
 }
@@ -81,6 +83,7 @@ async function getAudioDuration(filePath: string): Promise<number> {
   const { promisify } = await import("util");
   const exec = promisify(execFile);
 
+  // Try ffprobe first
   try {
     const { stdout } = await exec("ffprobe", [
       "-v", "quiet",
@@ -88,8 +91,25 @@ async function getAudioDuration(filePath: string): Promise<number> {
       "-of", "default=noprint_wrappers=1:nokey=1",
       filePath,
     ]);
-    return Math.round(parseFloat(stdout.trim()) * 1000);
+    const duration = parseFloat(stdout.trim());
+    if (!isNaN(duration) && duration > 0) {
+      return Math.round(duration * 1000);
+    }
   } catch {
+    // ffprobe failed
+  }
+
+  // Fallback: estimate from WAV file size
+  // PCM 16-bit mono 24kHz = 48000 bytes/sec, stereo = 96000 bytes/sec
+  try {
+    const stat = await (await import("fs/promises")).stat(filePath);
+    const fileSizeBytes = stat.size - 44; // subtract WAV header
+    const bytesPerSecond = 48000; // conservative estimate for mono 24kHz 16-bit
+    const estimatedSeconds = Math.max(10, fileSizeBytes / bytesPerSecond);
+    console.log(`[TTS] Duration estimated from file size: ${Math.round(estimatedSeconds)}s`);
+    return Math.round(estimatedSeconds * 1000);
+  } catch {
+    console.warn("[TTS] All duration methods failed, defaulting to 45s");
     return 45000;
   }
 }
