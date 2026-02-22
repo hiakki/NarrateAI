@@ -5,6 +5,7 @@ import { checkSeriesLimit, checkVideoLimit } from "@/lib/permissions";
 import { getArtStyleById } from "@/config/art-styles";
 import { getNicheById } from "@/config/niches";
 import { enqueueVideoGeneration } from "@/services/queue";
+import { resolveProviders } from "@/services/providers/resolve";
 import { z } from "zod/v4";
 
 const createSchema = z.object({
@@ -12,11 +13,15 @@ const createSchema = z.object({
   niche: z.string().min(1),
   artStyle: z.string().min(1),
   voiceId: z.string().min(1),
+  language: z.string().min(1).default("en"),
   tone: z.string().min(1),
   duration: z.number().min(15).max(120),
   title: z.string().min(1),
   scriptText: z.string().min(1),
   scenes: z.array(z.object({ text: z.string().min(1), visualDescription: z.string().min(1) })),
+  llmProvider: z.string().optional(),
+  ttsProvider: z.string().optional(),
+  imageProvider: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -40,6 +45,20 @@ export async function POST(req: NextRequest) {
     const artStyle = getArtStyleById(input.artStyle);
     const niche = getNicheById(input.niche);
 
+    // Resolve providers: series override > user default > platform default
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true },
+    });
+
+    const seriesProviders = {
+      llmProvider: input.llmProvider ?? null,
+      ttsProvider: input.ttsProvider ?? null,
+      imageProvider: input.imageProvider ?? null,
+    };
+
+    const resolved = resolveProviders(seriesProviders, user);
+
     const result = await db.$transaction(async (tx) => {
       const series = await tx.series.create({
         data: {
@@ -48,10 +67,22 @@ export async function POST(req: NextRequest) {
           niche: input.niche,
           artStyle: input.artStyle,
           voiceId: input.voiceId,
+          language: input.language,
+          tone: input.tone,
+          llmProvider: (input.llmProvider as never) ?? null,
+          ttsProvider: (input.ttsProvider as never) ?? null,
+          imageProvider: (input.imageProvider as never) ?? null,
         },
       });
       const video = await tx.video.create({
-        data: { seriesId: series.id, title: input.title, scriptText: input.scriptText, status: "QUEUED" },
+        data: {
+          seriesId: series.id,
+          title: input.title,
+          scriptText: input.scriptText,
+          scenesJson: input.scenes as never,
+          targetDuration: input.duration,
+          status: "QUEUED",
+        },
       });
       return { series, video };
     });
@@ -64,9 +95,16 @@ export async function POST(req: NextRequest) {
       scenes: input.scenes,
       artStyle: input.artStyle,
       artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
+      negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
+      tone: input.tone,
+      niche: input.niche,
       voiceId: input.voiceId,
+      language: input.language,
       musicPath: niche?.defaultMusic,
       duration: input.duration,
+      llmProvider: resolved.llm,
+      ttsProvider: resolved.tts,
+      imageProvider: resolved.image,
     });
 
     return NextResponse.json({ data: { seriesId: result.series.id, videoId: result.video.id } }, { status: 201 });

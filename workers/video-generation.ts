@@ -2,9 +2,11 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
-import { generateSpeech } from "../src/services/tts";
-import { generateSceneImages } from "../src/services/image-generator";
+import { getTtsProvider, getImageProvider } from "../src/services/providers/factory";
+import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo } from "../src/services/video-assembler";
+import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
+import { getArtStyleById } from "../src/config/art-styles";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
@@ -49,12 +51,22 @@ async function fileExists(p: string): Promise<boolean> {
 const worker = new Worker<VideoJobData>(
   "video-generation",
   async (job) => {
-    const { videoId, title, scriptText, scenes, artStylePrompt, voiceId, musicPath } = job.data;
+    const {
+      videoId, title, scriptText, scenes, artStylePrompt, negativePrompt,
+      voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
+      tone, niche, artStyle,
+    } = job.data;
+
+    if (!ttsProvider || !imageProvider || !scenes?.length) {
+      throw new Error(`Invalid job data: missing required fields (tts=${ttsProvider}, image=${imageProvider}, scenes=${scenes?.length ?? 0})`);
+    }
+
+    console.log(`[Worker] Providers: LLM=${llmProvider}, TTS=${ttsProvider}, Image=${imageProvider}, Lang=${language ?? "en"}`);
 
     const checkpoint = await loadCheckpoint(videoId);
     const completed = new Set(checkpoint.completedStages ?? []);
 
-    console.log(`[Worker] Starting: ${videoId} (${scenes.length} scenes, resuming from: ${completed.size > 0 ? [...completed].join(",") : "beginning"})`);
+    console.log(`[Worker] Starting: ${videoId} (${scenes.length} scenes, TTS: ${ttsProvider}, Image: ${imageProvider}, resuming from: ${completed.size > 0 ? [...completed].join(",") : "beginning"})`);
 
     let audioPath = checkpoint.audioPath;
     let durationMs = checkpoint.durationMs;
@@ -63,7 +75,7 @@ const worker = new Worker<VideoJobData>(
     let imageTmpDir = checkpoint.imageTmpDir;
 
     try {
-      // ── Stage 1: Script ──
+      // -- Stage 1: Script --
       if (!completed.has("SCRIPT")) {
         await updateStage(videoId, "SCRIPT");
         await db.video.update({ where: { id: videoId }, data: { scriptText, title } });
@@ -74,13 +86,15 @@ const worker = new Worker<VideoJobData>(
         console.log("[Worker] Script: skipped (checkpoint)");
       }
 
-      // ── Stage 2: TTS ──
+      // -- Stage 2: TTS --
       if (!completed.has("TTS") || !audioPath || !(await fileExists(audioPath))) {
         await updateStage(videoId, "TTS");
-        const tts = await generateSpeech(scriptText, voiceId, scenes);
-        audioPath = tts.audioPath;
-        durationMs = tts.durationMs;
-        sceneTimings = tts.sceneTimings;
+        const resolvedVoice = resolveVoiceForProvider(ttsProvider, voiceId, language);
+        const tts = getTtsProvider(ttsProvider);
+        const ttsResult = await tts.generateSpeech(scriptText, resolvedVoice, scenes);
+        audioPath = ttsResult.audioPath;
+        durationMs = ttsResult.durationMs;
+        sceneTimings = ttsResult.sceneTimings;
 
         await db.video.update({ where: { id: videoId }, data: { voiceoverUrl: audioPath } });
         completed.add("TTS");
@@ -89,18 +103,30 @@ const worker = new Worker<VideoJobData>(
           audioPath, durationMs, sceneTimings,
           imagePaths, imageTmpDir,
         });
-        console.log(`[Worker] TTS done: ${durationMs}ms`);
+        console.log(`[Worker] TTS done: ${durationMs}ms (${ttsProvider})`);
       } else {
         console.log(`[Worker] TTS: skipped (checkpoint, ${durationMs}ms)`);
       }
 
-      // ── Stage 3: Images ──
+      // -- Stage 3: Images --
       const allImagesExist = imagePaths && imagePaths.length === scenes.length &&
         await Promise.all(imagePaths.map(fileExists)).then(r => r.every(Boolean));
 
       if (!completed.has("IMAGES") || !allImagesExist) {
         await updateStage(videoId, "IMAGES");
-        const imgResult = await generateSceneImages(scenes, artStylePrompt);
+        const resolvedArtStyle = getArtStyleById(artStyle);
+        const resolvedNeg = negativePrompt ?? resolvedArtStyle?.negativePrompt ?? "low quality, blurry, watermark, text";
+
+        let enhancedScenes = scenes;
+        if (resolvedArtStyle) {
+          enhancedScenes = scenes.map((s, i) => {
+            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, scenes.length);
+            return { ...s, visualDescription: built.prompt };
+          });
+        }
+
+        const img = getImageProvider(imageProvider);
+        const imgResult = await img.generateImages(enhancedScenes, artStylePrompt, resolvedNeg);
         imagePaths = imgResult.imagePaths;
         imageTmpDir = imgResult.tmpDir;
 
@@ -110,12 +136,12 @@ const worker = new Worker<VideoJobData>(
           audioPath, durationMs, sceneTimings,
           imagePaths, imageTmpDir,
         });
-        console.log(`[Worker] Images done: ${imagePaths.length}`);
+        console.log(`[Worker] Images done: ${imagePaths.length} (${imageProvider})`);
       } else {
         console.log(`[Worker] Images: skipped (checkpoint, ${imagePaths!.length} images)`);
       }
 
-      // ── Stage 4: Assembly ──
+      // -- Stage 4: Assembly --
       await updateStage(videoId, "ASSEMBLY");
       const outputDir = path.join(process.cwd(), "public", "videos");
       await fs.mkdir(outputDir, { recursive: true });
@@ -134,10 +160,12 @@ const worker = new Worker<VideoJobData>(
         scenes,
         musicPath: resolvedMusicPath,
         outputPath,
+        tone: tone ?? "dramatic",
+        niche: niche ?? "",
       });
       console.log("[Worker] Assembly done");
 
-      // ── Stage 5: Finalize ──
+      // -- Stage 5: Finalize --
       await updateStage(videoId, "UPLOADING");
       await db.video.update({
         where: { id: videoId },
@@ -155,16 +183,17 @@ const worker = new Worker<VideoJobData>(
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`[Worker] FAILED ${videoId}:`, msg);
 
-      // Save checkpoint so retry can resume -- don't clear it
-      await db.video.update({
-        where: { id: videoId },
-        data: { status: "FAILED", generationStage: null, errorMessage: msg },
-      });
+      try {
+        await db.video.update({
+          where: { id: videoId },
+          data: { status: "FAILED", generationStage: null, errorMessage: msg.slice(0, 500) },
+        });
+      } catch (dbErr) {
+        console.error(`[Worker] CRITICAL: Could not mark ${videoId} as FAILED:`, dbErr);
+      }
 
       throw error;
     }
-    // NOTE: we do NOT clean up temp files on success either, since retry might
-    // need them. They live in $TMPDIR which the OS cleans periodically.
   },
   { connection: redis as never, concurrency: 1 }
 );

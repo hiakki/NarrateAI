@@ -1,25 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
-import { VOICES } from "@/config/voices";
-import { ArrowLeft, ArrowRight, Loader2, RefreshCw, Sparkles, Check } from "lucide-react";
+import { LANGUAGES, isLanguageSupportedByTts } from "@/config/languages";
+import { VOICES_BY_PROVIDER, getVoicesForProvider, getDefaultVoiceId } from "@/config/voices";
+import {
+  ArrowLeft, ArrowRight, Loader2, RefreshCw, Sparkles, Check,
+  ChevronDown, ChevronUp, Cpu, Mic, Image as ImageIcon,
+} from "lucide-react";
 
 type Step = 1 | 2 | 3;
+
+interface ProviderInfo {
+  id: string;
+  name: string;
+  description: string;
+  costEstimate: string;
+  qualityLabel: string;
+}
+
+interface ProviderData {
+  defaults: { llmProvider: string | null; ttsProvider: string | null; imageProvider: string | null };
+  available: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
+  all: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
+  platformDefaults: { llm: string; tts: string; image: string };
+}
 
 export default function NewSeriesPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
   const [selectedNiche, setSelectedNiche] = useState("");
   const [artStyle, setArtStyle] = useState("");
-  const [voiceId, setVoiceId] = useState("Charon");
+  const [voiceId, setVoiceId] = useState("");
+  const [language, setLanguage] = useState("en");
   const [tone, setTone] = useState("dramatic");
   const [duration, setDuration] = useState(45);
   const [customTopic, setCustomTopic] = useState("");
@@ -32,7 +53,43 @@ export default function NewSeriesPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState("");
 
+  // Provider overrides
+  const [showProviders, setShowProviders] = useState(false);
+  const [providerData, setProviderData] = useState<ProviderData | null>(null);
+  const [llmProvider, setLlmProvider] = useState<string>("");
+  const [ttsProvider, setTtsProvider] = useState<string>("");
+  const [imageProvider, setImageProvider] = useState<string>("");
+
   const niche = NICHES.find((n) => n.id === selectedNiche);
+
+  const effectiveTts = ttsProvider
+    || providerData?.defaults.ttsProvider
+    || providerData?.platformDefaults.tts
+    || "GEMINI_TTS";
+  const voices = getVoicesForProvider(effectiveTts, language);
+
+  const fetchProviders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/providers");
+      const json = await res.json();
+      if (json.data) setProviderData(json.data);
+    } catch {
+      // Provider data is optional for wizard
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchProviders();
+  }, [fetchProviders]);
+
+  // Reset voice when TTS provider or language changes
+  useEffect(() => {
+    const currentVoices = getVoicesForProvider(effectiveTts, language);
+    const currentStillValid = voiceId && currentVoices.some((v) => v.id === voiceId);
+    if (!currentStillValid) {
+      setVoiceId(getDefaultVoiceId(effectiveTts, language));
+    }
+  }, [effectiveTts, voiceId, language]);
 
   async function handleGenerateScript() {
     setIsGenerating(true);
@@ -40,7 +97,12 @@ export default function NewSeriesPage() {
     try {
       const res = await fetch("/api/series/generate-script", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ niche: niche?.name ?? selectedNiche, tone, artStyle, duration, topic: customTopic || undefined }),
+        body: JSON.stringify({
+          niche: niche?.name ?? selectedNiche, tone, artStyle, duration,
+          topic: customTopic || undefined,
+          language,
+          llmProvider: llmProvider || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -65,8 +127,11 @@ export default function NewSeriesPage() {
       const res = await fetch("/api/series", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: generatedScript.title, niche: selectedNiche, artStyle, voiceId, tone, duration,
+          name: generatedScript.title, niche: selectedNiche, artStyle, voiceId, language, tone, duration,
           title: generatedScript.title, scriptText: scenes.map((s) => s.text).join(" "), scenes,
+          llmProvider: llmProvider || undefined,
+          ttsProvider: ttsProvider || undefined,
+          imageProvider: imageProvider || undefined,
         }),
       });
       const data = await res.json();
@@ -77,6 +142,10 @@ export default function NewSeriesPage() {
       setIsCreating(false);
     }
   }
+
+  const availableLlmIds = new Set(providerData?.available.llm.map((p) => p.id) ?? []);
+  const availableTtsIds = new Set(providerData?.available.tts.map((p) => p.id) ?? []);
+  const availableImageIds = new Set(providerData?.available.image.map((p) => p.id) ?? []);
 
   return (
     <div className="max-w-4xl">
@@ -152,7 +221,7 @@ export default function NewSeriesPage() {
           <div>
             <h2 className="text-xl font-semibold mb-4">Voice</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {VOICES.map((v) => (
+              {voices.map((v) => (
                 <Card key={v.id} className={`cursor-pointer transition-all hover:border-primary/50 ${voiceId === v.id ? "border-primary ring-2 ring-primary/20" : ""}`} onClick={() => setVoiceId(v.id)}>
                   <CardContent className="p-3">
                     <div className="font-medium text-sm">{v.name}</div>
@@ -160,6 +229,27 @@ export default function NewSeriesPage() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          </div>
+
+          <div>
+            <Label className="mb-2 block">Language</Label>
+            <div className="flex flex-wrap gap-2">
+              {LANGUAGES.map((l) => {
+                const ttsOk = isLanguageSupportedByTts(l.id, effectiveTts);
+                return (
+                  <Button
+                    key={l.id}
+                    variant={language === l.id ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setLanguage(l.id)}
+                    title={!ttsOk ? `${l.name} is not supported by the selected TTS provider` : undefined}
+                  >
+                    <span className="mr-1">{l.flag}</span> {l.name}
+                    {!ttsOk && <span className="ml-1 text-[10px] opacity-60">(limited TTS)</span>}
+                  </Button>
+                );
+              })}
             </div>
           </div>
 
@@ -187,6 +277,117 @@ export default function NewSeriesPage() {
             <Input id="topic" placeholder="Leave blank for AI to choose a trending topic" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} />
           </div>
 
+          {/* AI Provider Override (collapsible) */}
+          {providerData && (
+            <div className="border rounded-lg">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => setShowProviders(!showProviders)}
+              >
+                <div>
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    Advanced: AI Providers
+                    {!llmProvider && !ttsProvider && !imageProvider && (
+                      <Badge variant="secondary" className="text-[10px]">Using defaults</Badge>
+                    )}
+                    {(llmProvider || ttsProvider || imageProvider) && (
+                      <Badge variant="default" className="text-[10px]">Custom</Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Override which AI services to use for this series
+                  </p>
+                </div>
+                {showProviders ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+
+              {showProviders && (
+                <div className="px-4 pb-4 space-y-4">
+                  <Separator />
+
+                  {/* LLM Provider */}
+                  <div>
+                    <Label className="mb-2 block text-xs flex items-center gap-1">
+                      <Cpu className="h-3 w-3" /> Script AI
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm" variant={!llmProvider ? "default" : "outline"}
+                        onClick={() => setLlmProvider("")}
+                      >
+                        Default
+                      </Button>
+                      {(providerData.all.llm).map((p) => (
+                        <Button
+                          key={p.id} size="sm"
+                          variant={llmProvider === p.id ? "default" : "outline"}
+                          disabled={!availableLlmIds.has(p.id)}
+                          onClick={() => setLlmProvider(p.id)}
+                        >
+                          {p.name}
+                          <span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* TTS Provider */}
+                  <div>
+                    <Label className="mb-2 block text-xs flex items-center gap-1">
+                      <Mic className="h-3 w-3" /> Voice AI
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm" variant={!ttsProvider ? "default" : "outline"}
+                        onClick={() => setTtsProvider("")}
+                      >
+                        Default
+                      </Button>
+                      {(providerData.all.tts).map((p) => (
+                        <Button
+                          key={p.id} size="sm"
+                          variant={ttsProvider === p.id ? "default" : "outline"}
+                          disabled={!availableTtsIds.has(p.id)}
+                          onClick={() => setTtsProvider(p.id)}
+                        >
+                          {p.name}
+                          <span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Image Provider */}
+                  <div>
+                    <Label className="mb-2 block text-xs flex items-center gap-1">
+                      <ImageIcon className="h-3 w-3" /> Image AI
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm" variant={!imageProvider ? "default" : "outline"}
+                        onClick={() => setImageProvider("")}
+                      >
+                        Default
+                      </Button>
+                      {(providerData.all.image).map((p) => (
+                        <Button
+                          key={p.id} size="sm"
+                          variant={imageProvider === p.id ? "default" : "outline"}
+                          disabled={!availableImageIds.has(p.id)}
+                          onClick={() => setImageProvider(p.id)}
+                        >
+                          {p.name}
+                          <span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-between">
             <Button variant="outline" onClick={() => setStep(1)}><ArrowLeft className="mr-1 h-4 w-4" /> Back</Button>
             <Button onClick={() => { setStep(3); handleGenerateScript(); }}><Sparkles className="mr-1 h-4 w-4" /> Generate Script</Button>
@@ -201,7 +402,7 @@ export default function NewSeriesPage() {
           {isGenerating ? (
             <div className="flex flex-col items-center py-16 text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin mb-4" />
-              <p>Generating script with Gemini AI...</p>
+              <p>Generating script with AI...</p>
               <p className="text-sm mt-1">This may take 10-20 seconds</p>
             </div>
           ) : generatedScript ? (

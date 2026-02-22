@@ -57,6 +57,34 @@ enum SubscriptionStatus {
   CANCELED
 }
 
+enum LlmProvider {
+  GEMINI_FLASH
+  OPENAI_GPT4O_MINI
+  DEEPSEEK_V3
+  QWEN
+}
+
+enum TtsProvider {
+  GEMINI_TTS
+  ELEVENLABS
+  COSYVOICE
+  FISH_AUDIO
+  EDGE_TTS
+}
+
+enum ImageProvider {
+  GEMINI_IMAGEN
+  DALLE3
+  FLUX
+  KOLORS
+  SDXL
+  FLUX_SCHNELL
+  TOGETHER
+  SILICONFLOW
+  LEONARDO
+  IDEOGRAM
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model User {
@@ -68,6 +96,10 @@ model User {
   role          UserRole  @default(USER)
   plan          UserPlan  @default(FREE)
   stripeCustomerId String?
+
+  defaultLlmProvider   LlmProvider?
+  defaultTtsProvider   TtsProvider?
+  defaultImageProvider ImageProvider?
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -88,9 +120,15 @@ model Series {
   musicType       String?
   musicUrl        String?
   voiceId         String?
+  language        String       @default("en")
+  tone            String       @default("dramatic")
   targetPlatforms Json         @default("[]")
   postingSchedule Json?
   status          SeriesStatus @default(ACTIVE)
+
+  llmProvider     LlmProvider?
+  ttsProvider     TtsProvider?
+  imageProvider   ImageProvider?
 
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -108,10 +146,12 @@ model Video {
   title            String?
   description      String?
   scriptText       String?
+  scenesJson       Json?
   voiceoverUrl     String?
   videoUrl         String?
   thumbnailUrl     String?
   duration         Int?
+  targetDuration   Int?
   status           VideoStatus      @default(QUEUED)
   generationStage  GenerationStage?
   scheduledPostTime DateTime?

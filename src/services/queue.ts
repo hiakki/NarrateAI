@@ -9,9 +9,16 @@ export interface VideoJobData {
   scenes: { text: string; visualDescription: string }[];
   artStyle: string;
   artStylePrompt: string;
+  negativePrompt: string;
+  tone: string;
+  niche: string;
   voiceId: string;
+  language: string;
   musicPath?: string;
   duration: number;
+  llmProvider: string;
+  ttsProvider: string;
+  imageProvider: string;
 }
 
 function createRedisConnection() {
@@ -28,7 +35,8 @@ function getQueue(): Queue<VideoJobData> {
     queueInstance = new Queue<VideoJobData>("video-generation", {
       connection: createRedisConnection() as never,
       defaultJobOptions: {
-        attempts: 1,
+        attempts: 3,
+        backoff: { type: "exponential", delay: 10000 },
         removeOnComplete: { count: 100 },
         removeOnFail: { count: 50 },
       },
@@ -40,7 +48,7 @@ function getQueue(): Queue<VideoJobData> {
 export async function enqueueVideoGeneration(data: VideoJobData): Promise<string> {
   const queue = getQueue();
   const jobId = `${data.videoId}-${Date.now()}`;
-  console.log(`[Queue] Enqueuing job ${jobId}`);
+  console.log(`[Queue] Enqueuing job ${jobId} (LLM: ${data.llmProvider}, TTS: ${data.ttsProvider}, Image: ${data.imageProvider})`);
   const job = await queue.add("generate", data, { jobId });
   console.log(`[Queue] Job enqueued: ${job.id}`);
   return job.id ?? jobId;
