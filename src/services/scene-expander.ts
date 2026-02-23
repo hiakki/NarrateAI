@@ -22,6 +22,32 @@ const CAMERA_VARIATIONS = [
   "panoramic wide shot with depth layers",
 ];
 
+const NARRATIVE_FOCUS = [
+  "focusing on the primary subject and their emotional expression at this exact moment",
+  "emphasizing the environment reacting to the action — objects shifting, light changing, atmosphere responding",
+  "capturing the peak gesture or movement that defines this instant — hands reaching, body turning, eyes widening",
+  "highlighting the most significant object or detail central to what is happening right now",
+  "showing the emotional impact and reaction — facial tension, body language, involuntary response",
+  "revealing the full dramatic scope of the moment with every element contributing to the story",
+  "intimate texture and micro-detail — skin, fabric, surface, revealing inner state through physical detail",
+  "dynamic energy and momentum — motion blur on extremities, flying particles, displaced air, kinetic force",
+  "the transitional instant between two states — calm breaking into chaos, light turning to dark, hope to despair",
+  "the decisive split-second where everything changes — frozen at maximum tension and narrative weight",
+];
+
+const MOOD_VARIATIONS = [
+  "raw and visceral energy, every element charged with tension",
+  "haunting stillness with an undercurrent of unease beneath the surface",
+  "explosive intensity, as if the frame itself struggles to contain the moment",
+  "melancholic weight, time slowing to absorb the gravity of what is happening",
+  "electrifying anticipation, the instant before the irreversible occurs",
+  "dreamlike surrealism, reality slightly distorted by heightened emotion",
+  "gritty authenticity, every imperfection adding to the rawness of the scene",
+  "ethereal beauty emerging from darkness, contrast between hope and despair",
+  "suffocating claustrophobia, the world closing in around the subject",
+  "vast lonely grandeur, the subject dwarfed by forces beyond their control",
+];
+
 function splitIntoSentences(text: string): string[] {
   const raw = text.match(/[^.!?]+[.!?]+/g) ?? [text];
   return raw.map((s) => s.trim()).filter((s) => s.length > 0);
@@ -46,27 +72,38 @@ export function expandScenesToImageSlots(
     sentences.push({ text: scenes[0]?.text ?? "", parentIdx: 0 });
   }
 
+  const slotsPerScene = new Map<number, number>();
   let slots: ImageSlot[];
 
   if (sentences.length >= targetCount) {
-    slots = sentences.slice(0, targetCount).map((s, i) => ({
-      text: s.text,
-      visualDescription: buildVariation(scenes[s.parentIdx].visualDescription, i),
-      parentSceneIndex: s.parentIdx,
-    }));
+    slots = sentences.slice(0, targetCount).map((s, i) => {
+      const slotIdx = slotsPerScene.get(s.parentIdx) ?? 0;
+      slotsPerScene.set(s.parentIdx, slotIdx + 1);
+      return {
+        text: s.text,
+        visualDescription: buildVariation(scenes[s.parentIdx].visualDescription, i, slotIdx),
+        parentSceneIndex: s.parentIdx,
+      };
+    });
   } else {
-    slots = sentences.map((s, i) => ({
-      text: s.text,
-      visualDescription: buildVariation(scenes[s.parentIdx].visualDescription, i),
-      parentSceneIndex: s.parentIdx,
-    }));
+    slots = sentences.map((s, i) => {
+      const slotIdx = slotsPerScene.get(s.parentIdx) ?? 0;
+      slotsPerScene.set(s.parentIdx, slotIdx + 1);
+      return {
+        text: s.text,
+        visualDescription: buildVariation(scenes[s.parentIdx].visualDescription, i, slotIdx),
+        parentSceneIndex: s.parentIdx,
+      };
+    });
 
     let idx = 0;
     while (slots.length < targetCount) {
       const source = sentences[idx % sentences.length];
+      const slotIdx = slotsPerScene.get(source.parentIdx) ?? 0;
+      slotsPerScene.set(source.parentIdx, slotIdx + 1);
       slots.push({
         text: source.text,
-        visualDescription: buildVariation(scenes[source.parentIdx].visualDescription, slots.length),
+        visualDescription: buildVariation(scenes[source.parentIdx].visualDescription, slots.length, slotIdx),
         parentSceneIndex: source.parentIdx,
       });
       idx++;
@@ -94,7 +131,13 @@ export function expandScenesToImageSlots(
   return { slots, timings };
 }
 
-function buildVariation(baseDescription: string, index: number): string {
-  const camera = CAMERA_VARIATIONS[index % CAMERA_VARIATIONS.length];
-  return `${camera}, ${baseDescription}`;
+function buildVariation(baseDescription: string, globalIndex: number, withinSceneIndex: number): string {
+  const camera = CAMERA_VARIATIONS[globalIndex % CAMERA_VARIATIONS.length];
+  const focus = NARRATIVE_FOCUS[(globalIndex + withinSceneIndex * 3) % NARRATIVE_FOCUS.length];
+  const mood = MOOD_VARIATIONS[(globalIndex + withinSceneIndex * 7) % MOOD_VARIATIONS.length];
+
+  if (withinSceneIndex === 0) {
+    return `${camera}, ${focus}, ${baseDescription}`;
+  }
+  return `${camera}, ${focus}, ${mood}, ${baseDescription}`;
 }

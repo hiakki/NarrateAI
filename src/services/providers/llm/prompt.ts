@@ -56,21 +56,31 @@ ${languageRule}
 
 ═══ VISUAL DESCRIPTION RULES (CRITICAL — READ CAREFULLY) ═══
 The "visualDescription" field is THE MOST IMPORTANT PART. It is the ONLY input an AI image generator receives.
-Each visualDescription MUST be 60-100 words of rich, specific, cinematic detail. NEVER write generic or vague descriptions.
+Each visualDescription MUST be 80-120 words of rich, specific, cinematic detail. NEVER write generic or vague descriptions.
+
+CRITICAL RULE — MATCH NARRATION EXACTLY:
+Each scene's visualDescription MUST directly illustrate EXACTLY what is being narrated in the "text" field for that scene.
+If the text says "she opened the old letter", the image MUST show someone opening an old letter — NOT a generic atmospheric shot.
+The image should capture the SPECIFIC MOMENT, ACTION, and SUBJECT described in the narration. Every image must feel like a frame from the exact second the narration is happening.
 
 EVERY visualDescription MUST contain ALL of these elements:
-1. SUBJECT: Exactly what/who is shown — specific person, object, creature with physical details (age, clothing, expression, posture)
-2. ENVIRONMENT: Precise setting with tangible details — not "a dark room" but "a dimly lit Victorian study with peeling wallpaper, a single candle flickering on a mahogany desk"
-3. CAMERA: Shot type (extreme close-up, wide establishing, low angle, over-shoulder, bird's eye, dutch angle)
-4. LIGHTING: Specific light source and quality (rim lighting from a cracked window, volumetric god rays through fog, warm firelight casting long shadows, cold moonlight)
-5. COLOR PALETTE: Dominant colors and contrast (desaturated blues with a single red accent, warm amber tones fading to black, neon pink reflecting on wet surfaces)
-6. ATMOSPHERE: Mood-setting details (rising dust particles, curling smoke, falling rain, swirling fog, lens flare, film grain)
+1. SUBJECT: Exactly what/who is shown — specific person, object, creature with physical details (age, clothing, expression, posture). Must match the narration's subject precisely.
+2. ACTION/GESTURE: What the subject is DOING right now — hands reaching, eyes widening, body turning, object falling. Images must feel ALIVE and IN-MOTION, not static poses. Capture the peak moment of the action described in narration.
+3. ENVIRONMENT: Precise setting with tangible details — not "a dark room" but "a dimly lit Victorian study with peeling wallpaper, a single candle flickering on a mahogany desk"
+4. CAMERA: Shot type (extreme close-up, wide establishing, low angle, over-shoulder, bird's eye, dutch angle)
+5. LIGHTING: Specific light source and quality (rim lighting from a cracked window, volumetric god rays through fog, warm firelight casting long shadows, cold moonlight)
+6. COLOR PALETTE: Dominant colors and contrast (desaturated blues with a single red accent, warm amber tones fading to black, neon pink reflecting on wet surfaces)
+7. ATMOSPHERE & ENERGY: Mood-setting details that convey movement and life — rising dust particles, curling smoke, falling rain, swirling fog, flying debris, rippling water, fluttering fabric, sparks, wind-blown hair. The scene must feel DYNAMIC, not frozen.
 
-BAD example (too vague — will produce DULL images):
+BAD example (too vague, static — will produce DULL images):
 "A scary dark hallway with a ghost"
 
-GOOD example (specific, cinematic — will produce STUNNING images):
-"Extreme close-up of a pale hand with cracked fingernails gripping a rusted doorframe, a long dark Victorian corridor stretching behind into pitch blackness, single bare light bulb swinging overhead casting oscillating shadows on peeling wallpaper, sickly yellow-green light against deep charcoal shadows, dust particles floating in the cone of light, oppressive claustrophobic atmosphere with visible breath condensation in cold air"
+BAD example (doesn't match narration — misleading image):
+Narration: "He picked up the broken mirror" → Image: "A dark spooky room with cobwebs" (WRONG — must show someone picking up a broken mirror)
+
+GOOD example (specific, dynamic, matches narration — will produce STUNNING images):
+Narration: "He reached into the darkness, and something cold gripped his wrist"
+Image: "Extreme close-up of a pale hand with cracked fingernails gripping a trembling human wrist emerging from pitch blackness, fingers tightening with visible tension in the tendons, a long dark Victorian corridor stretching behind into pitch blackness, single bare light bulb swinging overhead casting oscillating shadows on peeling wallpaper, sickly yellow-green light against deep charcoal shadows, dust particles disturbed by sudden movement swirling in the cone of light, oppressive claustrophobic atmosphere with visible breath condensation in cold air"
 
 Return ONLY valid JSON:
 {
@@ -80,10 +90,16 @@ Return ONLY valid JSON:
   "scenes": [
     {
       "text": "narration text spoken by voiceover for this scene",
-      "visualDescription": "60-100 word cinematic image prompt with SUBJECT + ENVIRONMENT + CAMERA + LIGHTING + COLOR PALETTE + ATMOSPHERE — ALWAYS in English"
+      "visualDescription": "80-120 word cinematic image prompt with SUBJECT + ACTION + ENVIRONMENT + CAMERA + LIGHTING + COLOR PALETTE + ATMOSPHERE & ENERGY — must depict EXACTLY what is narrated — ALWAYS in English"
     }
   ]
 }
 
-Generate exactly ${sceneCount} scenes. Every scene must be visually DISTINCT — different camera angle, different color temperature, different subject focus. ESCALATE visual intensity with the story.`;
+Generate exactly ${sceneCount} scenes. Every scene must be visually DISTINCT — different camera angle, different color temperature, different subject focus. ESCALATE visual intensity with the story.
+
+FINAL CHECK — Ask yourself for EACH scene:
+1. Does the image show EXACTLY what the narration describes? (If text says "he ran", does the image show running?)
+2. Does the image feel ALIVE — with motion, energy, and a captured-in-the-moment quality?
+3. Would a viewer IMMEDIATELY understand what is happening in the story just from the image?
+If any answer is NO, rewrite that visualDescription until all three are YES.`;
 }

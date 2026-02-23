@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import type { LlmProviderInterface, ScriptInput, GeneratedScript, Scene } from "./types";
 import { buildPrompt, getSceneCount } from "./prompt";
+import { safeParseLlmJson } from "./parse-json";
 
 export class GeminiLlmProvider implements LlmProviderInterface {
   async generateScript(input: ScriptInput): Promise<GeneratedScript> {
@@ -18,14 +19,14 @@ export class GeminiLlmProvider implements LlmProviderInterface {
     });
 
     const text = response.text ?? "";
-    const parsed = JSON.parse(text);
-    const scenes: Scene[] = parsed.scenes || [];
+    const parsed = safeParseLlmJson(text) as Record<string, unknown>;
+    const scenes: Scene[] = (parsed.scenes as Scene[]) || [];
     const fullScript = scenes.map((s) => s.text).join(" ");
 
     return {
-      title: parsed.title || "Untitled",
-      description: parsed.description || "",
-      hashtags: parsed.hashtags || [],
+      title: (parsed.title as string) || "Untitled",
+      description: (parsed.description as string) || "",
+      hashtags: (parsed.hashtags as string[]) || [],
       scenes,
       fullScript,
     };

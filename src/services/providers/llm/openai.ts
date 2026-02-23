@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { LlmProviderInterface, ScriptInput, GeneratedScript } from "./types";
 import { buildPrompt, getSceneCount } from "./prompt";
+import { safeParseLlmJson } from "./parse-json";
 
 export class OpenAILlmProvider implements LlmProviderInterface {
   async generateScript(input: ScriptInput): Promise<GeneratedScript> {
@@ -19,14 +20,14 @@ export class OpenAILlmProvider implements LlmProviderInterface {
     });
 
     const text = response.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(text);
-    const scenes = parsed.scenes || [];
-    const fullScript = scenes.map((s: { text: string }) => s.text).join(" ");
+    const parsed = safeParseLlmJson(text) as Record<string, unknown>;
+    const scenes = (parsed.scenes as { text: string; visualDescription: string }[]) || [];
+    const fullScript = scenes.map((s) => s.text).join(" ");
 
     return {
-      title: parsed.title || "Untitled",
-      description: parsed.description || "",
-      hashtags: parsed.hashtags || [],
+      title: (parsed.title as string) || "Untitled",
+      description: (parsed.description as string) || "",
+      hashtags: (parsed.hashtags as string[]) || [],
       scenes,
       fullScript,
     };
