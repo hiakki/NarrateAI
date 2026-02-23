@@ -142,7 +142,7 @@ export function generateVideoSEO(
   };
 }
 
-export function generateSocialCaption(
+export function generateInstagramCaption(
   originalTitle: string,
   niche: string,
   scriptText?: string,
@@ -150,19 +150,56 @@ export function generateSocialCaption(
   const seo = NICHE_SEO[niche] ?? FALLBACK_SEO;
 
   const hook = scriptText
-    ? scriptText.split(/[.!?]/)[0]?.trim().slice(0, 120)
+    ? scriptText.split(/[.!?]/)[0]?.trim().slice(0, 140)
     : "";
 
-  const hashtags = [...seo.hashtags, "#Shorts", "#Viral", "#FYP", "#Reels"]
-    .slice(0, 12)
-    .join(" ");
+  const igHashtags = [
+    ...seo.hashtags,
+    "#Reels", "#ReelsViral", "#Viral", "#FYP",
+    "#Explore", "#InstaReels", "#ReelsOfInstagram",
+  ].slice(0, 20).join(" ");
 
   const parts = [
     hook ? `${hook}...` : originalTitle,
     "",
-    seo.cta,
+    `🔥 ${seo.cta}`,
     "",
-    hashtags,
+    "💬 Comment your thoughts below!",
+    "📲 Share this with someone who needs to see it!",
+    "",
+    ".",
+    ".",
+    ".",
+    igHashtags,
+  ];
+
+  return parts.join("\n");
+}
+
+export function generateFacebookCaption(
+  originalTitle: string,
+  niche: string,
+  scriptText?: string,
+): string {
+  const seo = NICHE_SEO[niche] ?? FALLBACK_SEO;
+
+  const hook = scriptText
+    ? scriptText.split(/[.!?]/)[0]?.trim().slice(0, 160)
+    : "";
+
+  const fbHashtags = [
+    ...seo.hashtags,
+    "#Reels", "#FacebookReels", "#Viral", "#FYP",
+  ].slice(0, 15).join(" ");
+
+  const parts = [
+    hook ? `${hook}...` : originalTitle,
+    "",
+    `👉 ${seo.cta}`,
+    "",
+    "❤️ Like and Share if you enjoyed this!",
+    "",
+    fbHashtags,
   ];
 
   return parts.join("\n");

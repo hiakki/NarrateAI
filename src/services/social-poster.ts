@@ -3,7 +3,7 @@ import { decrypt } from "@/lib/social/encrypt";
 import { postInstagramReel } from "@/lib/social/instagram";
 import { postFacebookReel } from "@/lib/social/facebook";
 import { uploadYouTubeShort } from "@/lib/social/youtube";
-import { generateVideoSEO, generateSocialCaption } from "@/lib/social/seo";
+import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
 import path from "path";
 
 const db = new PrismaClient();
@@ -44,8 +44,10 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
   const videoPath = path.join(process.cwd(), "public", "videos", `${videoId}.mp4`);
   const nicheId = video.series.niche ?? "";
   const title = video.title ?? "Check this out!";
-  const ytSeo = generateVideoSEO(title, nicheId, video.scriptText ?? undefined);
-  const socialCaption = generateSocialCaption(title, nicheId, video.scriptText ?? undefined);
+  const scriptText = video.scriptText ?? undefined;
+  const ytSeo = generateVideoSEO(title, nicheId, scriptText);
+  const igCaption = generateInstagramCaption(title, nicheId, scriptText);
+  const fbCaption = generateFacebookCaption(title, nicheId, scriptText);
 
   const results: PostResult[] = [];
 
@@ -78,7 +80,7 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
               account.platformUserId,
               accessToken,
               videoPath,
-              socialCaption,
+              igCaption,
             );
             break;
 
@@ -87,7 +89,7 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
               account.pageId ?? account.platformUserId,
               accessToken,
               videoPath,
-              socialCaption,
+              fbCaption,
             );
             break;
 
