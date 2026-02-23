@@ -4,6 +4,20 @@ import { db } from "@/lib/db";
 import fs from "fs/promises";
 import path from "path";
 
+async function countSceneImages(videoId: string): Promise<{ count: number; urls: string[] }> {
+  const dir = path.join(process.cwd(), "public", "videos", videoId, "scenes");
+  try {
+    const files = await fs.readdir(dir);
+    const scenes = files.filter(f => f.startsWith("scene-")).sort();
+    return {
+      count: scenes.length,
+      urls: scenes.map(f => `/videos/${videoId}/scenes/${f}`),
+    };
+  } catch {
+    return { count: 0, urls: [] };
+  }
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -36,7 +50,24 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    return NextResponse.json({ data: video });
+    const sceneImages = await countSceneImages(id);
+    const checkpoint = video.checkpointData as {
+      totalImageCount?: number;
+      imagePrompts?: string[];
+      audioPath?: string;
+    } | null;
+    const scenesJson = video.scenesJson as { text: string; visualDescription: string }[] | null;
+    const totalScenes = checkpoint?.totalImageCount ?? scenesJson?.length ?? 0;
+
+    return NextResponse.json({
+      data: {
+        ...video,
+        sceneImages: sceneImages.urls,
+        sceneImageCount: sceneImages.count,
+        totalScenes,
+        imagePrompts: video.status === "REVIEW" ? (checkpoint?.imagePrompts ?? []) : undefined,
+      },
+    });
   } catch (error) {
     console.error("Get video error:", error);
     return NextResponse.json(

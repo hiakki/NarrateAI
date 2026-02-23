@@ -131,6 +131,7 @@ export async function POST(req: NextRequest) {
       llmProvider: resolved.llm,
       ttsProvider: resolved.tts,
       imageProvider: resolved.image,
+      reviewMode: true,
     });
 
     return NextResponse.json({ data: { seriesId: result.series.id, videoId: result.video.id } }, { status: 201 });

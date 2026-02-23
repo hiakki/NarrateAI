@@ -37,6 +37,7 @@ interface SeriesItem {
 const statusDisplay: Record<string, { label: string; className: string }> = {
   QUEUED: { label: "Queued", className: "text-yellow-600 bg-yellow-50" },
   GENERATING: { label: "Generating", className: "text-blue-600 bg-blue-50" },
+  REVIEW: { label: "Review", className: "text-amber-600 bg-amber-50" },
   READY: { label: "Ready", className: "text-green-600 bg-green-50" },
   SCHEDULED: { label: "Scheduled", className: "text-purple-600 bg-purple-50" },
   POSTED: { label: "Posted", className: "text-green-700 bg-green-100" },

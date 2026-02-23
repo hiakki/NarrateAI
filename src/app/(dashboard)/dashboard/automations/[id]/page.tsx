@@ -31,6 +31,7 @@ interface Video {
   generationStage: string | null;
   duration: number | null;
   createdAt: string;
+  updatedAt: string;
 }
 
 interface AutomationDetail {
@@ -97,6 +98,7 @@ const COMMON_TIMEZONES = [
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
   QUEUED: { label: "Queued", icon: Clock, className: "text-yellow-600 bg-yellow-50" },
   GENERATING: { label: "Generating", icon: Loader2, className: "text-blue-600 bg-blue-50" },
+  REVIEW: { label: "Review", icon: AlertCircle, className: "text-amber-600 bg-amber-50" },
   READY: { label: "Ready", icon: CheckCircle2, className: "text-green-600 bg-green-50" },
   SCHEDULED: { label: "Scheduled", icon: Clock, className: "text-purple-600 bg-purple-50" },
   POSTED: { label: "Posted", icon: CheckCircle2, className: "text-green-700 bg-green-100" },
@@ -658,8 +660,16 @@ export default function AutomationDetailPage() {
                   <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
                     <h3 className="font-medium">{video.title || "Untitled Video"}</h3>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {new Date(video.createdAt).toLocaleDateString()}{" "}
-                      {video.duration ? `- ${video.duration}s` : ""}
+                      {new Date(video.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                      {(video.status === "READY" || video.status === "POSTED") && (() => {
+                        const ms = new Date(video.updatedAt).getTime() - new Date(video.createdAt).getTime();
+                        if (ms <= 0) return null;
+                        const secs = Math.round(ms / 1000);
+                        const m = Math.floor(secs / 60);
+                        const s = secs % 60;
+                        return <span className="ml-1 text-muted-foreground/70">· built in {m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
+                      })()}
+                      {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
                     </p>
                   </Link>
                   <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>

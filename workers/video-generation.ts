@@ -25,6 +25,11 @@ interface Checkpoint {
   imagePaths?: string[];
   imageTmpDir?: string;
   completedStages?: string[];
+  totalImageCount?: number;
+  imagePrompts?: string[];
+  expandedTimings?: { startMs: number; endMs: number }[];
+  reviewMode?: boolean;
+  musicPath?: string;
 }
 
 async function updateStage(videoId: string, stage: string) {
@@ -56,7 +61,7 @@ const worker = new Worker<VideoJobData>(
     const {
       videoId, title, scriptText, scenes, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
-      tone, niche, artStyle,
+      tone, niche, artStyle, reviewMode,
     } = job.data;
 
     if (!ttsProvider || !imageProvider || !scenes?.length) {
@@ -120,6 +125,12 @@ const worker = new Worker<VideoJobData>(
 
       if (!completed.has("IMAGES") || !allImagesExist) {
         await updateStage(videoId, "IMAGES");
+        await saveCheckpoint(videoId, {
+          completedStages: [...completed],
+          audioPath, durationMs, sceneTimings,
+          imagePaths, imageTmpDir,
+          totalImageCount: targetImageCount,
+        });
         const resolvedArtStyle = getArtStyleById(artStyle);
         const resolvedNeg = negativePrompt ?? resolvedArtStyle?.negativePrompt ?? "low quality, blurry, watermark, text";
 
@@ -131,8 +142,17 @@ const worker = new Worker<VideoJobData>(
           });
         }
 
+        const scenesDir = path.join(process.cwd(), "public", "videos", videoId, "scenes");
+        await fs.mkdir(scenesDir, { recursive: true });
+
+        const imagePrompts = enhancedSlots.map(s => s.visualDescription);
+
         const img = getImageProvider(imageProvider);
-        const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg);
+        const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
+          const ext = path.extname(srcPath) || ".png";
+          const dest = path.join(scenesDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
+          await fs.copyFile(srcPath, dest);
+        });
         imagePaths = imgResult.imagePaths;
         imageTmpDir = imgResult.tmpDir;
 
@@ -141,9 +161,33 @@ const worker = new Worker<VideoJobData>(
           completedStages: [...completed],
           audioPath, durationMs, sceneTimings: expandedTimings,
           imagePaths, imageTmpDir,
+          imagePrompts,
+          expandedTimings,
+          reviewMode,
+          musicPath,
         });
         console.log(`[Worker] Images done: ${imagePaths.length} for ${Math.round(durationMs! / 1000)}s audio (${imageProvider})`);
+
+        if (reviewMode) {
+          await db.video.update({
+            where: { id: videoId },
+            data: {
+              status: "REVIEW",
+              generationStage: null,
+              voiceoverUrl: audioPath,
+            },
+          });
+          console.log(`[Worker] Review mode: pausing for user approval (${videoId})`);
+          return;
+        }
       } else {
+        const scenesDir = path.join(process.cwd(), "public", "videos", videoId, "scenes");
+        await fs.mkdir(scenesDir, { recursive: true });
+        for (let i = 0; i < imagePaths!.length; i++) {
+          const ext = path.extname(imagePaths![i]) || ".png";
+          const dest = path.join(scenesDir, `scene-${i.toString().padStart(3, "0")}${ext}`);
+          if (!(await fileExists(dest))) await fs.copyFile(imagePaths![i], dest);
+        }
         console.log(`[Worker] Images: skipped (checkpoint, ${imagePaths!.length} images)`);
       }
 

@@ -98,6 +98,7 @@ export async function uploadYouTubeShort(
   tags: string[] = [],
   platformUserId?: string,
   userId?: string,
+  categoryId: string = "22",
 ): Promise<PostResult> {
   try {
     const token = await getFreshAccessToken(
@@ -115,19 +116,16 @@ export async function uploadYouTubeShort(
 
     const youtube = google.youtube({ version: "v3", auth: oauth2Client });
 
-    const shortTitle = title.includes("#Shorts")
-      ? title
-      : `${title} #Shorts`;
-
     const doUpload = () =>
       youtube.videos.insert({
         part: ["snippet", "status"],
         requestBody: {
           snippet: {
-            title: shortTitle,
-            description: `${description}\n\n#Shorts`,
-            tags: [...tags, "Shorts"],
-            categoryId: "22",
+            title: title.slice(0, 100),
+            description: description.slice(0, 5000),
+            tags: tags.slice(0, 30),
+            categoryId,
+            defaultLanguage: "en",
           },
           status: {
             privacyStatus: "public",

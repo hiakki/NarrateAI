@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft,
   Download,
@@ -24,6 +25,11 @@ import {
   Youtube,
   Facebook,
   Send,
+  RefreshCw,
+  Check,
+  Play,
+  SquareCheck,
+  Square,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -55,6 +61,13 @@ export default function VideoDetailPage() {
   const [publishResults, setPublishResults] = useState<
     { platform: string; success: boolean; postId?: string; error?: string }[] | null
   >(null);
+
+  const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
+  const [editingPrompt, setEditingPrompt] = useState<number | null>(null);
+  const [editPromptText, setEditPromptText] = useState("");
+  const [regenerating, setRegenerating] = useState<number | null>(null);
+  const [assembling, setAssembling] = useState(false);
+  const [reviewInited, setReviewInited] = useState(false);
 
   async function handleDelete() {
     setDeleting(true);
@@ -113,6 +126,50 @@ export default function VideoDetailPage() {
     }
   }
 
+  const handleRegenerate = useCallback(async (index: number, prompt: string) => {
+    setRegenerating(index);
+    try {
+      const res = await fetch(`/api/videos/${id}/regenerate-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index, prompt }),
+      });
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["video", id] });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Regeneration failed");
+      }
+    } catch {
+      alert("Regeneration failed");
+    } finally {
+      setRegenerating(null);
+      setEditingPrompt(null);
+    }
+  }, [id, queryClient]);
+
+  async function handleAssemble() {
+    setAssembling(true);
+    try {
+      const indices = selectedImages.size > 0 ? [...selectedImages].sort((a, b) => a - b) : undefined;
+      const res = await fetch(`/api/videos/${id}/assemble`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selectedIndices: indices }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Assembly failed");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      alert("Assembly failed");
+    } finally {
+      setAssembling(false);
+    }
+  }
+
   const [queuedTimedOut, setQueuedTimedOut] = useState(false);
   const [countdown, setCountdown] = useState(60);
   const queuedSince = useRef<number | null>(null);
@@ -128,7 +185,10 @@ export default function VideoDetailPage() {
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (status === "QUEUED") return 3000;
-      if (status === "GENERATING") return 10000;
+      if (status === "GENERATING") {
+        const stage = query.state.data?.generationStage;
+        return stage === "IMAGES" ? 3000 : 10000;
+      }
       return false;
     },
   });
@@ -153,6 +213,14 @@ export default function VideoDetailPage() {
     }
   }, [video?.status]);
 
+  useEffect(() => {
+    if (video?.status === "REVIEW" && !reviewInited && video.sceneImages?.length) {
+      const all = new Set(Array.from({ length: video.sceneImages.length }, (_, i) => i));
+      setSelectedImages(all);
+      setReviewInited(true);
+    }
+  }, [video?.status, video?.sceneImages?.length, reviewInited]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -170,6 +238,7 @@ export default function VideoDetailPage() {
   const isQueued = video.status === "QUEUED";
   const isGenerating = video.status === "GENERATING";
   const isInProgress = isQueued || isGenerating;
+  const isReview = video.status === "REVIEW";
   const isReady = video.status === "READY" || video.status === "POSTED";
   const isFailed = video.status === "FAILED";
 
@@ -330,6 +399,213 @@ export default function VideoDetailPage() {
         </Card>
       )}
 
+      {/* ── LIVE IMAGE PREVIEW ── */}
+      {isInProgress && video.totalScenes > 0 && (
+        <Card className="mb-8">
+          <div className="px-6 py-3 border-b flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ImageIcon className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Scene Preview</span>
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {video.sceneImageCount}/{video.totalScenes} images
+            </span>
+          </div>
+          <CardContent className="p-4">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+              {Array.from({ length: video.totalScenes }).map((_, i) => {
+                const url = (video.sceneImages as string[] | undefined)?.[i];
+                const isReady = !!url;
+                return (
+                  <div
+                    key={`scene-${i}`}
+                    className={`relative aspect-[9/16] rounded-md overflow-hidden border ${
+                      isReady ? "bg-muted animate-in fade-in duration-500" : "bg-muted/50 flex items-center justify-center"
+                    }`}
+                  >
+                    {isReady ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={url}
+                        alt={`Scene ${i + 1}`}
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Loader2 className="h-4 w-4 text-muted-foreground/30 animate-spin" />
+                    )}
+                    <span className={`absolute bottom-0 left-0 right-0 text-[10px] text-center py-0.5 ${
+                      isReady ? "bg-black/50 text-white" : "bg-muted text-muted-foreground/40"
+                    }`}>
+                      {i + 1}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── REVIEW MODE ── */}
+      {isReview && (
+        <div className="space-y-6">
+          <Card className="overflow-hidden border-amber-200 bg-amber-50/30">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-amber-200">
+              <CheckCircle2 className="h-4 w-4 text-amber-600" />
+              <span className="text-sm font-medium text-amber-800">
+                Review &amp; Approve
+              </span>
+              <span className="text-xs text-amber-600 ml-auto">
+                {selectedImages.size}/{(video.sceneImages as string[] | undefined)?.length ?? 0} images selected
+              </span>
+            </div>
+            <CardContent className="p-4">
+              <p className="text-sm text-muted-foreground mb-1">
+                Listen to the voiceover, review each image and its prompt. Edit prompts and regenerate images as needed.
+                Deselect images you don&apos;t want. When ready, click <strong>Proceed</strong> to assemble the final video.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Audio player */}
+          <Card>
+            <div className="px-4 py-3 border-b flex items-center gap-2">
+              <Mic className="h-4 w-4" />
+              <span className="text-sm font-medium">Voiceover</span>
+            </div>
+            <CardContent className="p-4">
+              <audio controls className="w-full" src={`/api/videos/${video.id}/audio`} preload="metadata" />
+            </CardContent>
+          </Card>
+
+          {/* Image review grid */}
+          <Card>
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-4 w-4" />
+                <span className="text-sm font-medium">Scene Images</span>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm" variant="outline"
+                  onClick={() => {
+                    const all = new Set(Array.from({ length: (video.sceneImages as string[]).length }, (_, i) => i));
+                    setSelectedImages(selectedImages.size === all.size ? new Set() : all);
+                  }}
+                >
+                  {selectedImages.size === (video.sceneImages as string[] | undefined)?.length ? "Deselect All" : "Select All"}
+                </Button>
+              </div>
+            </div>
+            <CardContent className="p-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {(video.sceneImages as string[] | undefined)?.map((url: string, i: number) => {
+                  const isSelected = selectedImages.has(i);
+                  const prompt = (video.imagePrompts as string[] | undefined)?.[i] ?? "";
+                  const isEditing = editingPrompt === i;
+                  const isRegen = regenerating === i;
+
+                  return (
+                    <div
+                      key={`review-${i}`}
+                      className={`rounded-lg border-2 overflow-hidden transition-all ${
+                        isSelected ? "border-primary ring-1 ring-primary/20" : "border-muted opacity-50"
+                      }`}
+                    >
+                      <div className="relative aspect-[9/16] bg-muted cursor-pointer group"
+                        onClick={() => {
+                          setSelectedImages(prev => {
+                            const next = new Set(prev);
+                            next.has(i) ? next.delete(i) : next.add(i);
+                            return next;
+                          });
+                        }}
+                      >
+                        {isRegen ? (
+                          <div className="absolute inset-0 flex items-center justify-center bg-muted">
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                          </div>
+                        ) : (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img
+                            src={`${url}?t=${video.updatedAt}`}
+                            alt={`Scene ${i + 1}`}
+                            className="absolute inset-0 w-full h-full object-cover"
+                          />
+                        )}
+                        <div className="absolute top-1.5 left-1.5">
+                          {isSelected
+                            ? <SquareCheck className="h-5 w-5 text-primary drop-shadow" />
+                            : <Square className="h-5 w-5 text-white/70 drop-shadow" />}
+                        </div>
+                        <span className="absolute top-1.5 right-1.5 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">
+                          {i + 1}
+                        </span>
+                      </div>
+
+                      <div className="p-2 space-y-1.5">
+                        {isEditing ? (
+                          <div className="space-y-1.5">
+                            <Textarea
+                              value={editPromptText}
+                              onChange={(e) => setEditPromptText(e.target.value)}
+                              rows={3}
+                              className="text-[11px] resize-none"
+                            />
+                            <div className="flex gap-1">
+                              <Button
+                                size="xs" className="flex-1"
+                                onClick={() => handleRegenerate(i, editPromptText)}
+                                disabled={isRegen}
+                              >
+                                {isRegen ? <Loader2 className="h-3 w-3 animate-spin" /> : <><RefreshCw className="h-3 w-3 mr-1" /> Regenerate</>}
+                              </Button>
+                              <Button size="xs" variant="ghost" onClick={() => setEditingPrompt(null)}>
+                                <XCircle className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-[10px] text-muted-foreground line-clamp-2 leading-tight">{prompt}</p>
+                            <Button
+                              size="xs" variant="ghost" className="w-full text-[10px]"
+                              onClick={() => { setEditingPrompt(i); setEditPromptText(prompt); }}
+                            >
+                              Edit prompt
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Proceed button */}
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm text-muted-foreground">
+              {selectedImages.size === 0
+                ? "Select at least one image to proceed"
+                : `${selectedImages.size} image${selectedImages.size > 1 ? "s" : ""} will be used in the final video`}
+            </p>
+            <Button
+              size="lg"
+              onClick={handleAssemble}
+              disabled={assembling || selectedImages.size === 0}
+            >
+              {assembling ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Assembling...</>
+              ) : (
+                <><Play className="mr-2 h-4 w-4" /> Proceed to Assembly</>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* ── READY: VIDEO PLAYER ── */}
       {isReady && (
         <div className="space-y-6">
@@ -486,6 +762,39 @@ export default function VideoDetailPage() {
               </Card>
             );
           })()}
+
+          {/* Scene images gallery */}
+          {video.sceneImages && (video.sceneImages as string[]).length > 0 && (
+            <Card className="mt-6">
+              <div className="px-6 py-3 border-b flex items-center gap-2">
+                <ImageIcon className="h-4 w-4" />
+                <span className="text-sm font-medium">Scene Images</span>
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {(video.sceneImages as string[]).length} scenes
+                </span>
+              </div>
+              <CardContent className="p-4">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                  {(video.sceneImages as string[]).map((url: string, i: number) => (
+                    <div
+                      key={url}
+                      className="relative aspect-[9/16] rounded-md overflow-hidden bg-muted border group cursor-pointer"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={url}
+                        alt={`Scene ${i + 1}`}
+                        className="absolute inset-0 w-full h-full object-cover transition-transform group-hover:scale-105"
+                      />
+                      <span className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] text-center py-0.5">
+                        {i + 1}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 

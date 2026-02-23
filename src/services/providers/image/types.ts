@@ -10,10 +10,13 @@ export interface ImageGenOptions {
   sceneCount?: number;
 }
 
+export type OnImageProgress = (index: number, imagePath: string) => void | Promise<void>;
+
 export interface ImageProviderInterface {
   generateImages(
     scenes: { visualDescription: string }[],
     artStylePrompt: string,
     negativePrompt?: string,
+    onProgress?: OnImageProgress,
   ): Promise<ImageGenResult>;
 }

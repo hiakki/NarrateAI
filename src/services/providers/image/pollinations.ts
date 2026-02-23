@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { ImageProviderInterface, ImageGenResult } from "./types";
+import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
 
 const API_URL = "https://gen.pollinations.ai/image";
 
@@ -10,6 +10,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
     scenes: { visualDescription: string }[],
     artStylePrompt: string,
     _negativePrompt?: string,
+    onProgress?: OnImageProgress,
   ): Promise<ImageGenResult> {
     const apiKey = process.env.POLLINATIONS_API_KEY;
     if (!apiKey) {
@@ -69,6 +70,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
 
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
+      await onProgress?.(i, imagePath);
       console.log(`[Image:Pollinations] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
 
       if (i < scenes.length - 1) {

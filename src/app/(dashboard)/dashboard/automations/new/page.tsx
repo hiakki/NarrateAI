@@ -71,6 +71,7 @@ export default function NewAutomationPage() {
   const [tone, setTone] = useState("dramatic");
   const [duration, setDuration] = useState(45);
 
+  const [automationCount, setAutomationCount] = useState(0);
   const [showProviders, setShowProviders] = useState(false);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [llmProvider, setLlmProvider] = useState("");
@@ -109,6 +110,9 @@ export default function NewAutomationPage() {
   useEffect(() => {
     fetchProviders();
     fetchAccounts();
+    fetch("/api/automations").then(r => r.json()).then(j => {
+      if (j.data) setAutomationCount(j.data.length);
+    }).catch(() => {});
   }, [fetchProviders, fetchAccounts]);
 
   useEffect(() => {
@@ -125,7 +129,7 @@ export default function NewAutomationPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: name || `${niche?.name ?? selectedNiche} - ${tone}`,
+          name: name || `${niche?.name ?? selectedNiche} ${automationCount + 1}`,
           niche: selectedNiche,
           artStyle, voiceId, language, tone, duration,
           llmProvider: llmProvider || undefined,
@@ -272,15 +276,18 @@ export default function NewAutomationPage() {
                 </div>
                 {showProviders ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </button>
-              {showProviders && (
+              {showProviders && (() => {
+                const resolvedLlm = llmProvider || providerData.defaults.llmProvider || providerData.platformDefaults.llm;
+                const resolvedTts = ttsProvider || providerData.defaults.ttsProvider || providerData.platformDefaults.tts;
+                const resolvedImage = imageProvider || providerData.defaults.imageProvider || providerData.platformDefaults.image;
+                return (
                 <div className="px-4 pb-4 space-y-4">
                   <Separator />
                   <div>
                     <Label className="mb-2 block text-xs flex items-center gap-1"><Cpu className="h-3 w-3" /> Script AI</Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!llmProvider ? "default" : "outline"} onClick={() => setLlmProvider("")}>Default</Button>
                       {providerData.all.llm.map((p) => (
-                        <Button key={p.id} size="sm" variant={llmProvider === p.id ? "default" : "outline"} disabled={!availableLlmIds.has(p.id)} onClick={() => setLlmProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedLlm === p.id ? "default" : "outline"} disabled={!availableLlmIds.has(p.id)} onClick={() => setLlmProvider(llmProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
@@ -289,9 +296,8 @@ export default function NewAutomationPage() {
                   <div>
                     <Label className="mb-2 block text-xs flex items-center gap-1"><Mic className="h-3 w-3" /> Voice AI</Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!ttsProvider ? "default" : "outline"} onClick={() => setTtsProvider("")}>Default</Button>
                       {providerData.all.tts.map((p) => (
-                        <Button key={p.id} size="sm" variant={ttsProvider === p.id ? "default" : "outline"} disabled={!availableTtsIds.has(p.id)} onClick={() => setTtsProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedTts === p.id ? "default" : "outline"} disabled={!availableTtsIds.has(p.id)} onClick={() => setTtsProvider(ttsProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
@@ -300,16 +306,16 @@ export default function NewAutomationPage() {
                   <div>
                     <Label className="mb-2 block text-xs flex items-center gap-1"><ImageIcon className="h-3 w-3" /> Image AI</Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!imageProvider ? "default" : "outline"} onClick={() => setImageProvider("")}>Default</Button>
                       {providerData.all.image.map((p) => (
-                        <Button key={p.id} size="sm" variant={imageProvider === p.id ? "default" : "outline"} disabled={!availableImageIds.has(p.id)} onClick={() => setImageProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedImage === p.id ? "default" : "outline"} disabled={!availableImageIds.has(p.id)} onClick={() => setImageProvider(imageProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
                     </div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
 

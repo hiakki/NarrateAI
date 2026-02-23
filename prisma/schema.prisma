@@ -31,6 +31,7 @@ enum SeriesStatus {
 enum VideoStatus {
   QUEUED
   GENERATING
+  REVIEW
   READY
   SCHEDULED
   POSTED

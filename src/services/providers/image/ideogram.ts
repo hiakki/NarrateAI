@@ -1,13 +1,14 @@
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { ImageProviderInterface, ImageGenResult } from "./types";
+import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
 
 export class IdeogramImageProvider implements ImageProviderInterface {
   async generateImages(
     scenes: { visualDescription: string }[],
     artStylePrompt: string,
     negativePrompt?: string,
+    onProgress?: OnImageProgress,
   ): Promise<ImageGenResult> {
     const apiKey = process.env.IDEOGRAM_API_KEY;
     if (!apiKey) throw new Error("IDEOGRAM_API_KEY is not configured");
@@ -63,6 +64,7 @@ export class IdeogramImageProvider implements ImageProviderInterface {
 
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
+      await onProgress?.(i, imagePath);
       console.log(`[Image:Ideogram] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 

@@ -3,6 +3,7 @@ import { decrypt } from "@/lib/social/encrypt";
 import { postInstagramReel } from "@/lib/social/instagram";
 import { postFacebookReel } from "@/lib/social/facebook";
 import { uploadYouTubeShort } from "@/lib/social/youtube";
+import { generateVideoSEO, generateSocialCaption } from "@/lib/social/seo";
 import path from "path";
 
 const db = new PrismaClient();
@@ -41,12 +42,10 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
   }
 
   const videoPath = path.join(process.cwd(), "public", "videos", `${videoId}.mp4`);
-  const caption = [
-    video.title ?? "Check this out!",
-    video.description ?? "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const nicheId = video.series.niche ?? "";
+  const title = video.title ?? "Check this out!";
+  const ytSeo = generateVideoSEO(title, nicheId, video.scriptText ?? undefined);
+  const socialCaption = generateSocialCaption(title, nicheId, video.scriptText ?? undefined);
 
   const results: PostResult[] = [];
 
@@ -79,7 +78,7 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
               account.platformUserId,
               accessToken,
               videoPath,
-              caption,
+              socialCaption,
             );
             break;
 
@@ -88,7 +87,7 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
               account.pageId ?? account.platformUserId,
               accessToken,
               videoPath,
-              caption,
+              socialCaption,
             );
             break;
 
@@ -97,11 +96,12 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
               accessToken,
               refreshToken,
               videoPath,
-              video.title ?? "Untitled",
-              caption,
-              [],
+              ytSeo.title,
+              ytSeo.description,
+              ytSeo.tags,
               account.platformUserId,
               video.series.user.id,
+              ytSeo.categoryId,
             );
             break;
 

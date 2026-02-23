@@ -2,13 +2,14 @@ import Replicate from "replicate";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { ImageProviderInterface, ImageGenResult } from "./types";
+import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
 
 export class KolorsImageProvider implements ImageProviderInterface {
   async generateImages(
     scenes: { visualDescription: string }[],
     artStylePrompt: string,
     _negativePrompt?: string,
+    onProgress?: OnImageProgress,
   ): Promise<ImageGenResult> {
     const auth = process.env.REPLICATE_API_TOKEN;
     if (!auth) throw new Error("REPLICATE_API_TOKEN is not configured");
@@ -61,6 +62,7 @@ export class KolorsImageProvider implements ImageProviderInterface {
 
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
+      await onProgress?.(i, imagePath);
       console.log(`[Image:Kolors] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 

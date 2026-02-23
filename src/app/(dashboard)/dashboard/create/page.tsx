@@ -347,7 +347,11 @@ export default function CreatePage() {
                 {showProviders ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </button>
 
-              {showProviders && (
+              {showProviders && (() => {
+                const resolvedLlm = llmProvider || providerData.defaults.llmProvider || providerData.platformDefaults.llm;
+                const resolvedTts = ttsProvider || providerData.defaults.ttsProvider || providerData.platformDefaults.tts;
+                const resolvedImage = imageProvider || providerData.defaults.imageProvider || providerData.platformDefaults.image;
+                return (
                 <div className="px-4 pb-4 space-y-4">
                   <Separator />
                   <div>
@@ -355,9 +359,8 @@ export default function CreatePage() {
                       <Cpu className="h-3 w-3" /> Script AI
                     </Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!llmProvider ? "default" : "outline"} onClick={() => setLlmProvider("")}>Default</Button>
                       {providerData.all.llm.map((p) => (
-                        <Button key={p.id} size="sm" variant={llmProvider === p.id ? "default" : "outline"} disabled={!availableLlmIds.has(p.id)} onClick={() => setLlmProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedLlm === p.id ? "default" : "outline"} disabled={!availableLlmIds.has(p.id)} onClick={() => setLlmProvider(llmProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
@@ -368,9 +371,8 @@ export default function CreatePage() {
                       <Mic className="h-3 w-3" /> Voice AI
                     </Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!ttsProvider ? "default" : "outline"} onClick={() => setTtsProvider("")}>Default</Button>
                       {providerData.all.tts.map((p) => (
-                        <Button key={p.id} size="sm" variant={ttsProvider === p.id ? "default" : "outline"} disabled={!availableTtsIds.has(p.id)} onClick={() => setTtsProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedTts === p.id ? "default" : "outline"} disabled={!availableTtsIds.has(p.id)} onClick={() => setTtsProvider(ttsProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
@@ -381,16 +383,16 @@ export default function CreatePage() {
                       <ImageIcon className="h-3 w-3" /> Image AI
                     </Label>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant={!imageProvider ? "default" : "outline"} onClick={() => setImageProvider("")}>Default</Button>
                       {providerData.all.image.map((p) => (
-                        <Button key={p.id} size="sm" variant={imageProvider === p.id ? "default" : "outline"} disabled={!availableImageIds.has(p.id)} onClick={() => setImageProvider(p.id)}>
+                        <Button key={p.id} size="sm" variant={resolvedImage === p.id ? "default" : "outline"} disabled={!availableImageIds.has(p.id)} onClick={() => setImageProvider(imageProvider === p.id ? "" : p.id)}>
                           {p.name}<span className="ml-1 text-[10px] opacity-70">{p.costEstimate}</span>
                         </Button>
                       ))}
                     </div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
 
