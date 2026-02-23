@@ -8,6 +8,9 @@ export interface AssemblyInput {
   audioPath: string;
   sceneTimings: { startMs: number; endMs: number }[];
   scenes: { text: string }[];
+  /** Original scenes + timings for subtitle generation (aligned to TTS audio). */
+  captionScenes?: { text: string }[];
+  captionTimings?: { startMs: number; endMs: number }[];
   musicPath?: string;
   outputPath: string;
   tone?: string;
@@ -106,14 +109,16 @@ function getCaptionStyle(tone?: string, niche?: string): string {
  *   images -> zoompan -> trim -> setpts -> concat filter -> subtitles -> audio mix -> output
  */
 export async function assembleVideo(input: AssemblyInput): Promise<string> {
-  const { imagePaths, audioPath, sceneTimings, scenes, musicPath, outputPath, tone, niche } = input;
+  const { imagePaths, audioPath, sceneTimings, scenes, captionScenes, captionTimings, musicPath, outputPath, tone, niche } = input;
 
   const totalDurSec = (sceneTimings.at(-1)?.endMs ?? 0) / 1000;
-  console.log(`[Assembly] Single-pass: ${totalDurSec.toFixed(1)}s, ${imagePaths.length} scenes, tone=${tone}, niche=${niche}`);
+  console.log(`[Assembly] Single-pass: ${totalDurSec.toFixed(1)}s, ${imagePaths.length} images, tone=${tone}, niche=${niche}`);
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-asm-"));
   const srtPath = path.join(tmpDir, "captions.srt");
-  await writeWordChunkSRT(scenes, sceneTimings, srtPath);
+  const srtScenes = captionScenes ?? scenes;
+  const srtTimings = captionTimings ?? sceneTimings;
+  await writeWordChunkSRT(srtScenes, srtTimings, srtPath);
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
@@ -166,8 +171,8 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   let audioMap: string;
   if (musicPath) {
     filterParts.push(`[${audioIdx}:a]volume=1.0[voice]`);
-    filterParts.push(`[${musicIdx}:a]volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[music]`);
-    filterParts.push(`[voice][music]amix=inputs=2:duration=shortest[aout]`);
+    filterParts.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[music]`);
+    filterParts.push(`[voice][music]amix=inputs=2:duration=first[aout]`);
     audioMap = "[aout]";
   } else {
     audioMap = `${audioIdx}:a:0`;
@@ -181,7 +186,6 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     "-c:v", "libx264",
     "-c:a", "aac",
     "-b:a", "192k",
-    "-shortest",
     "-preset", "fast",
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",

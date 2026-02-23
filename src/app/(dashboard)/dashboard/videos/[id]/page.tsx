@@ -19,7 +19,23 @@ import {
   Clock,
   XCircle,
   Film,
+  Trash2,
+  Instagram,
+  Youtube,
+  Facebook,
+  Send,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 const stages = [
   { key: "SCRIPT", label: "Script", detail: "AI is writing your narration", icon: FileText },
@@ -34,6 +50,28 @@ export default function VideoDetailPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [retrying, setRetrying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishResults, setPublishResults] = useState<
+    { platform: string; success: boolean; postId?: string; error?: string }[] | null
+  >(null);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/videos/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Delete failed");
+        return;
+      }
+      router.back();
+    } catch {
+      alert("Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleRetry() {
     setRetrying(true);
@@ -56,6 +94,25 @@ export default function VideoDetailPage() {
     }
   }
 
+  async function handlePublish() {
+    setPublishing(true);
+    setPublishResults(null);
+    try {
+      const res = await fetch(`/api/videos/${id}/publish`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        setPublishResults([{ platform: "ALL", success: false, error: json.error }]);
+        return;
+      }
+      setPublishResults(json.data);
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      setPublishResults([{ platform: "ALL", success: false, error: "Network error" }]);
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   const [queuedTimedOut, setQueuedTimedOut] = useState(false);
   const [countdown, setCountdown] = useState(60);
   const queuedSince = useRef<number | null>(null);
@@ -70,7 +127,8 @@ export default function VideoDetailPage() {
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "QUEUED" || status === "GENERATING") return 2000;
+      if (status === "QUEUED") return 3000;
+      if (status === "GENERATING") return 10000;
       return false;
     },
   });
@@ -125,7 +183,40 @@ export default function VideoDetailPage() {
         <Button variant="ghost" size="sm" onClick={() => router.back()}>
           <ArrowLeft className="h-4 w-4 mr-1" /> Back
         </Button>
-        <h1 className="text-2xl font-bold truncate">{video.title || "Video"}</h1>
+        <h1 className="text-2xl font-bold truncate flex-1">{video.title || "Video"}</h1>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200">
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Video?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete &quot;{video.title || "Untitled Video"}&quot; and its generated output. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDelete}
+                disabled={deleting}
+                className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       {/* ── PROGRESS TRACKER ── */}
@@ -175,14 +266,13 @@ export default function VideoDetailPage() {
                 const Icon = stage.icon;
                 const isDone = currentStageIndex > i;
                 const isActive = currentStageIndex === i;
-                const isPending = currentStageIndex < i;
                 const isLast = i === stages.length - 1;
 
                 return (
                   <div key={stage.key} className="flex gap-4">
-                    {/* Vertical line + circle */}
                     <div className="flex flex-col items-center">
                       <div
+                        key={`${stage.key}-${isDone}-${isActive}`}
                         className={`h-10 w-10 rounded-full flex items-center justify-center border-2 transition-all duration-500 ${
                           isDone
                             ? "border-green-500 bg-green-50 text-green-600"
@@ -266,13 +356,136 @@ export default function VideoDetailPage() {
             />
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
             <Button asChild>
               <a href={`/api/videos/${video.id}/download`}>
                 <Download className="mr-2 h-4 w-4" /> Download MP4
               </a>
             </Button>
+            <Button
+              variant="outline"
+              onClick={handlePublish}
+              disabled={publishing}
+            >
+              {publishing ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Publishing...</>
+              ) : (
+                <><Send className="mr-2 h-4 w-4" /> Publish to Socials</>
+              )}
+            </Button>
           </div>
+
+          {/* Publish results */}
+          {publishResults && (
+            <Card className="mt-4">
+              <CardContent className="p-4 space-y-2">
+                <h3 className="text-sm font-semibold mb-2">Publish Results</h3>
+                {publishResults.map((r, i) => {
+                  const platformIcons: Record<string, typeof Instagram> = {
+                    YOUTUBE: Youtube,
+                    INSTAGRAM: Instagram,
+                    FACEBOOK: Facebook,
+                  };
+                  const platformLabels: Record<string, string> = {
+                    YOUTUBE: "YouTube Shorts",
+                    INSTAGRAM: "Instagram Reels",
+                    FACEBOOK: "Facebook Reels",
+                  };
+                  const platformUrls: Record<string, (id: string) => string> = {
+                    YOUTUBE: (pid) => `https://youtube.com/shorts/${pid}`,
+                    INSTAGRAM: (pid) => `https://www.instagram.com/reel/${pid}/`,
+                    FACEBOOK: (pid) => `https://www.facebook.com/reel/${pid}`,
+                  };
+                  const Icon = platformIcons[r.platform];
+                  const postUrl = r.postId && platformUrls[r.platform]
+                    ? platformUrls[r.platform](r.postId)
+                    : null;
+                  return (
+                    <div
+                      key={i}
+                      className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
+                        r.success
+                          ? "bg-green-50 text-green-700"
+                          : "bg-red-50 text-red-700"
+                      }`}
+                    >
+                      {Icon ? <Icon className="h-4 w-4 shrink-0" /> : null}
+                      <span className="font-medium">
+                        {platformLabels[r.platform] ?? r.platform}
+                      </span>
+                      {r.success ? (
+                        <div className="ml-auto flex items-center gap-2">
+                          {postUrl && (
+                            <a
+                              href={postUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs underline underline-offset-2 hover:text-green-900 truncate max-w-[200px]"
+                            >
+                              {postUrl}
+                            </a>
+                          )}
+                          <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        </div>
+                      ) : (
+                        <span className="ml-auto text-xs truncate max-w-xs">
+                          {r.error}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Posted platforms - persistent from DB */}
+          {video.postedPlatforms &&
+            (video.postedPlatforms as unknown[]).length > 0 && !publishResults && (() => {
+            const platformIcons: Record<string, typeof Instagram> = {
+              YOUTUBE: Youtube, INSTAGRAM: Instagram, FACEBOOK: Facebook,
+            };
+            const platformLabels: Record<string, string> = {
+              YOUTUBE: "YouTube Shorts", INSTAGRAM: "Instagram Reels", FACEBOOK: "Facebook Reels",
+            };
+            const entries = (video.postedPlatforms as (string | { platform: string; postId?: string; url?: string })[]).map(
+              (p) => (typeof p === "string" ? { platform: p, postId: undefined, url: undefined } : p),
+            );
+            return (
+              <Card className="mt-4">
+                <CardContent className="p-4 space-y-2">
+                  <h3 className="text-sm font-semibold mb-2">Posted To</h3>
+                  {entries.map((entry) => {
+                    const Icon = platformIcons[entry.platform];
+                    return (
+                      <div
+                        key={entry.platform}
+                        className="flex items-center gap-2 rounded-md bg-green-50 text-green-700 px-3 py-2 text-sm"
+                      >
+                        {Icon && <Icon className="h-4 w-4 shrink-0" />}
+                        <span className="font-medium">
+                          {platformLabels[entry.platform] ?? entry.platform}
+                        </span>
+                        <div className="ml-auto flex items-center gap-2">
+                          {entry.url && (
+                            <a
+                              href={entry.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs underline underline-offset-2 hover:text-green-900 truncate max-w-[200px]"
+                            >
+                              {entry.url}
+                            </a>
+                          )}
+                          <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })()}
         </div>
       )}
 

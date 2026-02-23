@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, Video, Activity } from "lucide-react";
+import { Users, Video, Activity, Cpu, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
@@ -56,6 +56,28 @@ export default async function AdminPage() {
             <div className="text-2xl font-bold">{seriesCount}</div>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Link href="/admin/providers">
+            <Card className="transition-colors hover:border-primary/50 cursor-pointer">
+              <CardContent className="flex items-center justify-between p-4">
+                <div className="flex items-center gap-3">
+                  <Cpu className="h-5 w-5 text-primary" />
+                  <div>
+                    <p className="font-medium text-sm">AI Provider Controls</p>
+                    <p className="text-xs text-muted-foreground">
+                      Enable/disable AI models for users
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </CardContent>
+            </Card>
+          </Link>
+        </div>
       </div>
     </div>
   );

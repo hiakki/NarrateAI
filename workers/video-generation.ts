@@ -7,6 +7,8 @@ import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo } from "../src/services/video-assembler";
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
+import { expandScenesToImageSlots } from "../src/services/scene-expander";
+import { postVideoToSocials } from "../src/services/social-poster";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
@@ -108,8 +110,12 @@ const worker = new Worker<VideoJobData>(
         console.log(`[Worker] TTS: skipped (checkpoint, ${durationMs}ms)`);
       }
 
+      // -- Stage 2.5: Expand scenes into image slots based on audio duration --
+      const { slots: imageSlots, timings: expandedTimings } = expandScenesToImageSlots(scenes, durationMs!);
+
       // -- Stage 3: Images --
-      const allImagesExist = imagePaths && imagePaths.length === scenes.length &&
+      const targetImageCount = imageSlots.length;
+      const allImagesExist = imagePaths && imagePaths.length === targetImageCount &&
         await Promise.all(imagePaths.map(fileExists)).then(r => r.every(Boolean));
 
       if (!completed.has("IMAGES") || !allImagesExist) {
@@ -117,26 +123,26 @@ const worker = new Worker<VideoJobData>(
         const resolvedArtStyle = getArtStyleById(artStyle);
         const resolvedNeg = negativePrompt ?? resolvedArtStyle?.negativePrompt ?? "low quality, blurry, watermark, text";
 
-        let enhancedScenes = scenes;
+        let enhancedSlots = imageSlots.map((s) => ({ ...s }));
         if (resolvedArtStyle) {
-          enhancedScenes = scenes.map((s, i) => {
-            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, scenes.length);
+          enhancedSlots = imageSlots.map((s, i) => {
+            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, imageSlots.length);
             return { ...s, visualDescription: built.prompt };
           });
         }
 
         const img = getImageProvider(imageProvider);
-        const imgResult = await img.generateImages(enhancedScenes, artStylePrompt, resolvedNeg);
+        const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg);
         imagePaths = imgResult.imagePaths;
         imageTmpDir = imgResult.tmpDir;
 
         completed.add("IMAGES");
         await saveCheckpoint(videoId, {
           completedStages: [...completed],
-          audioPath, durationMs, sceneTimings,
+          audioPath, durationMs, sceneTimings: expandedTimings,
           imagePaths, imageTmpDir,
         });
-        console.log(`[Worker] Images done: ${imagePaths.length} (${imageProvider})`);
+        console.log(`[Worker] Images done: ${imagePaths.length} for ${Math.round(durationMs! / 1000)}s audio (${imageProvider})`);
       } else {
         console.log(`[Worker] Images: skipped (checkpoint, ${imagePaths!.length} images)`);
       }
@@ -156,8 +162,10 @@ const worker = new Worker<VideoJobData>(
       await assembleVideo({
         imagePaths: imagePaths!,
         audioPath: audioPath!,
-        sceneTimings: sceneTimings!,
-        scenes,
+        sceneTimings: expandedTimings,
+        scenes: imageSlots,
+        captionScenes: scenes,
+        captionTimings: sceneTimings!,
         musicPath: resolvedMusicPath,
         outputPath,
         tone: tone ?? "dramatic",
@@ -179,6 +187,18 @@ const worker = new Worker<VideoJobData>(
       });
 
       console.log(`[Worker] READY: ${videoId}`);
+
+      try {
+        const results = await postVideoToSocials(videoId);
+        if (results.length > 0) {
+          const posted = results.filter((r) => r.success).map((r) => r.platform);
+          const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
+          if (posted.length > 0) console.log(`[Worker] Auto-posted to: ${posted.join(", ")}`);
+          if (failed.length > 0) console.warn(`[Worker] Posting failed: ${failed.join("; ")}`);
+        }
+      } catch (postErr) {
+        console.warn("[Worker] Auto-posting error (non-fatal):", postErr);
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`[Worker] FAILED ${videoId}:`, msg);

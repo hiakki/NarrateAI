@@ -168,6 +168,14 @@ export const IMAGE_PROVIDERS: Record<string, ProviderInfo> = {
     qualityLabel: "Best",
     envVar: "IDEOGRAM_API_KEY",
   },
+  POLLINATIONS: {
+    id: "POLLINATIONS",
+    name: "Pollinations",
+    description: "Free image generation via Pollinations.ai (free key at enter.pollinations.ai)",
+    costEstimate: "Free",
+    qualityLabel: "Good",
+    envVar: "POLLINATIONS_API_KEY",
+  },
 };
 
 const PROVIDER_MAPS: Record<ProviderStage, Record<string, ProviderInfo>> = {

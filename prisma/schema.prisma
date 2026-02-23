@@ -46,9 +46,9 @@ enum GenerationStage {
 }
 
 enum Platform {
-  TIKTOK
   INSTAGRAM
   YOUTUBE
+  FACEBOOK
 }
 
 enum SubscriptionStatus {
@@ -83,6 +83,7 @@ enum ImageProvider {
   SILICONFLOW
   LEONARDO
   IDEOGRAM
+  POLLINATIONS
 }
 
 // ─── Models ──────────────────────────────────────────────
@@ -100,11 +101,13 @@ model User {
   defaultLlmProvider   LlmProvider?
   defaultTtsProvider   TtsProvider?
   defaultImageProvider ImageProvider?
+  lastCreatePrefs      Json?
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   series         Series[]
+  automations    Automation[]
   socialAccounts SocialAccount[]
   subscription   Subscription?
 
@@ -122,22 +125,56 @@ model Series {
   voiceId         String?
   language        String       @default("en")
   tone            String       @default("dramatic")
-  targetPlatforms Json         @default("[]")
-  postingSchedule Json?
   status          SeriesStatus @default(ACTIVE)
 
-  llmProvider     LlmProvider?
-  ttsProvider     TtsProvider?
-  imageProvider   ImageProvider?
+  llmProvider      LlmProvider?
+  ttsProvider      TtsProvider?
+  imageProvider    ImageProvider?
 
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   videos          Video[]
+  automation      Automation?
 
   @@index([userId])
   @@map("series")
+}
+
+model Automation {
+  id              String        @id @default(cuid())
+  userId          String
+  name            String
+  niche           String
+  artStyle        String        @default("realistic")
+  voiceId         String?
+  language        String        @default("en")
+  tone            String        @default("dramatic")
+  duration        Int           @default(45)
+
+  llmProvider     LlmProvider?
+  ttsProvider     TtsProvider?
+  imageProvider   ImageProvider?
+
+  targetPlatforms Json          @default("[]")
+  enabled         Boolean       @default(true)
+  frequency       String        @default("daily")
+  postTime        String        @default("09:00")
+  timezone        String
+
+  lastRunAt       DateTime?
+  seriesId        String?       @unique
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series          Series?       @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([enabled])
+  @@map("automations")
 }
 
 model Video {
@@ -174,6 +211,8 @@ model SocialAccount {
   userId          String
   platform        Platform
   platformUserId  String
+  pageId          String?
+  pageName        String?
   accessTokenEnc  String
   refreshTokenEnc String?
   username        String?
@@ -186,6 +225,16 @@ model SocialAccount {
   @@unique([userId, platform, platformUserId])
   @@index([userId])
   @@map("social_accounts")
+}
+
+model AdminSettings {
+  id                    String   @id @default("singleton")
+  enabledLlmProviders   Json     @default("[\"GEMINI_FLASH\",\"OPENAI_GPT4O_MINI\",\"DEEPSEEK_V3\",\"QWEN\"]")
+  enabledTtsProviders   Json     @default("[\"GEMINI_TTS\",\"ELEVENLABS\",\"COSYVOICE\",\"FISH_AUDIO\",\"EDGE_TTS\"]")
+  enabledImageProviders Json     @default("[\"GEMINI_IMAGEN\",\"DALLE3\",\"FLUX\",\"KOLORS\",\"SDXL\",\"FLUX_SCHNELL\",\"TOGETHER\",\"SILICONFLOW\",\"LEONARDO\",\"IDEOGRAM\",\"POLLINATIONS\"]")
+  updatedAt             DateTime @updatedAt
+
+  @@map("admin_settings")
 }
 
 model Subscription {

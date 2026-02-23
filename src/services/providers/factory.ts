@@ -23,6 +23,7 @@ import { TogetherImageProvider } from "./image/together";
 import { SiliconFlowImageProvider } from "./image/siliconflow";
 import { LeonardoImageProvider } from "./image/leonardo";
 import { IdeogramImageProvider } from "./image/ideogram";
+import { PollinationsImageProvider } from "./image/pollinations";
 
 const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   GEMINI_FLASH: () => new GeminiLlmProvider(),
@@ -50,6 +51,7 @@ const IMAGE_MAP: Record<string, () => ImageProviderInterface> = {
   SILICONFLOW: () => new SiliconFlowImageProvider(),
   LEONARDO: () => new LeonardoImageProvider(),
   IDEOGRAM: () => new IdeogramImageProvider(),
+  POLLINATIONS: () => new PollinationsImageProvider(),
 };
 
 export function getLlmProvider(provider: string): LlmProviderInterface {

@@ -1,27 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { isPrivilegedRole } from "@/lib/permissions";
 import {
   LLM_PROVIDERS,
   TTS_PROVIDERS,
   IMAGE_PROVIDERS,
   PLATFORM_DEFAULTS,
   getAvailableProviders,
+  type ProviderInfo,
 } from "@/config/providers";
+
+function filterByAdmin(
+  providers: ProviderInfo[],
+  enabledIds: string[],
+): ProviderInfo[] {
+  const set = new Set(enabledIds);
+  return providers.filter((p) => set.has(p.id));
+}
 
 export async function GET() {
   try {
     const session = await auth();
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!session?.user)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const user = await db.user.findUnique({
-      where: { id: session.user.id },
-      select: {
-        defaultLlmProvider: true,
-        defaultTtsProvider: true,
-        defaultImageProvider: true,
-      },
-    });
+    const [user, adminSettings] = await Promise.all([
+      db.user.findUnique({
+        where: { id: session.user.id },
+        select: {
+          defaultLlmProvider: true,
+          defaultTtsProvider: true,
+          defaultImageProvider: true,
+        },
+      }),
+      db.adminSettings.findUnique({ where: { id: "singleton" } }),
+    ]);
+
+    const isAdmin = isPrivilegedRole(session.user.role);
+
+    const allLlm = Object.values(LLM_PROVIDERS);
+    const allTts = Object.values(TTS_PROVIDERS);
+    const allImage = Object.values(IMAGE_PROVIDERS);
+
+    const availLlm = getAvailableProviders("llm");
+    const availTts = getAvailableProviders("tts");
+    const availImage = getAvailableProviders("image");
+
+    const visibleAll = isAdmin
+      ? { llm: allLlm, tts: allTts, image: allImage }
+      : {
+          llm: adminSettings
+            ? filterByAdmin(allLlm, adminSettings.enabledLlmProviders as string[])
+            : allLlm,
+          tts: adminSettings
+            ? filterByAdmin(allTts, adminSettings.enabledTtsProviders as string[])
+            : allTts,
+          image: adminSettings
+            ? filterByAdmin(allImage, adminSettings.enabledImageProviders as string[])
+            : allImage,
+        };
+
+    const visibleAvail = isAdmin
+      ? { llm: availLlm, tts: availTts, image: availImage }
+      : {
+          llm: adminSettings
+            ? filterByAdmin(availLlm, adminSettings.enabledLlmProviders as string[])
+            : availLlm,
+          tts: adminSettings
+            ? filterByAdmin(availTts, adminSettings.enabledTtsProviders as string[])
+            : availTts,
+          image: adminSettings
+            ? filterByAdmin(availImage, adminSettings.enabledImageProviders as string[])
+            : availImage,
+        };
 
     return NextResponse.json({
       data: {
@@ -31,21 +83,16 @@ export async function GET() {
           imageProvider: user?.defaultImageProvider ?? null,
         },
         platformDefaults: PLATFORM_DEFAULTS,
-        available: {
-          llm: getAvailableProviders("llm"),
-          tts: getAvailableProviders("tts"),
-          image: getAvailableProviders("image"),
-        },
-        all: {
-          llm: Object.values(LLM_PROVIDERS),
-          tts: Object.values(TTS_PROVIDERS),
-          image: Object.values(IMAGE_PROVIDERS),
-        },
+        available: visibleAvail,
+        all: visibleAll,
       },
     });
   } catch (error) {
     console.error("Get providers error:", error);
-    return NextResponse.json({ error: "Failed to load providers" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load providers" },
+      { status: 500 },
+    );
   }
 }
 

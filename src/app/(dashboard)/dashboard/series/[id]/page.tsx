@@ -3,8 +3,9 @@ import { db } from "@/lib/db";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { DeleteButton } from "@/components/delete-button";
 
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
   QUEUED: { label: "Queued", icon: Clock, className: "text-yellow-600 bg-yellow-50" },
@@ -34,15 +35,15 @@ export default async function SeriesDetailPage({
 
   if (!series) notFound();
   if (series.userId !== session.user.id && session.user.role === "USER") {
-    redirect("/dashboard/series");
+    redirect("/dashboard/videos");
   }
 
   return (
     <div>
       <div className="flex items-center gap-4 mb-2">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/dashboard/series">
-            <ArrowLeft className="h-4 w-4 mr-1" /> Series
+          <Link href="/dashboard/videos">
+            <ArrowLeft className="h-4 w-4 mr-1" /> Videos
           </Link>
         </Button>
       </div>
@@ -56,12 +57,22 @@ export default async function SeriesDetailPage({
             <span className="capitalize">{series.artStyle.replace("-", " ")}</span>
           </div>
         </div>
-        <Button asChild>
-          <Link href="/dashboard/series/new">
-            <Plus className="mr-2 h-4 w-4" /> New Video
-          </Link>
-        </Button>
+        <div className="flex items-center gap-3">
+          <DeleteButton
+            endpoint={`/api/series/${series.id}`}
+            label="Delete Series"
+            description={`This will permanently delete "${series.name}" and all its ${series.videos.length} video${series.videos.length !== 1 ? "s" : ""}. This action cannot be undone.`}
+            redirectTo="/dashboard/videos"
+          />
+          <Button asChild>
+            <Link href="/dashboard/create">
+              <Plus className="mr-2 h-4 w-4" /> New Video
+            </Link>
+          </Button>
+        </div>
       </div>
+
+      <h2 className="text-lg font-semibold mb-4">Videos</h2>
 
       {series.videos.length === 0 ? (
         <Card>
@@ -77,28 +88,35 @@ export default async function SeriesDetailPage({
             const config = statusConfig[video.status] ?? statusConfig.QUEUED;
             const Icon = config.icon;
             return (
-              <Link key={video.id} href={`/dashboard/videos/${video.id}`}>
-                <Card className="transition-colors hover:border-primary/50">
-                  <CardContent className="flex items-center justify-between p-4">
-                    <div className="flex-1">
-                      <h3 className="font-medium">
-                        {video.title || "Untitled Video"}
-                      </h3>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(video.createdAt).toLocaleDateString()}{" "}
-                        {video.duration ? `- ${video.duration}s` : ""}
-                      </p>
-                    </div>
+              <Card key={video.id} className="transition-colors hover:border-primary/50">
+                <CardContent className="flex items-center justify-between p-4">
+                  <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
+                    <h3 className="font-medium">
+                      {video.title || "Untitled Video"}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(video.createdAt).toLocaleDateString()}{" "}
+                      {video.duration ? `- ${video.duration}s` : ""}
+                    </p>
+                  </Link>
+                  <div className="flex items-center gap-3">
                     <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
-                      <Icon className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
+                      <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
                       {config.label}
                       {video.status === "GENERATING" && video.generationStage && (
                         <span className="lowercase">({video.generationStage})</span>
                       )}
                     </div>
-                  </CardContent>
-                </Card>
-              </Link>
+                    <DeleteButton
+                      endpoint={`/api/videos/${video.id}`}
+                      label="Delete Video"
+                      description={`This will permanently delete "${video.title || "Untitled Video"}" and its generated output. This action cannot be undone.`}
+                      redirectTo={`/dashboard/series/${series.id}`}
+                      variant="icon"
+                    />
+                  </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>

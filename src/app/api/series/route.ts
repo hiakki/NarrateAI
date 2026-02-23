@@ -8,6 +8,32 @@ import { enqueueVideoGeneration } from "@/services/queue";
 import { resolveProviders } from "@/services/providers/resolve";
 import { z } from "zod/v4";
 
+export async function GET() {
+  try {
+    const session = await auth();
+    if (!session?.user)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const seriesList = await db.series.findMany({
+      where: { userId: session.user.id },
+      include: {
+        _count: { select: { videos: true } },
+        videos: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true, generationStage: true, postedPlatforms: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return NextResponse.json({ data: seriesList });
+  } catch (error) {
+    console.error("List series error:", error);
+    return NextResponse.json({ error: "Failed to list series" }, { status: 500 });
+  }
+}
+
 const createSchema = z.object({
   name: z.string().min(1),
   niche: z.string().min(1),
