@@ -4,7 +4,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2, Youtube, Instagram, Facebook } from "lucide-react";
 import { DeleteButton } from "@/components/delete-button";
 
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
@@ -109,6 +109,18 @@ export default async function SeriesDetailPage({
                     </p>
                   </Link>
                   <div className="flex items-center gap-3 shrink-0">
+                    {(video.status === "READY" || video.status === "POSTED") && (() => {
+                      const raw = (video.postedPlatforms ?? []) as ({ platform: string } | string)[];
+                      const plats = raw.map((p) => typeof p === "string" ? p : p.platform);
+                      if (!plats.length) return null;
+                      return (
+                        <div className="flex items-center gap-1">
+                          {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
+                          {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
+                          {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                        </div>
+                      );
+                    })()}
                     <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
                       <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
                       {config.label}

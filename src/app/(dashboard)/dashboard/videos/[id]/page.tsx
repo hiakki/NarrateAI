@@ -57,13 +57,52 @@ export default function VideoDetailPage() {
   const queryClient = useQueryClient();
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [publishingPlatform, setPublishingPlatform] = useState<string | null>(null);
+  const [publishingPlatforms, setPublishingPlatforms] = useState<Set<string>>(new Set());
   const [publishResults, setPublishResults] = useState<
     { platform: string; success: boolean; postId?: string; error?: string }[] | null
   >(null);
   const [connectedAccounts, setConnectedAccounts] = useState<
     { platform: string; username: string | null }[]
   >([]);
+
+  const publishKeyRef = useRef(`narrate-pub-${id}`);
+  publishKeyRef.current = `narrate-pub-${id}`;
+
+  function syncPublishStorage(set: Set<string>) {
+    if (set.size > 0) {
+      sessionStorage.setItem(publishKeyRef.current, JSON.stringify([...set]));
+    } else {
+      sessionStorage.removeItem(publishKeyRef.current);
+    }
+  }
+
+  function markPublishing(...platforms: string[]) {
+    setPublishingPlatforms((prev) => {
+      const next = new Set(prev);
+      platforms.forEach((p) => next.add(p));
+      syncPublishStorage(next);
+      return next;
+    });
+  }
+
+  function unmarkPublishing(...platforms: string[]) {
+    setPublishingPlatforms((prev) => {
+      const next = new Set(prev);
+      platforms.forEach((p) => next.delete(p));
+      syncPublishStorage(next);
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(publishKeyRef.current);
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr) && arr.length > 0) setPublishingPlatforms(new Set(arr));
+      }
+    } catch { /* corrupt data */ }
+  }, [id]);
 
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [editingPrompt, setEditingPrompt] = useState<number | null>(null);
@@ -120,7 +159,7 @@ export default function VideoDetailPage() {
   }, []);
 
   async function handlePublishPlatform(platform: string) {
-    setPublishingPlatform(platform);
+    markPublishing(platform);
     setPublishResults(null);
     try {
       const res = await fetch(`/api/videos/${id}/publish`, {
@@ -131,19 +170,23 @@ export default function VideoDetailPage() {
       const json = await res.json();
       if (!res.ok) {
         setPublishResults([{ platform, success: false, error: json.error }]);
+        unmarkPublishing(platform);
         return;
       }
       setPublishResults(json.data);
+      const failed = ((json.data ?? []) as { platform: string; success: boolean }[])
+        .filter((r) => !r.success)
+        .map((r) => r.platform);
+      if (failed.length > 0) unmarkPublishing(...failed);
       queryClient.invalidateQueries({ queryKey: ["video", id] });
     } catch {
       setPublishResults([{ platform, success: false, error: "Network error" }]);
-    } finally {
-      setPublishingPlatform(null);
+      unmarkPublishing(platform);
     }
   }
 
   async function handlePublishAll(platforms: string[]) {
-    setPublishingPlatform("ALL");
+    markPublishing(...platforms);
     setPublishResults(null);
     try {
       const res = await fetch(`/api/videos/${id}/publish`, {
@@ -154,14 +197,18 @@ export default function VideoDetailPage() {
       const json = await res.json();
       if (!res.ok) {
         setPublishResults([{ platform: "ALL", success: false, error: json.error }]);
+        unmarkPublishing(...platforms);
         return;
       }
       setPublishResults(json.data);
+      const failed = ((json.data ?? []) as { platform: string; success: boolean }[])
+        .filter((r) => !r.success)
+        .map((r) => r.platform);
+      if (failed.length > 0) unmarkPublishing(...failed);
       queryClient.invalidateQueries({ queryKey: ["video", id] });
     } catch {
       setPublishResults([{ platform: "ALL", success: false, error: "Network error" }]);
-    } finally {
-      setPublishingPlatform(null);
+      unmarkPublishing(...platforms);
     }
   }
 
@@ -222,6 +269,7 @@ export default function VideoDetailPage() {
       return json.data;
     },
     refetchInterval: (query) => {
+      if (publishingPlatforms.size > 0) return 5000;
       const status = query.state.data?.status;
       if (status === "QUEUED") return 8000;
       if (status === "GENERATING") {
@@ -231,6 +279,19 @@ export default function VideoDetailPage() {
       return false;
     },
   });
+
+  useEffect(() => {
+    if (publishingPlatforms.size === 0 || !video) return;
+    const postedRaw = (video.postedPlatforms ?? []) as (
+      | string
+      | { platform: string }
+    )[];
+    const postedSet = new Set(
+      postedRaw.map((p) => (typeof p === "string" ? p : p.platform)),
+    );
+    const nowPosted = [...publishingPlatforms].filter((p) => postedSet.has(p));
+    if (nowPosted.length > 0) unmarkPublishing(...nowPosted);
+  }, [video]);
 
   useEffect(() => {
     if (video?.status === "QUEUED") {
@@ -705,10 +766,10 @@ export default function VideoDetailPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!!publishingPlatform}
+                        disabled={publishingPlatforms.size > 0}
                         onClick={() => handlePublishAll(unpostedConnected.map((p) => p.key))}
                       >
-                        {publishingPlatform === "ALL" ? (
+                        {unpostedConnected.some((p) => publishingPlatforms.has(p.key)) ? (
                           <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
                         ) : (
                           <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
@@ -721,7 +782,7 @@ export default function VideoDetailPage() {
                     const posted = postedMap.has(key);
                     const postUrl = postedMap.get(key);
                     const connected = connectedSet.has(key);
-                    const isPublishing = publishingPlatform === key || publishingPlatform === "ALL";
+                    const isPublishing = publishingPlatforms.has(key);
                     const result = publishResults?.find((r) => r.platform === key);
 
                     return (
@@ -760,7 +821,7 @@ export default function VideoDetailPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              disabled={!!publishingPlatform}
+                              disabled={publishingPlatforms.size > 0}
                               onClick={() => handlePublishPlatform(key)}
                             >
                               {isPublishing ? (

@@ -24,12 +24,14 @@ import { ART_STYLES } from "@/config/art-styles";
 import { LANGUAGES } from "@/config/languages";
 import { getVoicesForProvider, getVoiceById, getDefaultVoiceId } from "@/config/voices";
 
+interface PostedEntry { platform: string; postId?: string; url?: string }
 interface Video {
   id: string;
   title: string | null;
   status: string;
   generationStage: string | null;
   duration: number | null;
+  postedPlatforms: (string | PostedEntry)[];
   createdAt: string;
   updatedAt: string;
 }
@@ -206,9 +208,9 @@ export default function AutomationDetailPage() {
           duration: editDuration,
           language: editLanguage,
           voiceId: editVoiceId || null,
-          llmProvider: editLlmProvider || null,
-          ttsProvider: editTtsProvider || null,
-          imageProvider: editImageProvider || null,
+          llmProvider: editLlmProvider && editLlmProvider !== (providerData?.defaults.llmProvider ?? providerData?.platformDefaults.llm) ? editLlmProvider : null,
+          ttsProvider: editTtsProvider && editTtsProvider !== (providerData?.defaults.ttsProvider ?? providerData?.platformDefaults.tts) ? editTtsProvider : null,
+          imageProvider: editImageProvider && editImageProvider !== (providerData?.defaults.imageProvider ?? providerData?.platformDefaults.image) ? editImageProvider : null,
           frequency: editFrequency,
           postTime: editPostTime,
           timezone: editTimezone,
@@ -473,7 +475,7 @@ export default function AutomationDetailPage() {
                           <Label className="text-[10px] mb-0.5 block text-muted-foreground">Script (LLM)</Label>
                           <div className="flex flex-wrap gap-1">
                             {providerData.available.llm.map((p) => (
-                              <Button key={p.id} size="xs" variant={resolvedLlm === p.id ? "default" : "outline"} onClick={() => setEditLlmProvider(p.id)}>
+                              <Button key={p.id} size="xs" variant={resolvedLlm === p.id ? "default" : "outline"} onClick={() => setEditLlmProvider(resolvedLlm === p.id ? "" : p.id)}>
                                 {p.name}
                               </Button>
                             ))}
@@ -483,7 +485,7 @@ export default function AutomationDetailPage() {
                           <Label className="text-[10px] mb-0.5 block text-muted-foreground">Voice (TTS)</Label>
                           <div className="flex flex-wrap gap-1">
                             {providerData.available.tts.map((p) => (
-                              <Button key={p.id} size="xs" variant={resolvedTts === p.id ? "default" : "outline"} onClick={() => setEditTtsProvider(p.id)}>
+                              <Button key={p.id} size="xs" variant={resolvedTts === p.id ? "default" : "outline"} onClick={() => setEditTtsProvider(resolvedTts === p.id ? "" : p.id)}>
                                 {p.name}
                               </Button>
                             ))}
@@ -493,7 +495,7 @@ export default function AutomationDetailPage() {
                           <Label className="text-[10px] mb-0.5 block text-muted-foreground">Images</Label>
                           <div className="flex flex-wrap gap-1">
                             {providerData.available.image.map((p) => (
-                              <Button key={p.id} size="xs" variant={resolvedImage === p.id ? "default" : "outline"} onClick={() => setEditImageProvider(p.id)}>
+                              <Button key={p.id} size="xs" variant={resolvedImage === p.id ? "default" : "outline"} onClick={() => setEditImageProvider(resolvedImage === p.id ? "" : p.id)}>
                                 {p.name}
                               </Button>
                             ))}
@@ -700,12 +702,26 @@ export default function AutomationDetailPage() {
                       {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
                     </p>
                   </Link>
-                  <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium shrink-0 ${config.className}`}>
-                    <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
-                    {config.label}
-                    {video.status === "GENERATING" && video.generationStage && (
-                      <span className="lowercase">({video.generationStage})</span>
-                    )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {(video.status === "READY" || video.status === "POSTED") && (() => {
+                      const raw = video.postedPlatforms ?? [];
+                      const plats = raw.map((p) => typeof p === "string" ? p : p.platform);
+                      if (!plats.length) return null;
+                      return (
+                        <div className="flex items-center gap-1">
+                          {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
+                          {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
+                          {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                        </div>
+                      );
+                    })()}
+                    <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
+                      <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
+                      {config.label}
+                      {video.status === "GENERATING" && video.generationStage && (
+                        <span className="lowercase">({video.generationStage})</span>
+                      )}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
