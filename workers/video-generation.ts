@@ -9,10 +9,13 @@ import { buildImagePrompt } from "../src/services/providers/image/prompt-builder
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
 import { postVideoToSocials } from "../src/services/social-poster";
+import { createLogger } from "../src/lib/logger";
+import { buildPrompt, getSceneCount } from "../src/services/providers/llm/prompt";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
 
+const log = createLogger("Worker");
 const db = new PrismaClient();
 const redis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
   maxRetriesPerRequest: null,
@@ -68,12 +71,12 @@ const worker = new Worker<VideoJobData>(
       throw new Error(`Invalid job data: missing required fields (tts=${ttsProvider}, image=${imageProvider}, scenes=${scenes?.length ?? 0})`);
     }
 
-    console.log(`[Worker] Providers: LLM=${llmProvider}, TTS=${ttsProvider}, Image=${imageProvider}, Lang=${language ?? "en"}`);
+    log.log(`Providers: LLM=${llmProvider}, TTS=${ttsProvider}, Image=${imageProvider}, Lang=${language ?? "en"}`);
 
     const checkpoint = await loadCheckpoint(videoId);
     const completed = new Set(checkpoint.completedStages ?? []);
 
-    console.log(`[Worker] Starting: ${videoId} (${scenes.length} scenes, TTS: ${ttsProvider}, Image: ${imageProvider}, resuming from: ${completed.size > 0 ? [...completed].join(",") : "beginning"})`);
+    log.log(`Starting: ${videoId} (${scenes.length} scenes, resuming from: ${completed.size > 0 ? [...completed].join(",") : "beginning"})`);
 
     let audioPath = checkpoint.audioPath;
     let durationMs = checkpoint.durationMs;
@@ -88,9 +91,23 @@ const worker = new Worker<VideoJobData>(
         await db.video.update({ where: { id: videoId }, data: { scriptText, title } });
         completed.add("SCRIPT");
         await saveCheckpoint(videoId, { ...checkpoint, completedStages: [...completed] });
-        console.log("[Worker] Script saved");
+        log.log(`Script saved — title: "${title}"`);
+
+        const sceneCount = getSceneCount(job.data.duration);
+        const llmPrompt = buildPrompt({
+          niche: niche ?? "", tone: tone ?? "dramatic",
+          artStyle: artStyle ?? "", duration: job.data.duration,
+          topic: undefined, language: language ?? "en",
+        }, sceneCount);
+        log.log(`LLM prompt sent to ${llmProvider}:\n${"─".repeat(60)}\n${llmPrompt}\n${"─".repeat(60)}`);
+
+        log.log(`Generated script (narration):\n${"─".repeat(60)}\n${scriptText}\n${"─".repeat(60)}`);
+        for (let i = 0; i < scenes.length; i++) {
+          log.log(`Scene ${i + 1}/${scenes.length} narration: "${scenes[i].text.slice(0, 120)}${scenes[i].text.length > 120 ? "..." : ""}"`);
+          log.log(`Scene ${i + 1}/${scenes.length} visualDesc: "${scenes[i].visualDescription.slice(0, 200)}${scenes[i].visualDescription.length > 200 ? "..." : ""}"`);
+        }
       } else {
-        console.log("[Worker] Script: skipped (checkpoint)");
+        log.log("Script: skipped (checkpoint)");
       }
 
       // -- Stage 2: TTS --
@@ -110,9 +127,9 @@ const worker = new Worker<VideoJobData>(
           audioPath, durationMs, sceneTimings,
           imagePaths, imageTmpDir,
         });
-        console.log(`[Worker] TTS done: ${durationMs}ms (${ttsProvider})`);
+        log.log(`TTS done: ${durationMs}ms (${ttsProvider}, voice=${resolvedVoice})`);
       } else {
-        console.log(`[Worker] TTS: skipped (checkpoint, ${durationMs}ms)`);
+        log.log(`TTS: skipped (checkpoint, ${durationMs}ms)`);
       }
 
       // -- Stage 2.5: Expand scenes into image slots based on audio duration --
@@ -147,6 +164,11 @@ const worker = new Worker<VideoJobData>(
 
         const imagePrompts = enhancedSlots.map(s => s.visualDescription);
 
+        log.log(`Generating ${targetImageCount} images (${imageProvider}, artStyle=${artStyle}, neg="${resolvedNeg.slice(0, 80)}")`);
+        for (let i = 0; i < imagePrompts.length; i++) {
+          log.log(`Image ${i + 1}/${imagePrompts.length} prompt: "${imagePrompts[i].slice(0, 250)}${imagePrompts[i].length > 250 ? "..." : ""}"`);
+        }
+
         const img = getImageProvider(imageProvider);
         const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
           const ext = path.extname(srcPath) || ".png";
@@ -166,7 +188,7 @@ const worker = new Worker<VideoJobData>(
           reviewMode,
           musicPath,
         });
-        console.log(`[Worker] Images done: ${imagePaths.length} for ${Math.round(durationMs! / 1000)}s audio (${imageProvider})`);
+        log.log(`Images done: ${imagePaths.length} for ${Math.round(durationMs! / 1000)}s audio (${imageProvider})`);
 
         if (reviewMode) {
           await db.video.update({
@@ -177,7 +199,7 @@ const worker = new Worker<VideoJobData>(
               voiceoverUrl: audioPath,
             },
           });
-          console.log(`[Worker] Review mode: pausing for user approval (${videoId})`);
+          log.log(`Review mode: pausing for user approval (${videoId})`);
           return;
         }
       } else {
@@ -188,7 +210,7 @@ const worker = new Worker<VideoJobData>(
           const dest = path.join(scenesDir, `scene-${i.toString().padStart(3, "0")}${ext}`);
           if (!(await fileExists(dest))) await fs.copyFile(imagePaths![i], dest);
         }
-        console.log(`[Worker] Images: skipped (checkpoint, ${imagePaths!.length} images)`);
+        log.log(`Images: skipped (checkpoint, ${imagePaths!.length} images)`);
       }
 
       // -- Stage 4: Assembly --
@@ -214,8 +236,9 @@ const worker = new Worker<VideoJobData>(
         outputPath,
         tone: tone ?? "dramatic",
         niche: niche ?? "",
+        language: language ?? "en",
       });
-      console.log("[Worker] Assembly done");
+      log.log("Assembly done");
 
       // -- Stage 5: Finalize --
       await updateStage(videoId, "UPLOADING");
@@ -230,22 +253,22 @@ const worker = new Worker<VideoJobData>(
         },
       });
 
-      console.log(`[Worker] READY: ${videoId}`);
+      log.log(`READY: ${videoId}`);
 
       try {
         const results = await postVideoToSocials(videoId);
         if (results.length > 0) {
           const posted = results.filter((r) => r.success).map((r) => r.platform);
           const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-          if (posted.length > 0) console.log(`[Worker] Auto-posted to: ${posted.join(", ")}`);
-          if (failed.length > 0) console.warn(`[Worker] Posting failed: ${failed.join("; ")}`);
+          if (posted.length > 0) log.log(`Auto-posted to: ${posted.join(", ")}`);
+          if (failed.length > 0) log.warn(`Posting failed: ${failed.join("; ")}`);
         }
       } catch (postErr) {
-        console.warn("[Worker] Auto-posting error (non-fatal):", postErr);
+        log.warn("Auto-posting error (non-fatal):", postErr);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error(`[Worker] FAILED ${videoId}:`, msg);
+      log.error(`FAILED ${videoId}:`, msg);
 
       try {
         await db.video.update({
@@ -253,7 +276,7 @@ const worker = new Worker<VideoJobData>(
           data: { status: "FAILED", generationStage: null, errorMessage: msg.slice(0, 500) },
         });
       } catch (dbErr) {
-        console.error(`[Worker] CRITICAL: Could not mark ${videoId} as FAILED:`, dbErr);
+        log.error(`CRITICAL: Could not mark ${videoId} as FAILED:`, dbErr);
       }
 
       throw error;
@@ -262,7 +285,7 @@ const worker = new Worker<VideoJobData>(
   { connection: redis as never, concurrency: 1 }
 );
 
-worker.on("completed", (job) => console.log(`[Worker] Job ${job.id} completed`));
-worker.on("failed", (job, err) => console.error(`[Worker] Job ${job?.id} failed:`, err.message));
+worker.on("completed", (job) => log.log(`Job ${job.id} completed`));
+worker.on("failed", (job, err) => log.error(`Job ${job?.id} failed:`, err.message));
 
-console.log("[Worker] Video generation worker started. Waiting for jobs...");
+log.log("Video generation worker started. Waiting for jobs...");

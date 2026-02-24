@@ -2,7 +2,10 @@ import OpenAI from "openai";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
 import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
+
+const log = createLogger("Image:Together");
 
 export class TogetherImageProvider implements ImageProviderInterface {
   async generateImages(
@@ -47,7 +50,7 @@ export class TogetherImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`[Image:Together] Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
+          log.log(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
         }
 
         if (buffer) break;
@@ -61,7 +64,7 @@ export class TogetherImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      console.log(`[Image:Together] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

@@ -1,8 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
 import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
 
+const log = createLogger("Image:Pollinations");
 const API_URL = "https://gen.pollinations.ai/image";
 
 export class PollinationsImageProvider implements ImageProviderInterface {
@@ -56,7 +58,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`[Image:Pollinations] Failed attempt ${attempt + 1} for scene ${i}: ${msg.slice(0, 150)}`);
+          log.log(`Failed attempt ${attempt + 1} for scene ${i}: ${msg.slice(0, 150)}`);
           buffer = null;
         }
 
@@ -71,7 +73,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      console.log(`[Image:Pollinations] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
 
       if (i < scenes.length - 1) {
         await new Promise((r) => setTimeout(r, 2000));

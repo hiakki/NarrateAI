@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import type { LlmProviderInterface, ScriptInput, GeneratedScript } from "./types";
 import { buildPrompt, getSceneCount } from "./prompt";
 import { safeParseLlmJson } from "./parse-json";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("LLM:Qwen");
 
 export class QwenLlmProvider implements LlmProviderInterface {
   async generateScript(input: ScriptInput): Promise<GeneratedScript> {
@@ -10,6 +13,9 @@ export class QwenLlmProvider implements LlmProviderInterface {
 
     const sceneCount = getSceneCount(input.duration);
     const prompt = buildPrompt(input, sceneCount);
+
+    log.log(`Generating script: niche=${input.niche}, tone=${input.tone}, art=${input.artStyle}, duration=${input.duration}s, lang=${input.language ?? "en"}, scenes=${sceneCount}`);
+    log.log(`LLM prompt:\n${"─".repeat(60)}\n${prompt}\n${"─".repeat(60)}`);
 
     const client = new OpenAI({
       apiKey,
@@ -24,9 +30,13 @@ export class QwenLlmProvider implements LlmProviderInterface {
     });
 
     const text = response.choices[0]?.message?.content ?? "{}";
+    log.log(`Raw response length: ${text.length} chars`);
+
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
     const scenes = (parsed.scenes as { text: string; visualDescription: string }[]) || [];
     const fullScript = scenes.map((s) => s.text).join(" ");
+
+    log.log(`Script generated: "${(parsed.title as string) || "Untitled"}" — ${scenes.length} scenes, ${fullScript.length} chars`);
 
     return {
       title: (parsed.title as string) || "Untitled",

@@ -184,10 +184,10 @@ export default function VideoDetailPage() {
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "QUEUED") return 3000;
+      if (status === "QUEUED") return 8000;
       if (status === "GENERATING") {
         const stage = query.state.data?.generationStage;
-        return stage === "IMAGES" ? 3000 : 10000;
+        return stage === "IMAGES" ? 10000 : 15000;
       }
       return false;
     },

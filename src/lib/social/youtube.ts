@@ -1,7 +1,10 @@
 import { google } from "googleapis";
 import { PrismaClient } from "@prisma/client";
 import { encrypt, decrypt } from "./encrypt";
+import { createLogger } from "@/lib/logger";
 import fs from "fs";
+
+const log = createLogger("YouTube");
 
 const db = new PrismaClient();
 
@@ -33,7 +36,7 @@ async function refreshAndPersist(
     throw new Error("Refresh did not return a new access token");
   }
 
-  console.log(`[YouTube] Token refreshed for channel ${platformUserId}`);
+  log.log(`Token refreshed for channel ${platformUserId}`);
 
   await db.socialAccount.updateMany({
     where: { userId, platform: "YOUTUBE", platformUserId },
@@ -67,7 +70,7 @@ async function getFreshAccessToken(
   if (account?.tokenExpiresAt) {
     const expiresIn = account.tokenExpiresAt.getTime() - Date.now();
     if (expiresIn < 5 * 60 * 1000) {
-      console.log(`[YouTube] Token expires in ${Math.round(expiresIn / 1000)}s, refreshing proactively`);
+      log.log(`Token expires in ${Math.round(expiresIn / 1000)}s, refreshing proactively`);
       return refreshAndPersist(refreshToken, platformUserId, userId);
     }
     if (account.accessTokenEnc) {
@@ -148,7 +151,7 @@ export async function uploadYouTubeShort(
         };
       }
 
-      console.log(`[YouTube] Auth failed on upload, refreshing token...`);
+      log.log(`Auth failed on upload, refreshing token...`);
       const freshToken = await refreshAndPersist(
         refreshToken,
         platformUserId,

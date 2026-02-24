@@ -2,19 +2,22 @@ import { spawn } from "child_process";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("Assembly");
 
 export interface AssemblyInput {
   imagePaths: string[];
   audioPath: string;
   sceneTimings: { startMs: number; endMs: number }[];
   scenes: { text: string }[];
-  /** Original scenes + timings for subtitle generation (aligned to TTS audio). */
   captionScenes?: { text: string }[];
   captionTimings?: { startMs: number; endMs: number }[];
   musicPath?: string;
   outputPath: string;
   tone?: string;
   niche?: string;
+  language?: string;
 }
 
 const MUSIC_VOLUME: Record<string, number> = {
@@ -41,37 +44,31 @@ function getKenBurnsEffect(
   const maxZoom = isDramatic ? 1.25 : 1.15;
 
   const effects: KenBurnsEffect[] = [
-    // Fast zoom-in to center (hook / dramatic reveal)
     {
       zExpr: `min(zoom+${speed * 2},${maxZoom})`,
       xExpr: "iw/2-(iw/zoom/2)",
       yExpr: "ih/2-(ih/zoom/2)",
     },
-    // Slow pan left-to-right (establishing)
     {
       zExpr: `min(zoom+${speed * 0.3},1.08)`,
       xExpr: `min(on*2,iw/zoom/4)`,
       yExpr: "ih/2-(ih/zoom/2)",
     },
-    // Zoom-out from center (reveals context)
     {
       zExpr: `max(${maxZoom}-on*${speed},1.0)`,
       xExpr: "iw/2-(iw/zoom/2)",
       yExpr: "ih/2-(ih/zoom/2)",
     },
-    // Pan right-to-left (building tension)
     {
       zExpr: `min(zoom+${speed * 0.3},1.08)`,
       xExpr: `max(iw/zoom/4-on*2,0)`,
       yExpr: "ih/2-(ih/zoom/2)",
     },
-    // Slow zoom-in from slightly above center (intimacy)
     {
       zExpr: `min(zoom+${speed},${maxZoom * 0.9})`,
       xExpr: "iw/2-(iw/zoom/2)",
       yExpr: `max(ih/3-(ih/zoom/2),0)`,
     },
-    // Dramatic zoom-in to lower third (climax)
     {
       zExpr: `min(zoom+${speed * 1.5},${maxZoom})`,
       xExpr: "iw/2-(iw/zoom/2)",
@@ -91,40 +88,111 @@ function getKenBurnsEffect(
   return effects[idx % effects.length];
 }
 
-function getCaptionStyle(tone?: string, niche?: string): string {
+// ─── Font & caption style resolution ──────────────────────────────
+
+const FONTS_DIR = path.join(process.cwd(), "assets", "fonts");
+
+const DEVANAGARI_REGEX = /[\u0900-\u097F]/;
+
+function resolveFont(language?: string, sampleText?: string): string {
+  const hasDevanagari = sampleText ? DEVANAGARI_REGEX.test(sampleText) : language === "hi";
+
+  if (hasDevanagari) {
+    return "Noto Sans Devanagari";
+  }
+  return "Noto Sans";
+}
+
+interface CaptionStyle {
+  fontName: string;
+  fontSize: number;
+  primaryColor: string;
+  outlineColor: string;
+  backColor: string;
+  outline: number;
+  shadow: number;
+  marginV: number;
+  bold: boolean;
+  spacing: number;
+  borderStyle: number;
+}
+
+function getCaptionStyle(tone?: string, niche?: string, language?: string, sampleText?: string): CaptionStyle {
+  const fontName = resolveFont(language, sampleText);
   const isHorror = HORROR_NICHES.has(niche ?? "");
   const isDramatic = DRAMATIC_TONES.has(tone ?? "");
 
   if (isHorror) {
-    return "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,SecondaryColour=&H000000FF,OutlineColour=&H00000000,BackColour=&H80000000,Outline=3,Shadow=2,Alignment=2,MarginV=50,Bold=1,Spacing=1";
+    return {
+      fontName, fontSize: 28, bold: true, spacing: 1,
+      primaryColor: "&H00FFFFFF",
+      outlineColor: "&H00000000",
+      backColor: "&HA0000000",
+      outline: 4, shadow: 0, marginV: 80,
+      borderStyle: 4,
+    };
   }
   if (isDramatic) {
-    return "FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H60000000,Outline=2,Shadow=1,Alignment=2,MarginV=55,Bold=1";
+    return {
+      fontName, fontSize: 26, bold: true, spacing: 1,
+      primaryColor: "&H00FFFFFF",
+      outlineColor: "&H00000000",
+      backColor: "&H90000000",
+      outline: 4, shadow: 0, marginV: 85,
+      borderStyle: 4,
+    };
   }
-  return "FontName=Arial,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=60,Bold=1";
+  return {
+    fontName, fontSize: 24, bold: true, spacing: 0,
+    primaryColor: "&H00FFFFFF",
+    outlineColor: "&H00000000",
+    backColor: "&H80000000",
+    outline: 3, shadow: 0, marginV: 90,
+    borderStyle: 4,
+  };
 }
 
-/**
- * Assembles the final video in a SINGLE ffmpeg pass:
- *   images -> zoompan -> trim -> setpts -> concat filter -> subtitles -> audio mix -> output
- */
+function styleToAss(s: CaptionStyle): string {
+  return [
+    `FontName=${s.fontName}`,
+    `FontSize=${s.fontSize}`,
+    `PrimaryColour=${s.primaryColor}`,
+    `OutlineColour=${s.outlineColor}`,
+    `BackColour=${s.backColor}`,
+    `Outline=${s.outline}`,
+    `Shadow=${s.shadow}`,
+    `Alignment=2`,
+    `MarginV=${s.marginV}`,
+    `MarginL=40`,
+    `MarginR=40`,
+    `Bold=${s.bold ? 1 : 0}`,
+    `Spacing=${s.spacing}`,
+    `BorderStyle=${s.borderStyle}`,
+  ].join(",");
+}
+
+// ─── Assembly ─────────────────────────────────────────────────────
+
 export async function assembleVideo(input: AssemblyInput): Promise<string> {
-  const { imagePaths, audioPath, sceneTimings, scenes, captionScenes, captionTimings, musicPath, outputPath, tone, niche } = input;
+  const { imagePaths, audioPath, sceneTimings, scenes, captionScenes, captionTimings, musicPath, outputPath, tone, niche, language } = input;
 
   const totalDurSec = (sceneTimings.at(-1)?.endMs ?? 0) / 1000;
-  console.log(`[Assembly] Single-pass: ${totalDurSec.toFixed(1)}s, ${imagePaths.length} images, tone=${tone}, niche=${niche}`);
+  log.log(`Single-pass: ${totalDurSec.toFixed(1)}s, ${imagePaths.length} images, tone=${tone}, niche=${niche}, lang=${language ?? "en"}`);
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-asm-"));
   const srtPath = path.join(tmpDir, "captions.srt");
   const srtScenes = captionScenes ?? scenes;
   const srtTimings = captionTimings ?? sceneTimings;
-  await writeWordChunkSRT(srtScenes, srtTimings, srtPath);
+
+  const sampleText = srtScenes.map((s) => s.text).join(" ");
+  await writeWordChunkSRT(srtScenes, srtTimings, srtPath, language);
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
   const isDramatic = DRAMATIC_TONES.has(tone ?? "");
   const musicVol = MUSIC_VOLUME[tone ?? ""] ?? 0.20;
-  const captionStyle = getCaptionStyle(tone, niche);
+  const captionStyleObj = getCaptionStyle(tone, niche, language, sampleText);
+  const captionStyle = styleToAss(captionStyleObj);
 
   const args: string[] = ["-y"];
 
@@ -151,7 +219,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     const frames = Math.round(dur * FPS);
     const kb = getKenBurnsEffect(i, imagePaths.length, isDramatic);
 
-    console.log(`[Assembly] Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
+    log.log(`Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
 
     filterParts.push(
       `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`
@@ -164,8 +232,9 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   );
 
   const escapedSrt = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  const escapedFontsDir = FONTS_DIR.replace(/\\/g, "/").replace(/:/g, "\\:");
   filterParts.push(
-    `[vraw]subtitles='${escapedSrt}':force_style='${captionStyle}'[vout]`
+    `[vraw]subtitles='${escapedSrt}':fontsdir='${escapedFontsDir}':force_style='${captionStyle}'[vout]`
   );
 
   let audioMap: string;
@@ -195,7 +264,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   await runFfmpeg(args);
 
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  console.log(`[Assembly] Final video: ${outputPath}`);
+  log.log(`Final video: ${outputPath}`);
   return outputPath;
 }
 
@@ -218,17 +287,22 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-/**
- * Splits scene text into 3-4 word chunks for TikTok-style captions,
- * distributing timing evenly across each scene's duration.
- */
+// ─── SRT generation ───────────────────────────────────────────────
+
+function getChunkSize(language?: string): number {
+  if (language === "hi") return 3;
+  return 3;
+}
+
 async function writeWordChunkSRT(
   scenes: { text: string }[],
   timings: { startMs: number; endMs: number }[],
-  outputPath: string
+  outputPath: string,
+  language?: string,
 ): Promise<void> {
   const lines: string[] = [];
   let counter = 1;
+  const maxChunk = getChunkSize(language);
 
   for (let i = 0; i < scenes.length; i++) {
     const words = scenes[i].text.split(/\s+/).filter(Boolean);
@@ -236,7 +310,7 @@ async function writeWordChunkSRT(
 
     const sceneStart = timings[i].startMs;
     const sceneDur = timings[i].endMs - timings[i].startMs;
-    const chunkSize = Math.min(4, Math.max(2, Math.ceil(words.length / 3)));
+    const chunkSize = Math.min(maxChunk, Math.max(2, Math.ceil(words.length / 4)));
     const chunks: string[] = [];
 
     for (let w = 0; w < words.length; w += chunkSize) {

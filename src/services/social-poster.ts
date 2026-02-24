@@ -4,7 +4,10 @@ import { postInstagramReel } from "@/lib/social/instagram";
 import { postFacebookReel } from "@/lib/social/facebook";
 import { uploadYouTubeShort } from "@/lib/social/youtube";
 import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
+import { createLogger } from "@/lib/logger";
 import path from "path";
+
+const log = createLogger("SocialPoster");
 
 const db = new PrismaClient();
 
@@ -31,13 +34,13 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
   });
 
   if (!video || video.status !== "READY" || !video.videoUrl) {
-    console.log(`[SocialPoster] Skipping ${videoId}: not ready or no video URL`);
+    log.log(`Skipping ${videoId}: not ready or no video URL`);
     return [];
   }
 
   const targetPlatforms = (video.series.automation?.targetPlatforms as string[]) ?? [];
   if (targetPlatforms.length === 0) {
-    console.log(`[SocialPoster] No target platforms for series ${video.seriesId}`);
+    log.log(`No target platforms for series ${video.seriesId}`);
     return [];
   }
 
@@ -114,17 +117,17 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
         results.push({ platform, ...result });
 
         if (result.success) {
-          console.log(
-            `[SocialPoster] Posted to ${platform} (${account.username}): ${result.postId}`,
+          log.log(
+            `Posted to ${platform} (${account.username}): ${result.postId}`,
           );
         } else {
-          console.error(
-            `[SocialPoster] Failed to post to ${platform} (${account.username}): ${result.error}`,
+          log.error(
+            `Failed to post to ${platform} (${account.username}): ${result.error}`,
           );
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : "Unknown error";
-        console.error(`[SocialPoster] Error posting to ${platform}:`, error);
+        log.error(`Error posting to ${platform}:`, error);
         results.push({ platform, success: false, error });
       }
     }

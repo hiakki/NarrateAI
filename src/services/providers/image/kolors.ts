@@ -2,7 +2,10 @@ import Replicate from "replicate";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
 import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
+
+const log = createLogger("Image:Kolors");
 
 export class KolorsImageProvider implements ImageProviderInterface {
   async generateImages(
@@ -48,11 +51,11 @@ export class KolorsImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`[Image:Kolors] Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
+          log.log(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
         }
 
         if (buffer) break;
-        console.log(`[Image:Kolors] Retry ${attempt + 1}/3 for scene ${i}`);
+        log.log(`Retry ${attempt + 1}/3 for scene ${i}`);
         if (attempt < 2) await new Promise((r) => setTimeout(r, 3000));
       }
 
@@ -63,7 +66,7 @@ export class KolorsImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      console.log(`[Image:Kolors] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

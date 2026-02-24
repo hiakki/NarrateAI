@@ -2,7 +2,10 @@ import { GoogleGenAI } from "@google/genai";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
 import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
+
+const log = createLogger("Image:Gemini");
 
 async function generateSingleImage(prompt: string, apiKey: string): Promise<Buffer | null> {
   const ai = new GoogleGenAI({ apiKey });
@@ -20,7 +23,7 @@ async function generateSingleImage(prompt: string, apiKey: string): Promise<Buff
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.log(`[Image:Gemini] Failed: ${msg.slice(0, 150)}`);
+    log.log(`Failed: ${msg.slice(0, 150)}`);
   }
   return null;
 }
@@ -47,7 +50,7 @@ export class GeminiImageProvider implements ImageProviderInterface {
       for (let attempt = 0; attempt < 3; attempt++) {
         buffer = await generateSingleImage(prompt, apiKey);
         if (buffer) break;
-        console.log(`[Image:Gemini] Retry ${attempt + 1}/3 for scene ${i}`);
+        log.log(`Retry ${attempt + 1}/3 for scene ${i}`);
         if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
       }
 
@@ -58,7 +61,7 @@ export class GeminiImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      console.log(`[Image:Gemini] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

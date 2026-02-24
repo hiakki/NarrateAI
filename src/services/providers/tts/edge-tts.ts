@@ -2,8 +2,11 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { createLogger } from "@/lib/logger";
 import type { TtsProviderInterface, TTSResult } from "./types";
 import { estimateSceneTimings, getAudioDuration } from "./audio-utils";
+
+const log = createLogger("TTS:EdgeTTS");
 
 export class EdgeTtsProvider implements TtsProviderInterface {
   async generateSpeech(
@@ -24,8 +27,8 @@ export class EdgeTtsProvider implements TtsProviderInterface {
     const sceneTimings = estimateSceneTimings(scenes, durationMs);
 
     const stat = await fs.stat(audioPath);
-    console.log(
-      `[TTS:EdgeTTS] Audio saved: ${audioPath} (${durationMs}ms, ${(stat.size / 1024).toFixed(0)}KB)`
+    log.log(
+      `Audio saved: ${audioPath} (${durationMs}ms, ${(stat.size / 1024).toFixed(0)}KB)`
     );
 
     return { audioPath, durationMs, sceneTimings };

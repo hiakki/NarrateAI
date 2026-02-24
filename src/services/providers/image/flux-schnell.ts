@@ -2,7 +2,10 @@ import Replicate from "replicate";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { createLogger } from "@/lib/logger";
 import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
+
+const log = createLogger("Image:FluxSchnell");
 
 export class FluxSchnellImageProvider implements ImageProviderInterface {
   async generateImages(
@@ -44,7 +47,7 @@ export class FluxSchnellImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`[Image:FluxSchnell] Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
+          log.log(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
         }
 
         if (buffer) break;
@@ -58,7 +61,7 @@ export class FluxSchnellImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      console.log(`[Image:FluxSchnell] Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

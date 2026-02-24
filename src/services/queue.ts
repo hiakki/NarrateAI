@@ -1,5 +1,8 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("Queue");
 
 export interface VideoJobData {
   videoId: string;
@@ -25,7 +28,7 @@ export interface VideoJobData {
 function createRedisConnection() {
   const url = process.env.REDIS_URL ?? "redis://localhost:6379";
   const conn = new IORedis(url, { maxRetriesPerRequest: null, lazyConnect: false });
-  conn.on("error", (err) => console.error("[Queue Redis] Error:", err.message));
+  conn.on("error", (err) => log.error("Redis Error:", err.message));
   return conn;
 }
 
@@ -48,9 +51,9 @@ function getQueue(): Queue<VideoJobData> {
 
 export async function enqueueVideoGeneration(data: VideoJobData): Promise<string> {
   const queue = getQueue();
-  const jobId = `${data.videoId}-${Date.now()}`;
-  console.log(`[Queue] Enqueuing job ${jobId} (LLM: ${data.llmProvider}, TTS: ${data.ttsProvider}, Image: ${data.imageProvider})`);
+  const jobId = data.videoId;
+  log.log(`Enqueuing job ${jobId} (LLM: ${data.llmProvider}, TTS: ${data.ttsProvider}, Image: ${data.imageProvider})`);
   const job = await queue.add("generate", data, { jobId });
-  console.log(`[Queue] Job enqueued: ${job.id}`);
+  log.log(`Job enqueued: ${job.id}`);
   return job.id ?? jobId;
 }
