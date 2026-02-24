@@ -56,7 +56,7 @@ function ProviderCard({
 }) {
   return (
     <Card
-      className={`cursor-pointer transition-all ${
+      className={`flex flex-col cursor-pointer transition-all ${
         !isAvailable
           ? "opacity-50 cursor-not-allowed border-dashed"
           : isSelected
@@ -65,7 +65,7 @@ function ProviderCard({
       }`}
       onClick={() => isAvailable && onSelect()}
     >
-      <CardContent className="p-4">
+      <CardContent className="p-4 flex flex-col flex-1">
         <div className="flex items-start justify-between mb-1">
           <div className="font-medium text-sm flex items-center gap-2">
             {provider.name}
@@ -73,8 +73,8 @@ function ProviderCard({
           </div>
           <QualityBadge label={provider.qualityLabel} />
         </div>
-        <p className="text-xs text-muted-foreground mb-2">{provider.description}</p>
-        <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground mb-2 flex-1">{provider.description}</p>
+        <div className="flex items-center justify-between mt-auto">
           <span className="text-xs font-mono text-muted-foreground">{provider.costEstimate}</span>
           {!isAvailable && (
             <span className="text-[10px] text-destructive">Not configured</span>

@@ -246,9 +246,9 @@ export default function CreatePage() {
           <h2 className="text-xl font-semibold mb-4">Choose your niche</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {NICHES.map((n) => (
-              <Card key={n.id} className={`cursor-pointer transition-all hover:border-primary/50 ${selectedNiche === n.id ? "border-primary ring-2 ring-primary/20" : ""}`}
+              <Card key={n.id} className={`flex flex-col cursor-pointer transition-all hover:border-primary/50 ${selectedNiche === n.id ? "border-primary ring-2 ring-primary/20" : ""}`}
                 onClick={() => { setSelectedNiche(n.id); if (!artStyle) setArtStyle(n.defaultArtStyle); if (tone === "dramatic") setTone(n.defaultTone); }}>
-                <CardContent className="p-4 text-center">
+                <CardContent className="p-4 text-center flex flex-col flex-1 items-center justify-center">
                   <div className="text-2xl mb-2">{n.icon}</div>
                   <div className="font-medium text-sm">{n.name}</div>
                 </CardContent>
@@ -277,10 +277,10 @@ export default function CreatePage() {
             <h2 className="text-xl font-semibold mb-4">Art Style</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {ART_STYLES.map((s) => (
-                <Card key={s.id} className={`cursor-pointer transition-all hover:border-primary/50 ${artStyle === s.id ? "border-primary ring-2 ring-primary/20" : ""}`} onClick={() => setArtStyle(s.id)}>
-                  <CardContent className="p-3 text-center">
+                <Card key={s.id} className={`flex flex-col cursor-pointer transition-all hover:border-primary/50 ${artStyle === s.id ? "border-primary ring-2 ring-primary/20" : ""}`} onClick={() => setArtStyle(s.id)}>
+                  <CardContent className="p-3 text-center flex flex-col flex-1">
                     <div className="font-medium text-sm">{s.name}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{s.description}</div>
+                    <div className="text-xs text-muted-foreground mt-1 flex-1">{s.description}</div>
                   </CardContent>
                 </Card>
               ))}
@@ -291,10 +291,10 @@ export default function CreatePage() {
             <h2 className="text-xl font-semibold mb-4">Voice</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {voices.map((v) => (
-                <Card key={v.id} className={`cursor-pointer transition-all hover:border-primary/50 ${voiceId === v.id ? "border-primary ring-2 ring-primary/20" : ""}`} onClick={() => setVoiceId(v.id)}>
-                  <CardContent className="p-3">
+                <Card key={v.id} className={`flex flex-col cursor-pointer transition-all hover:border-primary/50 ${voiceId === v.id ? "border-primary ring-2 ring-primary/20" : ""}`} onClick={() => setVoiceId(v.id)}>
+                  <CardContent className="p-3 flex flex-col flex-1">
                     <div className="font-medium text-sm">{v.name}</div>
-                    <div className="text-xs text-muted-foreground">{v.description}</div>
+                    <div className="text-xs text-muted-foreground flex-1">{v.description}</div>
                   </CardContent>
                 </Card>
               ))}

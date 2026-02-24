@@ -153,8 +153,8 @@ export default function ChannelsPage() {
               const Icon = config.icon;
               const isConnected = connectedPlatforms.has(key);
               return (
-                <Card key={key} className={isConnected ? "border-green-200" : ""}>
-                  <CardContent className="p-5">
+                <Card key={key} className={`flex flex-col ${isConnected ? "border-green-200" : ""}`}>
+                  <CardContent className="p-5 flex flex-col flex-1">
                     <div className="flex items-center gap-3 mb-3">
                       <div className={`p-2 rounded-lg ${config.bgColor}`}>
                         <Icon className={`h-5 w-5 ${config.color}`} />
@@ -171,13 +171,13 @@ export default function ChannelsPage() {
                         )}
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground mb-4">
+                    <p className="text-xs text-muted-foreground mb-4 flex-1">
                       {config.description}
                     </p>
                     <Button
                       size="sm"
                       variant={isConnected ? "outline" : "default"}
-                      className="w-full"
+                      className="w-full mt-auto"
                       asChild
                     >
                       <a href={config.connectUrl}>

@@ -90,7 +90,7 @@ export default async function SeriesDetailPage({
             const Icon = config.icon;
             return (
               <Card key={video.id} className="transition-colors hover:border-primary/50">
-                <CardContent className="flex items-center justify-between p-4">
+                <CardContent className="flex items-start justify-between gap-4 p-4">
                   <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
                     <h3 className="font-medium">
                       {video.title || "Untitled Video"}
@@ -108,7 +108,7 @@ export default async function SeriesDetailPage({
                       {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
                     </p>
                   </Link>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 shrink-0">
                     <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
                       <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
                       {config.label}

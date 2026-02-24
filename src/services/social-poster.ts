@@ -86,7 +86,7 @@ export async function postVideoToSocials(
           ? decrypt(account.refreshTokenEnc)
           : null;
 
-        let result: { success: boolean; postId?: string; error?: string };
+        let result: { success: boolean; postId?: string; postUrl?: string; error?: string };
 
         switch (platform) {
           case "INSTAGRAM":
@@ -146,7 +146,6 @@ export async function postVideoToSocials(
 
   const PLATFORM_URLS: Record<string, (id: string) => string> = {
     YOUTUBE: (pid) => `https://youtube.com/shorts/${pid}`,
-    INSTAGRAM: (pid) => `https://www.instagram.com/reel/${pid}/`,
     FACEBOOK: (pid) => `https://www.facebook.com/reel/${pid}`,
   };
 
@@ -155,9 +154,8 @@ export async function postVideoToSocials(
     .map((r) => ({
       platform: r.platform,
       postId: r.postId ?? null,
-      url: r.postId && PLATFORM_URLS[r.platform]
-        ? PLATFORM_URLS[r.platform](r.postId)
-        : null,
+      url: r.postUrl
+        ?? (r.postId && PLATFORM_URLS[r.platform] ? PLATFORM_URLS[r.platform](r.postId) : null),
     }));
 
   if (newEntries.length > 0) {

@@ -127,7 +127,7 @@ export default function AutomationsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {automations.map((auto) => (
-            <Card key={auto.id} className="transition-colors hover:border-primary/50">
+            <Card key={auto.id} className="flex flex-col transition-colors hover:border-primary/50">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <Link href={`/dashboard/automations/${auto.id}`} className="flex-1 min-w-0">
@@ -139,8 +139,8 @@ export default function AutomationsPage() {
                   />
                 </div>
               </CardHeader>
-              <Link href={`/dashboard/automations/${auto.id}`}>
-                <CardContent className="pt-0 space-y-3">
+              <Link href={`/dashboard/automations/${auto.id}`} className="flex-1 flex flex-col">
+                <CardContent className="pt-0 space-y-3 flex-1 flex flex-col">
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="secondary" className="capitalize text-xs">
                       {auto.niche}
@@ -167,7 +167,7 @@ export default function AutomationsPage() {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mt-auto">
                     <span className="flex items-center gap-1">
                       <Film className="h-3 w-3" />
                       {auto.series?._count.videos ?? 0} videos

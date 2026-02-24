@@ -22,34 +22,34 @@ export default async function DashboardPage() {
       </p>
 
       <div className="mt-8 grid gap-4 md:grid-cols-3">
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Role</CardTitle>
             <Zap className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex-1">
             <div className="text-2xl font-bold capitalize">
               {role.toLowerCase()}
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Plan</CardTitle>
             <Film className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex-1">
             <div className="text-2xl font-bold capitalize">
               {plan.toLowerCase()}
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="flex flex-col">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Videos This Month</CardTitle>
             <Video className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex-1">
             <div className="text-2xl font-bold">0</div>
             <p className="text-xs text-muted-foreground mt-1">
               {role === "OWNER" || role === "ADMIN"
