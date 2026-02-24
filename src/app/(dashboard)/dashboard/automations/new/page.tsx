@@ -16,6 +16,7 @@ import { getVoicesForProvider, getDefaultVoiceId } from "@/config/voices";
 import {
   ArrowLeft, ArrowRight, Loader2, Check, ChevronDown, ChevronUp,
   Cpu, Mic, Image as ImageIcon, Instagram, Youtube, Facebook, Clock,
+  LayoutGrid, CalendarClock, ClipboardCheck,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -164,16 +165,38 @@ export default function NewAutomationPage() {
         <h1 className="text-3xl font-bold">New Automation</h1>
       </div>
 
-      <div className="flex gap-2 mb-8">
-        {[1, 2, 3].map((s) => (
-          <div key={s} className="flex items-center gap-2">
-            <div className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium ${step >= s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
-              {step > s ? <Check className="h-4 w-4" /> : s}
+      <div className="flex items-center gap-0 mb-10">
+        {([
+          { num: 1, label: "Content", Icon: LayoutGrid },
+          { num: 2, label: "Schedule", Icon: CalendarClock },
+          { num: 3, label: "Review", Icon: ClipboardCheck },
+        ] as const).map(({ num, label, Icon }, idx) => {
+          const isActive = step === num;
+          const isDone = step > num;
+          const isPending = step < num;
+          return (
+            <div key={num} className="flex items-center flex-1 last:flex-initial">
+              <div className="flex flex-col items-center gap-1.5">
+                <div className={`
+                  relative h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-300
+                  ${isDone ? "bg-primary text-primary-foreground shadow-md shadow-primary/25" : ""}
+                  ${isActive ? "bg-primary text-primary-foreground shadow-lg shadow-primary/30 ring-4 ring-primary/15 scale-110" : ""}
+                  ${isPending ? "bg-muted/60 text-muted-foreground border border-border" : ""}
+                `}>
+                  {isDone ? <Check className="h-4 w-4" strokeWidth={3} /> : <Icon className="h-4 w-4" />}
+                </div>
+                <span className={`text-xs font-medium transition-colors ${isActive ? "text-primary" : isDone ? "text-foreground" : "text-muted-foreground"}`}>
+                  {label}
+                </span>
+              </div>
+              {idx < 2 && (
+                <div className="flex-1 mx-3 mb-5">
+                  <div className={`h-0.5 rounded-full transition-all duration-500 ${step > num ? "bg-primary" : "bg-border"}`} />
+                </div>
+              )}
             </div>
-            <span className="text-sm hidden sm:inline">{s === 1 ? "Content" : s === 2 ? "Schedule" : "Review"}</span>
-            {s < 3 && <Separator className="w-8" />}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {error && <div className="mb-6 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}

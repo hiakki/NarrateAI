@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,6 +85,11 @@ export default function AutomationsPage() {
     } catch { /* ignore */ }
   }
 
+  const sortedAutomations = useMemo(
+    () => [...automations].sort((a, b) => a.postTime.localeCompare(b.postTime)),
+    [automations],
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -109,7 +114,7 @@ export default function AutomationsPage() {
         </Button>
       </div>
 
-      {automations.length === 0 ? (
+      {sortedAutomations.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center py-16 text-muted-foreground">
             <Bot className="h-12 w-12 mb-4" />
@@ -126,7 +131,7 @@ export default function AutomationsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {automations.map((auto) => (
+          {sortedAutomations.map((auto) => (
             <Card key={auto.id} className="flex flex-col transition-colors hover:border-primary/50">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
