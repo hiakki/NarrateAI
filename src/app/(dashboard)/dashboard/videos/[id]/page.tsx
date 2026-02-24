@@ -104,12 +104,44 @@ export default function VideoDetailPage() {
     } catch { /* corrupt data */ }
   }, [id]);
 
+  const [resettingPlatforms, setResettingPlatforms] = useState<Set<string>>(new Set());
+
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [editingPrompt, setEditingPrompt] = useState<number | null>(null);
   const [editPromptText, setEditPromptText] = useState("");
   const [regenerating, setRegenerating] = useState<number | null>(null);
   const [assembling, setAssembling] = useState(false);
   const [reviewInited, setReviewInited] = useState(false);
+
+  async function handleResetPosted(platforms?: string[]) {
+    const keys = platforms ?? ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+    setResettingPlatforms((prev) => {
+      const next = new Set(prev);
+      keys.forEach((k) => next.add(k));
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/videos/${id}/reset-posted`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(platforms ? { platforms } : {}),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Reset failed");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      alert("Reset failed");
+    } finally {
+      setResettingPlatforms((prev) => {
+        const next = new Set(prev);
+        keys.forEach((k) => next.delete(k));
+        return next;
+      });
+    }
+  }
 
   async function handleDelete() {
     setDeleting(true);
@@ -762,20 +794,37 @@ export default function VideoDetailPage() {
                 <CardContent className="p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold">Publish</h3>
-                    {unpostedConnected.length > 1 && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={publishingPlatforms.size > 0}
-                        onClick={() => handlePublishAll(unpostedConnected.map((p) => p.key))}
-                      >
-                        {unpostedConnected.some((p) => publishingPlatforms.has(p.key)) ? (
-                          <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
-                        ) : (
-                          <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
-                        )}
-                      </Button>
-                    )}
+                    <div className="flex gap-2">
+                      {postedMap.size > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-muted-foreground text-xs"
+                          disabled={resettingPlatforms.size > 0 || publishingPlatforms.size > 0}
+                          onClick={() => handleResetPosted()}
+                        >
+                          {resettingPlatforms.size > 0 ? (
+                            <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Resetting...</>
+                          ) : (
+                            <><RefreshCw className="mr-1 h-3 w-3" /> Reset All</>
+                          )}
+                        </Button>
+                      )}
+                      {unpostedConnected.length > 1 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={publishingPlatforms.size > 0}
+                          onClick={() => handlePublishAll(unpostedConnected.map((p) => p.key))}
+                        >
+                          {unpostedConnected.some((p) => publishingPlatforms.has(p.key)) ? (
+                            <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
+                          ) : (
+                            <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {PLATFORMS.map(({ key, label, icon: Icon, color }) => {
@@ -814,9 +863,25 @@ export default function VideoDetailPage() {
                         </div>
                         <div className="shrink-0">
                           {posted ? (
-                            <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
-                              <CheckCircle2 className="h-4 w-4" /> Posted
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
+                                <CheckCircle2 className="h-4 w-4" /> Posted
+                              </span>
+                              <Button
+                                size="icon-xs"
+                                variant="ghost"
+                                className="text-muted-foreground hover:text-foreground"
+                                disabled={resettingPlatforms.has(key) || publishingPlatforms.size > 0}
+                                onClick={() => handleResetPosted([key])}
+                                title="Reset to re-post"
+                              >
+                                {resettingPlatforms.has(key) ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                           ) : connected ? (
                             <Button
                               size="sm"

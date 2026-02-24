@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2, Youtube, Instagram, Facebook } from "lucide-react";
 import { DeleteButton } from "@/components/delete-button";
+import { ResetPostedButton } from "@/components/reset-posted-button";
 
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
   QUEUED: { label: "Queued", icon: Clock, className: "text-yellow-600 bg-yellow-50" },
@@ -59,6 +60,12 @@ export default async function SeriesDetailPage({
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {series.videos.some((v) => v.status === "READY" || v.status === "POSTED") && (
+            <ResetPostedButton
+              endpoint={`/api/series/${series.id}/reset-posted`}
+              count={series.videos.filter((v) => v.status === "READY" || v.status === "POSTED").length}
+            />
+          )}
           <DeleteButton
             endpoint={`/api/series/${series.id}`}
             label="Delete Series"
