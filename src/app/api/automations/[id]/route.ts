@@ -18,6 +18,7 @@ const updateSchema = z.object({
   imageProvider: z.string().nullable().optional(),
   targetPlatforms: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
+  includeAiTags: z.boolean().optional(),
   frequency: z.enum(["daily", "every_other_day", "weekly"]).optional(),
   postTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   timezone: z.string().min(1).optional(),
@@ -105,6 +106,7 @@ export async function PATCH(
       data.targetPlatforms = input.targetPlatforms.filter((p) => valid.has(p));
     }
     if (input.enabled !== undefined) data.enabled = input.enabled;
+    if (input.includeAiTags !== undefined) data.includeAiTags = input.includeAiTags;
     if (input.frequency !== undefined) data.frequency = input.frequency;
     if (input.postTime !== undefined) data.postTime = input.postTime;
     if (input.timezone !== undefined) data.timezone = input.timezone;

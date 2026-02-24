@@ -81,6 +81,7 @@ export default function NewAutomationPage() {
   // Step 2: Channels + Schedule
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
+  const [includeAiTags, setIncludeAiTags] = useState(true);
   const [frequency, setFrequency] = useState<string>("daily");
   const [postTime, setPostTime] = useState("09:00");
   const [timezone, setTimezone] = useState(
@@ -136,6 +137,7 @@ export default function NewAutomationPage() {
           ttsProvider: ttsProvider || undefined,
           imageProvider: imageProvider || undefined,
           targetPlatforms: [...selectedPlatforms],
+          includeAiTags,
           frequency, postTime, timezone,
         }),
       });
@@ -374,6 +376,18 @@ export default function NewAutomationPage() {
 
           <Separator />
 
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <span className="text-sm font-medium">Include AI Tags</span>
+              <p className="text-xs text-muted-foreground">
+                Add &quot;ai generated&quot;, &quot;Made with AI | NarrateAI&quot; to video tags &amp; description
+              </p>
+            </div>
+            <Switch checked={includeAiTags} onCheckedChange={setIncludeAiTags} />
+          </div>
+
+          <Separator />
+
           <h2 className="text-xl font-semibold flex items-center gap-2">
             <Clock className="h-5 w-5" /> Schedule
           </h2>
@@ -450,6 +464,10 @@ export default function NewAutomationPage() {
               <Separator />
 
               <div className="text-sm space-y-2">
+                <div>
+                  <span className="text-muted-foreground">AI Tags</span>
+                  <p className="font-medium">{includeAiTags ? "Included" : "Hidden"}</p>
+                </div>
                 <div>
                   <span className="text-muted-foreground">Schedule</span>
                   <p className="font-medium">

@@ -18,13 +18,16 @@ interface PostResult {
   error?: string;
 }
 
-export async function postVideoToSocials(videoId: string): Promise<PostResult[]> {
+export async function postVideoToSocials(
+  videoId: string,
+  platformOverride?: string[],
+): Promise<PostResult[]> {
   const video = await db.video.findUnique({
     where: { id: videoId },
     include: {
       series: {
         include: {
-          automation: { select: { targetPlatforms: true } },
+          automation: { select: { targetPlatforms: true, includeAiTags: true } },
           user: {
             include: { socialAccounts: true },
           },
@@ -33,14 +36,21 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
     },
   });
 
-  if (!video || video.status !== "READY" || !video.videoUrl) {
-    log.log(`Skipping ${videoId}: not ready or no video URL`);
+  if (!video || !video.videoUrl) {
+    log.log(`Skipping ${videoId}: no video URL`);
     return [];
   }
 
-  const targetPlatforms = (video.series.automation?.targetPlatforms as string[]) ?? [];
+  if (!["READY", "POSTED"].includes(video.status)) {
+    log.log(`Skipping ${videoId}: status is ${video.status}`);
+    return [];
+  }
+
+  const targetPlatforms = platformOverride
+    ?? (video.series.automation?.targetPlatforms as string[])
+    ?? [];
   if (targetPlatforms.length === 0) {
-    log.log(`No target platforms for series ${video.seriesId}`);
+    log.log(`No target platforms for video ${videoId}`);
     return [];
   }
 
@@ -48,9 +58,10 @@ export async function postVideoToSocials(videoId: string): Promise<PostResult[]>
   const nicheId = video.series.niche ?? "";
   const title = video.title ?? "Check this out!";
   const scriptText = video.scriptText ?? undefined;
-  const ytSeo = generateVideoSEO(title, nicheId, scriptText);
-  const igCaption = generateInstagramCaption(title, nicheId, scriptText);
-  const fbCaption = generateFacebookCaption(title, nicheId, scriptText);
+  const includeAiTags = video.series.automation?.includeAiTags ?? true;
+  const ytSeo = generateVideoSEO(title, nicheId, scriptText, includeAiTags);
+  const igCaption = generateInstagramCaption(title, nicheId, scriptText, includeAiTags);
+  const fbCaption = generateFacebookCaption(title, nicheId, scriptText, includeAiTags);
 
   const results: PostResult[] = [];
 

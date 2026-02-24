@@ -48,6 +48,7 @@ interface AutomationDetail {
   imageProvider: string | null;
   targetPlatforms: string[];
   enabled: boolean;
+  includeAiTags: boolean;
   frequency: string;
   postTime: string;
   timezone: string;
@@ -237,6 +238,20 @@ export default function AutomationDetailPage() {
       });
     } catch {
       setAuto({ ...auto, enabled: !enabled });
+    }
+  }
+
+  async function toggleAiTags(checked: boolean) {
+    if (!auto) return;
+    setAuto({ ...auto, includeAiTags: checked });
+    try {
+      await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeAiTags: checked }),
+      });
+    } catch {
+      setAuto({ ...auto, includeAiTags: !checked });
     }
   }
 
@@ -629,6 +644,19 @@ export default function AutomationDetailPage() {
                 })}
               </div>
             )}
+
+            <Separator />
+
+            <h3 className="font-semibold text-sm">Tags</h3>
+            <div className="flex items-center justify-between rounded-lg border p-2.5">
+              <div>
+                <span className="text-xs font-medium">Include AI Tags</span>
+                <p className="text-[10px] text-muted-foreground">
+                  &quot;ai generated&quot;, &quot;Made with AI | NarrateAI&quot; in tags &amp; description
+                </p>
+              </div>
+              <Switch checked={auto.includeAiTags} onCheckedChange={toggleAiTags} />
+            </div>
           </CardContent>
         </Card>
       </div>

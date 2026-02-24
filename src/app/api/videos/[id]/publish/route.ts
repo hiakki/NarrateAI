@@ -29,7 +29,18 @@ export async function POST(
         { status: 400 },
       );
 
-    const results = await postVideoToSocials(id);
+    let platforms: string[] | undefined;
+    try {
+      const body = await req.json();
+      if (Array.isArray(body.platforms) && body.platforms.length > 0) {
+        const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK"]);
+        platforms = body.platforms.filter((p: string) => valid.has(p));
+      }
+    } catch {
+      // empty body is fine — falls back to automation targets
+    }
+
+    const results = await postVideoToSocials(id, platforms);
 
     return NextResponse.json({ data: results });
   } catch (error) {

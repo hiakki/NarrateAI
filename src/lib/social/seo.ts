@@ -96,6 +96,7 @@ export function generateVideoSEO(
   originalTitle: string,
   niche: string,
   scriptText?: string,
+  includeAiTags = true,
 ): VideoSEO {
   const seo = NICHE_SEO[niche] ?? FALLBACK_SEO;
 
@@ -117,10 +118,10 @@ export function generateVideoSEO(
     seo.cta,
     "",
     hashtagLine,
-    "",
-    "---",
-    "Made with AI | NarrateAI",
   ];
+  if (includeAiTags) {
+    descriptionParts.push("", "---", "Made with AI | NarrateAI");
+  }
 
   const tags = [
     ...seo.tags,
@@ -128,7 +129,7 @@ export function generateVideoSEO(
     "viral",
     "trending",
     "fyp",
-    "ai generated",
+    ...(includeAiTags ? ["ai generated", "faceless channel"] : []),
     "story time",
     ...originalTitle.toLowerCase().split(/\s+/).filter(w => w.length > 3),
   ];
@@ -146,6 +147,7 @@ export function generateInstagramCaption(
   originalTitle: string,
   niche: string,
   scriptText?: string,
+  _includeAiTags = true,
 ): string {
   const seo = NICHE_SEO[niche] ?? FALLBACK_SEO;
 
@@ -180,6 +182,7 @@ export function generateFacebookCaption(
   originalTitle: string,
   niche: string,
   scriptText?: string,
+  _includeAiTags = true,
 ): string {
   const seo = NICHE_SEO[niche] ?? FALLBACK_SEO;
 

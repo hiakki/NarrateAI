@@ -57,10 +57,13 @@ export default function VideoDetailPage() {
   const queryClient = useQueryClient();
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [publishing, setPublishing] = useState(false);
+  const [publishingPlatform, setPublishingPlatform] = useState<string | null>(null);
   const [publishResults, setPublishResults] = useState<
     { platform: string; success: boolean; postId?: string; error?: string }[] | null
   >(null);
+  const [connectedAccounts, setConnectedAccounts] = useState<
+    { platform: string; username: string | null }[]
+  >([]);
 
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set());
   const [editingPrompt, setEditingPrompt] = useState<number | null>(null);
@@ -107,11 +110,47 @@ export default function VideoDetailPage() {
     }
   }
 
-  async function handlePublish() {
-    setPublishing(true);
+  useEffect(() => {
+    fetch("/api/social/accounts")
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.data) setConnectedAccounts(j.data.map((a: { platform: string; username: string | null }) => ({ platform: a.platform, username: a.username })));
+      })
+      .catch(() => {});
+  }, []);
+
+  async function handlePublishPlatform(platform: string) {
+    setPublishingPlatform(platform);
     setPublishResults(null);
     try {
-      const res = await fetch(`/api/videos/${id}/publish`, { method: "POST" });
+      const res = await fetch(`/api/videos/${id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platforms: [platform] }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setPublishResults([{ platform, success: false, error: json.error }]);
+        return;
+      }
+      setPublishResults(json.data);
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      setPublishResults([{ platform, success: false, error: "Network error" }]);
+    } finally {
+      setPublishingPlatform(null);
+    }
+  }
+
+  async function handlePublishAll(platforms: string[]) {
+    setPublishingPlatform("ALL");
+    setPublishResults(null);
+    try {
+      const res = await fetch(`/api/videos/${id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platforms }),
+      });
       const json = await res.json();
       if (!res.ok) {
         setPublishResults([{ platform: "ALL", success: false, error: json.error }]);
@@ -122,7 +161,7 @@ export default function VideoDetailPage() {
     } catch {
       setPublishResults([{ platform: "ALL", success: false, error: "Network error" }]);
     } finally {
-      setPublishing(false);
+      setPublishingPlatform(null);
     }
   }
 
@@ -638,122 +677,101 @@ export default function VideoDetailPage() {
                 <Download className="mr-2 h-4 w-4" /> Download MP4
               </a>
             </Button>
-            <Button
-              variant="outline"
-              onClick={handlePublish}
-              disabled={publishing}
-            >
-              {publishing ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Publishing...</>
-              ) : (
-                <><Send className="mr-2 h-4 w-4" /> Publish to Socials</>
-              )}
-            </Button>
           </div>
 
-          {/* Publish results */}
-          {publishResults && (
-            <Card className="mt-4">
-              <CardContent className="p-4 space-y-2">
-                <h3 className="text-sm font-semibold mb-2">Publish Results</h3>
-                {publishResults.map((r, i) => {
-                  const platformIcons: Record<string, typeof Instagram> = {
-                    YOUTUBE: Youtube,
-                    INSTAGRAM: Instagram,
-                    FACEBOOK: Facebook,
-                  };
-                  const platformLabels: Record<string, string> = {
-                    YOUTUBE: "YouTube Shorts",
-                    INSTAGRAM: "Instagram Reels",
-                    FACEBOOK: "Facebook Reels",
-                  };
-                  const platformUrls: Record<string, (id: string) => string> = {
-                    YOUTUBE: (pid) => `https://youtube.com/shorts/${pid}`,
-                    INSTAGRAM: (pid) => `https://www.instagram.com/reel/${pid}/`,
-                    FACEBOOK: (pid) => `https://www.facebook.com/reel/${pid}`,
-                  };
-                  const Icon = platformIcons[r.platform];
-                  const postUrl = r.postId && platformUrls[r.platform]
-                    ? platformUrls[r.platform](r.postId)
-                    : null;
-                  return (
-                    <div
-                      key={i}
-                      className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
-                        r.success
-                          ? "bg-green-50 text-green-700"
-                          : "bg-red-50 text-red-700"
-                      }`}
-                    >
-                      {Icon ? <Icon className="h-4 w-4 shrink-0" /> : null}
-                      <span className="font-medium">
-                        {platformLabels[r.platform] ?? r.platform}
-                      </span>
-                      {r.success ? (
-                        <div className="ml-auto flex items-center gap-2">
-                          {postUrl && (
+          {/* Per-platform publish card */}
+          {(() => {
+            const PLATFORMS = [
+              { key: "YOUTUBE", label: "YouTube Shorts", icon: Youtube, color: "text-red-600" },
+              { key: "INSTAGRAM", label: "Instagram Reels", icon: Instagram, color: "text-pink-600" },
+              { key: "FACEBOOK", label: "Facebook Reels", icon: Facebook, color: "text-blue-600" },
+            ] as const;
+            const postedRaw = (video.postedPlatforms ?? []) as (string | { platform: string; postId?: string; url?: string })[];
+            const postedMap = new Map(
+              postedRaw.map((p) => {
+                const entry = typeof p === "string" ? { platform: p, url: undefined } : p;
+                return [entry.platform, entry.url];
+              }),
+            );
+            const connectedSet = new Set(connectedAccounts.map((a) => a.platform));
+            const unpostedConnected = PLATFORMS.filter((p) => connectedSet.has(p.key) && !postedMap.has(p.key));
+
+            return (
+              <Card className="mt-4">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold">Publish</h3>
+                    {unpostedConnected.length > 1 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!!publishingPlatform}
+                        onClick={() => handlePublishAll(unpostedConnected.map((p) => p.key))}
+                      >
+                        {publishingPlatform === "ALL" ? (
+                          <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
+                        ) : (
+                          <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+
+                  {PLATFORMS.map(({ key, label, icon: Icon, color }) => {
+                    const posted = postedMap.has(key);
+                    const postUrl = postedMap.get(key);
+                    const connected = connectedSet.has(key);
+                    const isPublishing = publishingPlatform === key || publishingPlatform === "ALL";
+                    const result = publishResults?.find((r) => r.platform === key);
+
+                    return (
+                      <div
+                        key={key}
+                        className={`flex items-center gap-3 rounded-lg border p-3 ${
+                          posted ? "bg-green-50 border-green-200" : result && !result.success ? "bg-red-50 border-red-200" : ""
+                        }`}
+                      >
+                        <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium">{label}</span>
+                          {posted && postUrl && (
                             <a
                               href={postUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-xs underline underline-offset-2 hover:text-green-900 truncate max-w-[200px]"
+                              className="block text-xs text-green-700 underline underline-offset-2 hover:text-green-900 truncate"
                             >
                               {postUrl}
                             </a>
                           )}
-                          <CheckCircle2 className="h-4 w-4 shrink-0" />
-                        </div>
-                      ) : (
-                        <span className="ml-auto text-xs truncate max-w-xs">
-                          {r.error}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Posted platforms - persistent from DB */}
-          {video.postedPlatforms &&
-            (video.postedPlatforms as unknown[]).length > 0 && !publishResults && (() => {
-            const platformIcons: Record<string, typeof Instagram> = {
-              YOUTUBE: Youtube, INSTAGRAM: Instagram, FACEBOOK: Facebook,
-            };
-            const platformLabels: Record<string, string> = {
-              YOUTUBE: "YouTube Shorts", INSTAGRAM: "Instagram Reels", FACEBOOK: "Facebook Reels",
-            };
-            const entries = (video.postedPlatforms as (string | { platform: string; postId?: string; url?: string })[]).map(
-              (p) => (typeof p === "string" ? { platform: p, postId: undefined, url: undefined } : p),
-            );
-            return (
-              <Card className="mt-4">
-                <CardContent className="p-4 space-y-2">
-                  <h3 className="text-sm font-semibold mb-2">Posted To</h3>
-                  {entries.map((entry) => {
-                    const Icon = platformIcons[entry.platform];
-                    return (
-                      <div
-                        key={entry.platform}
-                        className="flex items-center gap-2 rounded-md bg-green-50 text-green-700 px-3 py-2 text-sm"
-                      >
-                        {Icon && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="font-medium">
-                          {platformLabels[entry.platform] ?? entry.platform}
-                        </span>
-                        <div className="ml-auto flex items-center gap-2">
-                          {entry.url && (
-                            <a
-                              href={entry.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs underline underline-offset-2 hover:text-green-900 truncate max-w-[200px]"
-                            >
-                              {entry.url}
-                            </a>
+                          {result && !result.success && (
+                            <p className="text-xs text-red-600 truncate">{result.error}</p>
                           )}
-                          <CheckCircle2 className="h-4 w-4 shrink-0" />
+                          {!connected && !posted && (
+                            <p className="text-xs text-muted-foreground">Not connected</p>
+                          )}
+                        </div>
+                        <div className="shrink-0">
+                          {posted ? (
+                            <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
+                              <CheckCircle2 className="h-4 w-4" /> Posted
+                            </span>
+                          ) : connected ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!!publishingPlatform}
+                              onClick={() => handlePublishPlatform(key)}
+                            >
+                              {isPublishing ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <><Send className="mr-1 h-3.5 w-3.5" /> Post</>
+                              )}
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </div>
                       </div>
                     );

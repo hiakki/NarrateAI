@@ -17,6 +17,7 @@ function buildMetaOAuthUrl(extraScopes: string[]): string {
     redirect_uri: `${APP_URL()}/api/social/callback/meta`,
     scope: scopes,
     response_type: "code",
+    auth_type: "rerequest",
     state: extraScopes.includes("instagram_basic") ? "instagram" : "facebook",
   });
 
@@ -71,6 +72,7 @@ export async function GET(
           "pages_show_list",
           "pages_manage_posts",
           "pages_read_engagement",
+          "business_management",
         ]);
         break;
 
