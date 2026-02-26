@@ -95,6 +95,7 @@ model User {
   name          String?
   passwordHash  String?
   avatarUrl     String?
+  emailVerified Boolean   @default(false)
   role          UserRole  @default(USER)
   plan          UserPlan  @default(FREE)
   stripeCustomerId String?
@@ -113,6 +114,20 @@ model User {
   subscription   Subscription?
 
   @@map("users")
+}
+
+model EmailVerification {
+  id        String   @id @default(cuid())
+  email     String
+  code      String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email, code])
+  @@index([email, expiresAt])
+  @@map("email_verifications")
 }
 
 model Series {

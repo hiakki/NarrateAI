@@ -1,12 +1,48 @@
 import fs from "fs";
-import path from "path";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 
 interface PostResult {
   success: boolean;
   postId?: string;
+  postUrl?: string;
   error?: string;
+}
+
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * After a reel is published, attempt to fetch its permalink so the stored URL
+ * actually works for any viewer (not just the page admin).
+ */
+async function fetchReelPermalink(
+  videoId: string,
+  pageId: string,
+  pageAccessToken: string,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await sleep(attempt === 0 ? 3000 : 5000);
+    try {
+      const res = await fetch(
+        `${GRAPH_API}/${videoId}?fields=permalink_url,source&access_token=${pageAccessToken}`,
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.permalink_url) {
+        // permalink_url is a relative path like /pagename/videos/123/
+        // Convert to full URL
+        const permalink = data.permalink_url.startsWith("http")
+          ? data.permalink_url
+          : `https://www.facebook.com${data.permalink_url}`;
+        return permalink;
+      }
+    } catch {
+      // Video may still be processing
+    }
+  }
+  return null;
 }
 
 /**
@@ -16,6 +52,7 @@ interface PostResult {
  * 1. Initialize upload via /{page-id}/video_reels with upload_phase=start
  * 2. Upload binary via the returned upload_url
  * 3. Finish via /{page-id}/video_reels with upload_phase=finish
+ * 4. Fetch the permalink for a publicly shareable URL
  */
 export async function postFacebookReel(
   pageId: string,
@@ -75,7 +112,16 @@ export async function postFacebookReel(
     }
 
     const result = await finishRes.json();
-    return { success: true, postId: result.video_id ?? videoId };
+    const finalVideoId = result.video_id ?? videoId;
+
+    // Fetch the real permalink -- this is what actually works for other users
+    const permalink = await fetchReelPermalink(finalVideoId, pageId, pageAccessToken);
+
+    return {
+      success: true,
+      postId: finalVideoId,
+      postUrl: permalink ?? `https://www.facebook.com/reel/${finalVideoId}`,
+    };
   } catch (err) {
     return {
       success: false,

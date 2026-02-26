@@ -20,7 +20,10 @@ const updateSchema = z.object({
   enabled: z.boolean().optional(),
   includeAiTags: z.boolean().optional(),
   frequency: z.enum(["daily", "every_other_day", "weekly"]).optional(),
-  postTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  postTime: z.string().refine(
+    (v) => v.split(",").every((t) => /^\d{2}:\d{2}$/.test(t.trim())),
+    "Each time must be HH:MM, comma-separated for multiple",
+  ).optional(),
   timezone: z.string().min(1).optional(),
 });
 

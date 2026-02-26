@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,12 +11,13 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
+import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
 import { LANGUAGES, isLanguageSupportedByTts } from "@/config/languages";
 import { getVoicesForProvider, getDefaultVoiceId } from "@/config/voices";
 import {
   ArrowLeft, ArrowRight, Loader2, Check, ChevronDown, ChevronUp,
   Cpu, Mic, Image as ImageIcon, Instagram, Youtube, Facebook, Clock,
-  LayoutGrid, CalendarClock, ClipboardCheck,
+  LayoutGrid, CalendarClock, ClipboardCheck, Sparkles, Globe, Plus, XCircle,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -84,12 +85,25 @@ export default function NewAutomationPage() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
   const [includeAiTags, setIncludeAiTags] = useState(true);
   const [frequency, setFrequency] = useState<string>("daily");
-  const [postTime, setPostTime] = useState("09:00");
+  const [postTimes, setPostTimes] = useState<string[]>(["09:00"]);
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
 
   const niche = NICHES.find((n) => n.id === selectedNiche);
+
+  const suggestedSchedule = useMemo(() => {
+    if (!selectedNiche) return null;
+    const schedule = getScheduleForNiche(selectedNiche, language);
+    return {
+      ...schedule,
+      localSlots: schedule.slots.map((s) => ({
+        ...s,
+        localTime: convertTime(s.time, schedule.viewerTimezone, timezone),
+      })),
+    };
+  }, [selectedNiche, language, timezone]);
+
   const effectiveTts = ttsProvider || providerData?.defaults.ttsProvider || providerData?.platformDefaults.tts || "GEMINI_TTS";
   const voices = getVoicesForProvider(effectiveTts, language);
 
@@ -139,7 +153,7 @@ export default function NewAutomationPage() {
           imageProvider: imageProvider && imageProvider !== providerData?.defaults.imageProvider && imageProvider !== providerData?.platformDefaults.image ? imageProvider : undefined,
           targetPlatforms: [...selectedPlatforms],
           includeAiTags,
-          frequency, postTime, timezone,
+          frequency, postTime: postTimes.join(","), timezone,
         }),
       });
       const data = await res.json();
@@ -427,22 +441,108 @@ export default function NewAutomationPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-xs mb-2 block">Post Time</Label>
-              <input type="time" value={postTime} onChange={(e) => setPostTime(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" />
-            </div>
-            <div>
-              <Label className="text-xs mb-2 block">Timezone</Label>
-              <select value={timezone} onChange={(e) => setTimezone(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm">
-                {COMMON_TIMEZONES.map((tz) => (
-                  <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
-                ))}
-              </select>
+          <div>
+            <Label className="text-xs mb-2 block">Timezone</Label>
+            <select value={timezone} onChange={(e) => setTimezone(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm">
+              {COMMON_TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label className="text-xs mb-2 block">Post Times</Label>
+            <div className="space-y-2">
+              {postTimes.map((t, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    value={t}
+                    onChange={(e) => {
+                      const next = [...postTimes];
+                      next[i] = e.target.value;
+                      setPostTimes(next);
+                    }}
+                    className="flex h-9 w-40 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                  />
+                  {postTimes.length > 1 && (
+                    <Button size="icon-xs" variant="ghost" className="text-muted-foreground hover:text-red-600"
+                      onClick={() => setPostTimes(postTimes.filter((_, j) => j !== i))}>
+                      <XCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {i === 0 && postTimes.length === 1 && (
+                    <span className="text-xs text-muted-foreground">1 video per {frequency === "daily" ? "day" : frequency === "every_other_day" ? "cycle" : "week"}</span>
+                  )}
+                </div>
+              ))}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => setPostTimes([...postTimes, "12:00"])}
+              >
+                <Plus className="h-3.5 w-3.5" /> Add another time
+              </Button>
+              {postTimes.length > 1 && (
+                <p className="text-xs text-muted-foreground">
+                  {postTimes.length} videos per {frequency === "daily" ? "day" : frequency === "every_other_day" ? "cycle" : "week"}
+                </p>
+              )}
             </div>
           </div>
+
+          {suggestedSchedule && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-300">
+                <Sparkles className="h-4 w-4" />
+                Best times to post for {niche?.name ?? "this niche"}
+              </div>
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                {suggestedSchedule.reason}
+              </p>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
+                <Globe className="h-3 w-3" />
+                Viewer audience: {suggestedSchedule.viewerRegion} ({suggestedSchedule.viewerTimezone.replace(/_/g, " ")})
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {suggestedSchedule.localSlots.map((slot, i) => {
+                  const isActive = postTimes.includes(slot.localTime);
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        if (isActive) {
+                          if (postTimes.length > 1) setPostTimes(postTimes.filter((t) => t !== slot.localTime));
+                        } else {
+                          setPostTimes([...postTimes, slot.localTime].sort());
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        isActive
+                          ? "border-amber-500 bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200 dark:border-amber-600"
+                          : "border-amber-200 bg-white text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                      }`}
+                    >
+                      <Clock className="h-3 w-3" />
+                      {slot.localTime}
+                      <span className="text-amber-600 dark:text-amber-500">· {slot.label}</span>
+                      {i === 0 && <Badge variant="outline" className="ml-1 text-[10px] py-0 px-1 border-amber-400 text-amber-700 dark:text-amber-400">Best</Badge>}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Click to add/remove times. {postTimes.length > 1 ? `${postTimes.length} times selected.` : "Select multiple for more videos per day."}
+                {timezone !== suggestedSchedule.viewerTimezone && (
+                  <> · Times converted from {suggestedSchedule.viewerTimezone.replace(/_/g, " ")} to {timezone.replace(/_/g, " ")}</>
+                )}
+              </p>
+            </div>
+          )}
 
           <div className="flex justify-between">
             <Button variant="outline" onClick={() => setStep(1)}><ArrowLeft className="mr-1 h-4 w-4" /> Back</Button>
@@ -494,7 +594,7 @@ export default function NewAutomationPage() {
                 <div>
                   <span className="text-muted-foreground">Schedule</span>
                   <p className="font-medium">
-                    {FREQUENCIES.find((f) => f.value === frequency)?.label} at {postTime} ({timezone.replace(/_/g, " ")})
+                    {FREQUENCIES.find((f) => f.value === frequency)?.label} at {postTimes.sort().join(", ")} ({timezone.replace(/_/g, " ")})
                   </p>
                 </div>
                 <div>

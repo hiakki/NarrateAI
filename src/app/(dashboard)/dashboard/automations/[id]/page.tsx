@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   ArrowLeft, Loader2, Clock, Trash2, Instagram, Youtube, Facebook,
-  CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown,
+  CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown, Zap, Sparkles, Globe, Plus, XCircle,
 } from "lucide-react";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
 import { LANGUAGES } from "@/config/languages";
+import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
 import { getVoicesForProvider, getVoiceById, getDefaultVoiceId } from "@/config/voices";
 
 interface PostedEntry { platform: string; postId?: string; url?: string }
@@ -125,6 +126,8 @@ export default function AutomationDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [triggering, setTriggering] = useState(false);
+  const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
 
   const [editName, setEditName] = useState("");
   const [editNiche, setEditNiche] = useState("");
@@ -137,7 +140,7 @@ export default function AutomationDetailPage() {
   const [editTtsProvider, setEditTtsProvider] = useState("");
   const [editImageProvider, setEditImageProvider] = useState("");
   const [editFrequency, setEditFrequency] = useState("daily");
-  const [editPostTime, setEditPostTime] = useState("09:00");
+  const [editPostTimes, setEditPostTimes] = useState<string[]>(["09:00"]);
   const [editTimezone, setEditTimezone] = useState("Asia/Kolkata");
   const [showProviders, setShowProviders] = useState(false);
 
@@ -146,6 +149,21 @@ export default function AutomationDetailPage() {
     || providerData?.platformDefaults.tts
     || "GEMINI_TTS";
   const voices = getVoicesForProvider(effectiveTts, editLanguage);
+
+  const activeNiche = editing ? editNiche : auto?.niche;
+  const activeLanguage = editing ? editLanguage : auto?.language ?? "en";
+  const activeTimezone = editing ? editTimezone : auto?.timezone ?? "America/New_York";
+  const suggestedSchedule = useMemo(() => {
+    if (!activeNiche) return null;
+    const schedule = getScheduleForNiche(activeNiche, activeLanguage);
+    return {
+      ...schedule,
+      localSlots: schedule.slots.map((s) => ({
+        ...s,
+        localTime: convertTime(s.time, schedule.viewerTimezone, activeTimezone),
+      })),
+    };
+  }, [activeNiche, activeLanguage, activeTimezone]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -186,7 +204,7 @@ export default function AutomationDetailPage() {
     setEditTtsProvider(auto.ttsProvider ?? "");
     setEditImageProvider(auto.imageProvider ?? "");
     setEditFrequency(auto.frequency);
-    setEditPostTime(auto.postTime);
+    setEditPostTimes(auto.postTime.split(",").map((t: string) => t.trim()));
     setEditTimezone(auto.timezone);
     setShowProviders(!!(auto.llmProvider || auto.ttsProvider || auto.imageProvider));
     setEditing(true);
@@ -212,7 +230,7 @@ export default function AutomationDetailPage() {
           ttsProvider: editTtsProvider && editTtsProvider !== (providerData?.defaults.ttsProvider ?? providerData?.platformDefaults.tts) ? editTtsProvider : null,
           imageProvider: editImageProvider && editImageProvider !== (providerData?.defaults.imageProvider ?? providerData?.platformDefaults.image) ? editImageProvider : null,
           frequency: editFrequency,
-          postTime: editPostTime,
+          postTime: editPostTimes.join(","),
           timezone: editTimezone,
         }),
       });
@@ -281,6 +299,41 @@ export default function AutomationDetailPage() {
     } catch { /* ignore */ }
   }
 
+  async function handleTrigger() {
+    setTriggering(true);
+    try {
+      const res = await fetch(`/api/automations/${id}/trigger`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        alert(json.error || "Trigger failed");
+        return;
+      }
+      fetchAutomation();
+      router.push(`/dashboard/videos/${json.data.videoId}`);
+    } catch {
+      alert("Trigger failed");
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  async function handleRetryVideo(videoId: string) {
+    setRetryingVideoId(videoId);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const json = await res.json();
+        alert(json.error || "Retry failed");
+        return;
+      }
+      fetchAutomation();
+    } catch {
+      alert("Retry failed");
+    } finally {
+      setRetryingVideoId(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -331,6 +384,17 @@ export default function AutomationDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={handleTrigger}
+            disabled={triggering || editing}
+          >
+            {triggering ? (
+              <><Loader2 className="mr-1 h-4 w-4 animate-spin" /> Generating...</>
+            ) : (
+              <><Zap className="mr-1 h-4 w-4" /> Run Now</>
+            )}
+          </Button>
           {!editing ? (
             <Button variant="outline" size="sm" onClick={startEdit}>
               <Pencil className="mr-1 h-4 w-4" /> Edit
@@ -579,35 +643,164 @@ export default function AutomationDetailPage() {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs mb-1 block">Post Time</Label>
-                    <input type="time" value={editPostTime} onChange={(e) => setEditPostTime(e.target.value)}
-                      className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" />
-                  </div>
-                  <div>
-                    <Label className="text-xs mb-1 block">Timezone</Label>
-                    <select value={editTimezone} onChange={(e) => setEditTimezone(e.target.value)}
-                      className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm">
-                      {COMMON_TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
-                      ))}
-                    </select>
+                <div>
+                  <Label className="text-xs mb-1 block">Timezone</Label>
+                  <select value={editTimezone} onChange={(e) => setEditTimezone(e.target.value)}
+                    className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm">
+                    {COMMON_TIMEZONES.map((tz) => (
+                      <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Post Times</Label>
+                  <div className="space-y-1.5">
+                    {editPostTimes.map((t, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <input
+                          type="time"
+                          value={t}
+                          onChange={(e) => {
+                            const next = [...editPostTimes];
+                            next[i] = e.target.value;
+                            setEditPostTimes(next);
+                          }}
+                          className="flex h-8 w-32 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        />
+                        {editPostTimes.length > 1 && (
+                          <Button size="icon-xs" variant="ghost" className="text-muted-foreground hover:text-red-600"
+                            onClick={() => setEditPostTimes(editPostTimes.filter((_, j) => j !== i))}>
+                            <XCircle className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    <Button type="button" size="xs" variant="outline" className="gap-1"
+                      onClick={() => setEditPostTimes([...editPostTimes, "12:00"])}>
+                      <Plus className="h-3 w-3" /> Add time
+                    </Button>
+                    {editPostTimes.length > 1 && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {editPostTimes.length} videos per {editFrequency === "daily" ? "day" : editFrequency === "every_other_day" ? "cycle" : "week"}
+                      </p>
+                    )}
                   </div>
                 </div>
+                {suggestedSchedule && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Best times for {NICHES.find((n) => n.id === editNiche)?.name ?? "this niche"}
+                    </div>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {suggestedSchedule.reason}
+                    </p>
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Globe className="h-3 w-3" />
+                      Audience: {suggestedSchedule.viewerRegion}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestedSchedule.localSlots.map((slot, i) => {
+                        const isActive = editPostTimes.includes(slot.localTime);
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              if (isActive) {
+                                if (editPostTimes.length > 1) setEditPostTimes(editPostTimes.filter((t) => t !== slot.localTime));
+                              } else {
+                                setEditPostTimes([...editPostTimes, slot.localTime].sort());
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium transition-colors ${
+                              isActive
+                                ? "border-amber-500 bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200"
+                                : "border-amber-200 bg-white text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                            }`}
+                          >
+                            <Clock className="h-2.5 w-2.5" />
+                            {slot.localTime}
+                            <span className="text-amber-600 dark:text-amber-500">· {slot.label}</span>
+                            {i === 0 && <Badge variant="outline" className="ml-0.5 text-[9px] py-0 px-1 border-amber-400 text-amber-700 dark:text-amber-400">Best</Badge>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Click to add/remove.
+                      {editTimezone !== suggestedSchedule.viewerTimezone && (
+                        <> · Converted from {suggestedSchedule.viewerTimezone.replace(/_/g, " ")} to {editTimezone.replace(/_/g, " ")}</>
+                      )}
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-sm space-y-2">
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
                   <span>
-                    {FREQ_LABEL[auto.frequency] ?? auto.frequency} at {auto.postTime}{" "}
+                    {FREQ_LABEL[auto.frequency] ?? auto.frequency} at{" "}
+                    {auto.postTime.split(",").map((t: string) => t.trim()).sort().join(", ")}{" "}
                     <span className="text-muted-foreground">({auto.timezone.replace(/_/g, " ")})</span>
+                    {auto.postTime.includes(",") && (
+                      <span className="text-xs text-muted-foreground ml-1">
+                        · {auto.postTime.split(",").length} videos/{auto.frequency === "daily" ? "day" : auto.frequency === "every_other_day" ? "cycle" : "week"}
+                      </span>
+                    )}
                   </span>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Last run: {auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : "Never"}
-                </div>
+                {(() => {
+                  const thresholds: Record<string, number> = { daily: 26, every_other_day: 50, weekly: 170 };
+                  const timesPerDay = auto.postTime.split(",").length;
+                  let threshold = thresholds[auto.frequency] ?? 26;
+                  if (timesPerDay > 1 && auto.frequency === "daily") threshold = Math.min(threshold, 26 / timesPerDay);
+                  const hoursSince = auto.lastRunAt
+                    ? (Date.now() - new Date(auto.lastRunAt).getTime()) / (1000 * 60 * 60)
+                    : Infinity;
+                  const missed = auto.enabled && hoursSince > threshold;
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="text-xs text-muted-foreground">
+                        Last run: {auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : "Never"}
+                      </div>
+                      {missed && (
+                        <div className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                          <span className="text-xs text-amber-700 flex-1">
+                            Scheduled run may have been missed
+                          </span>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="border-amber-300 text-amber-700 hover:bg-amber-100"
+                            disabled={triggering}
+                            onClick={handleTrigger}
+                          >
+                            {triggering ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Zap className="mr-1 h-3 w-3" /> Run Now</>}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {suggestedSchedule && (() => {
+                  const currentTimes = new Set(auto.postTime.split(",").map((t: string) => t.trim()));
+                  const missing = suggestedSchedule.localSlots.filter((s) => !currentTimes.has(s.localTime));
+                  if (missing.length === 0) return null;
+                  return (
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                      <Sparkles className="h-3 w-3 shrink-0" />
+                      <span>
+                        Suggested: <strong>{missing.map((s) => s.localTime).join(", ")}</strong>
+                        {auto.timezone !== suggestedSchedule.viewerTimezone && (
+                          <span className="text-muted-foreground"> — based on {suggestedSchedule.viewerRegion} viewers</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -722,6 +915,21 @@ export default function AutomationDetailPage() {
                         <span className="lowercase">({video.generationStage})</span>
                       )}
                     </div>
+                    {video.status === "FAILED" && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="border-red-300 text-red-600 hover:bg-red-50"
+                        disabled={retryingVideoId === video.id}
+                        onClick={(e) => { e.preventDefault(); handleRetryVideo(video.id); }}
+                      >
+                        {retryingVideoId === video.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <><Zap className="mr-1 h-3 w-3" /> Retry</>
+                        )}
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>

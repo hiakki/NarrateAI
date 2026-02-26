@@ -110,7 +110,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
 
   if (state === "instagram") {
     const pagesRes = await fetch(
-      `${GRAPH_API}/me/accounts?fields=id,name,instagram_business_account&access_token=${longToken}`,
+      `${GRAPH_API}/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${longToken}`,
     );
     const pagesJson = await pagesRes.json();
     const pages = pagesJson.data;
@@ -120,8 +120,9 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
       if (!page.instagram_business_account?.id) continue;
 
       const igId = page.instagram_business_account.id;
+      const pageToken = page.access_token;
       const igRes = await fetch(
-        `${GRAPH_API}/${igId}?fields=username,profile_picture_url&access_token=${longToken}`,
+        `${GRAPH_API}/${igId}?fields=username,profile_picture_url&access_token=${pageToken}`,
       );
       const igProfile = await igRes.json();
 
@@ -134,7 +135,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
           },
         },
         update: {
-          accessTokenEnc: encrypt(longToken),
+          accessTokenEnc: encrypt(pageToken),
           username: igProfile.username,
           tokenExpiresAt: tokenExpiry,
           pageId: page.id,
@@ -144,7 +145,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
           userId,
           platform: "INSTAGRAM",
           platformUserId: igId,
-          accessTokenEnc: encrypt(longToken),
+          accessTokenEnc: encrypt(pageToken),
           username: igProfile.username,
           profileUrl: `https://instagram.com/${igProfile.username}`,
           tokenExpiresAt: tokenExpiry,

@@ -30,6 +30,9 @@ import {
   Play,
   SquareCheck,
   Square,
+  Link2,
+  Pencil,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -51,6 +54,30 @@ const stages = [
   { key: "UPLOADING", label: "Finalize", detail: "Saving your video", icon: Upload },
 ];
 
+function humanizePublishError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("token") && (lower.includes("expired") || lower.includes("invalid")))
+    return "Account session expired. Please reconnect your account in Channels.";
+  if (lower.includes("not connected") || lower.includes("no account"))
+    return "No account connected for this platform. Connect one in Channels.";
+  if (lower.includes("rate limit") || lower.includes("too many"))
+    return "Too many posts in a short time. Wait a few minutes and try again.";
+  if (lower.includes("duplicate"))
+    return "This video was already posted to this platform.";
+  if (lower.includes("file") && lower.includes("size"))
+    return "Video file is too large for this platform.";
+  if (lower.includes("network") || lower.includes("econnrefused") || lower.includes("timeout"))
+    return "Network error. Check your internet connection and try again.";
+  if (lower.includes("quota") || lower.includes("limit exceeded"))
+    return "Platform upload quota exceeded. Try again tomorrow.";
+  if (lower.includes("permission") || lower.includes("forbidden") || lower.includes("scope"))
+    return "Insufficient permissions. Please reconnect your account with full access.";
+  if (lower.includes("video") && lower.includes("not found"))
+    return "Video file is missing. Try regenerating the video first.";
+  if (raw.length > 120) return raw.slice(0, 117) + "...";
+  return raw;
+}
+
 export default function VideoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -61,16 +88,22 @@ export default function VideoDetailPage() {
   const [publishResults, setPublishResults] = useState<
     { platform: string; success: boolean; postId?: string; error?: string }[] | null
   >(null);
+  const [failedPublishes, setFailedPublishes] = useState<Map<string, string>>(new Map());
   const [connectedAccounts, setConnectedAccounts] = useState<
     { platform: string; username: string | null }[]
   >([]);
 
   const publishKeyRef = useRef(`narrate-pub-${id}`);
   publishKeyRef.current = `narrate-pub-${id}`;
+  const failKeyRef = useRef(`narrate-pub-fail-${id}`);
+  failKeyRef.current = `narrate-pub-fail-${id}`;
+
+  const PUBLISH_STALE_MS = 3 * 60 * 1000;
 
   function syncPublishStorage(set: Set<string>) {
     if (set.size > 0) {
-      sessionStorage.setItem(publishKeyRef.current, JSON.stringify([...set]));
+      const entry = { platforms: [...set], ts: Date.now() };
+      sessionStorage.setItem(publishKeyRef.current, JSON.stringify(entry));
     } else {
       sessionStorage.removeItem(publishKeyRef.current);
     }
@@ -94,12 +127,57 @@ export default function VideoDetailPage() {
     });
   }
 
+  function syncFailStorage(map: Map<string, string>) {
+    if (map.size > 0) {
+      sessionStorage.setItem(failKeyRef.current, JSON.stringify(Object.fromEntries(map)));
+    } else {
+      sessionStorage.removeItem(failKeyRef.current);
+    }
+  }
+
+  function recordFailure(platform: string, error: string) {
+    setFailedPublishes((prev) => {
+      const next = new Map(prev);
+      next.set(platform, humanizePublishError(error));
+      syncFailStorage(next);
+      return next;
+    });
+  }
+
+  function clearFailure(...platforms: string[]) {
+    setFailedPublishes((prev) => {
+      const next = new Map(prev);
+      platforms.forEach((p) => next.delete(p));
+      syncFailStorage(next);
+      return next;
+    });
+  }
+
   useEffect(() => {
     try {
       const stored = sessionStorage.getItem(publishKeyRef.current);
       if (stored) {
-        const arr = JSON.parse(stored);
-        if (Array.isArray(arr) && arr.length > 0) setPublishingPlatforms(new Set(arr));
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          // Legacy format (plain array) — treat as stale, clear it
+          sessionStorage.removeItem(publishKeyRef.current);
+        } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.platforms)) {
+          const age = Date.now() - (parsed.ts ?? 0);
+          if (age > PUBLISH_STALE_MS) {
+            sessionStorage.removeItem(publishKeyRef.current);
+          } else if (parsed.platforms.length > 0) {
+            setPublishingPlatforms(new Set(parsed.platforms));
+          }
+        }
+      }
+    } catch {
+      sessionStorage.removeItem(publishKeyRef.current);
+    }
+    try {
+      const stored = sessionStorage.getItem(failKeyRef.current);
+      if (stored) {
+        const obj = JSON.parse(stored);
+        if (obj && typeof obj === "object") setFailedPublishes(new Map(Object.entries(obj)));
       }
     } catch { /* corrupt data */ }
   }, [id]);
@@ -113,8 +191,40 @@ export default function VideoDetailPage() {
   const [assembling, setAssembling] = useState(false);
   const [reviewInited, setReviewInited] = useState(false);
 
+  const [editingLink, setEditingLink] = useState<string | null>(null);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [savingLink, setSavingLink] = useState(false);
+
+  async function handleSaveLink(platform: string) {
+    const url = linkInput.trim();
+    if (!url) { setLinkError("Please paste a URL"); return; }
+    setSavingLink(true);
+    setLinkError("");
+    try {
+      const res = await fetch(`/api/videos/${id}/update-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform, url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLinkError(data.error || "Failed to save link");
+        return;
+      }
+      setEditingLink(null);
+      setLinkInput("");
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      setLinkError("Network error. Please try again.");
+    } finally {
+      setSavingLink(false);
+    }
+  }
+
   async function handleResetPosted(platforms?: string[]) {
     const keys = platforms ?? ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+    clearFailure(...keys);
     setResettingPlatforms((prev) => {
       const next = new Set(prev);
       keys.forEach((k) => next.add(k));
@@ -192,6 +302,7 @@ export default function VideoDetailPage() {
 
   async function handlePublishPlatform(platform: string) {
     markPublishing(platform);
+    clearFailure(platform);
     setPublishResults(null);
     try {
       const res = await fetch(`/api/videos/${id}/publish`, {
@@ -201,24 +312,32 @@ export default function VideoDetailPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setPublishResults([{ platform, success: false, error: json.error }]);
+        const err = json.error || "Publishing failed";
+        setPublishResults([{ platform, success: false, error: err }]);
+        recordFailure(platform, err);
         unmarkPublishing(platform);
         return;
       }
       setPublishResults(json.data);
-      const failed = ((json.data ?? []) as { platform: string; success: boolean }[])
-        .filter((r) => !r.success)
-        .map((r) => r.platform);
-      if (failed.length > 0) unmarkPublishing(...failed);
+      const results = (json.data ?? []) as { platform: string; success: boolean; error?: string }[];
+      const failed = results.filter((r) => !r.success);
+      if (failed.length > 0) {
+        failed.forEach((r) => recordFailure(r.platform, r.error || "Publishing failed"));
+        unmarkPublishing(...failed.map((r) => r.platform));
+      }
+      const succeeded = results.filter((r) => r.success).map((r) => r.platform);
+      if (succeeded.length > 0) clearFailure(...succeeded);
       queryClient.invalidateQueries({ queryKey: ["video", id] });
     } catch {
       setPublishResults([{ platform, success: false, error: "Network error" }]);
+      recordFailure(platform, "Network error");
       unmarkPublishing(platform);
     }
   }
 
   async function handlePublishAll(platforms: string[]) {
     markPublishing(...platforms);
+    clearFailure(...platforms);
     setPublishResults(null);
     try {
       const res = await fetch(`/api/videos/${id}/publish`, {
@@ -228,18 +347,25 @@ export default function VideoDetailPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setPublishResults([{ platform: "ALL", success: false, error: json.error }]);
+        const err = json.error || "Publishing failed";
+        setPublishResults([{ platform: "ALL", success: false, error: err }]);
+        platforms.forEach((p) => recordFailure(p, err));
         unmarkPublishing(...platforms);
         return;
       }
       setPublishResults(json.data);
-      const failed = ((json.data ?? []) as { platform: string; success: boolean }[])
-        .filter((r) => !r.success)
-        .map((r) => r.platform);
-      if (failed.length > 0) unmarkPublishing(...failed);
+      const results = (json.data ?? []) as { platform: string; success: boolean; error?: string }[];
+      const failed = results.filter((r) => !r.success);
+      if (failed.length > 0) {
+        failed.forEach((r) => recordFailure(r.platform, r.error || "Publishing failed"));
+        unmarkPublishing(...failed.map((r) => r.platform));
+      }
+      const succeeded = results.filter((r) => r.success).map((r) => r.platform);
+      if (succeeded.length > 0) clearFailure(...succeeded);
       queryClient.invalidateQueries({ queryKey: ["video", id] });
     } catch {
       setPublishResults([{ platform: "ALL", success: false, error: "Network error" }]);
+      platforms.forEach((p) => recordFailure(p, "Network error"));
       unmarkPublishing(...platforms);
     }
   }
@@ -308,6 +434,7 @@ export default function VideoDetailPage() {
         const stage = query.state.data?.generationStage;
         return stage === "IMAGES" ? 10000 : 15000;
       }
+      if (status === "READY" || status === "POSTED") return 30000;
       return false;
     },
   });
@@ -316,14 +443,23 @@ export default function VideoDetailPage() {
     if (publishingPlatforms.size === 0 || !video) return;
     const postedRaw = (video.postedPlatforms ?? []) as (
       | string
-      | { platform: string }
+      | { platform: string; success?: boolean | "uploading" }
     )[];
-    const postedSet = new Set(
-      postedRaw.map((p) => (typeof p === "string" ? p : p.platform)),
+    const doneSet = new Set(
+      postedRaw
+        .filter((p) => {
+          if (typeof p === "string") return true;
+          if (p.success === true || p.success === false) return true;
+          if (p.success === undefined && ((p as Record<string, unknown>).postId || (p as Record<string, unknown>).url)) return true;
+          return false;
+        })
+        .map((p) => (typeof p === "string" ? p : p.platform)),
     );
-    const nowPosted = [...publishingPlatforms].filter((p) => postedSet.has(p));
-    if (nowPosted.length > 0) unmarkPublishing(...nowPosted);
-  }, [video]);
+    const toClear = [...publishingPlatforms].filter(
+      (p) => doneSet.has(p) || failedPublishes.has(p),
+    );
+    if (toClear.length > 0) unmarkPublishing(...toClear);
+  }, [video, failedPublishes]);
 
   useEffect(() => {
     if (video?.status === "QUEUED") {
@@ -779,15 +915,30 @@ export default function VideoDetailPage() {
               { key: "INSTAGRAM", label: "Instagram Reels", icon: Instagram, color: "text-pink-600" },
               { key: "FACEBOOK", label: "Facebook Reels", icon: Facebook, color: "text-blue-600" },
             ] as const;
-            const postedRaw = (video.postedPlatforms ?? []) as (string | { platform: string; postId?: string; url?: string })[];
-            const postedMap = new Map(
-              postedRaw.map((p) => {
-                const entry = typeof p === "string" ? { platform: p, url: undefined } : p;
-                return [entry.platform, entry.url];
-              }),
-            );
+
+            type ServerEntry = { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; error?: string };
+            const postedRaw = (video.postedPlatforms ?? []) as (string | ServerEntry)[];
+
+            const serverMap = new Map<string, ServerEntry>();
+            for (const p of postedRaw) {
+              if (typeof p === "string") {
+                serverMap.set(p, { platform: p, success: true });
+              } else {
+                const entry = { ...p };
+                if (entry.success === undefined && (entry.postId || entry.url)) {
+                  entry.success = true;
+                }
+                serverMap.set(entry.platform, entry);
+              }
+            }
+
             const connectedSet = new Set(connectedAccounts.map((a) => a.platform));
-            const unpostedConnected = PLATFORMS.filter((p) => connectedSet.has(p.key) && !postedMap.has(p.key));
+
+            const postablePlatforms = PLATFORMS.filter((p) => {
+              const entry = serverMap.get(p.key);
+              if (!entry) return connectedSet.has(p.key);
+              return entry.success === false && connectedSet.has(p.key);
+            });
 
             return (
               <Card className="mt-4">
@@ -795,12 +946,12 @@ export default function VideoDetailPage() {
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold">Publish</h3>
                     <div className="flex gap-2">
-                      {postedMap.size > 0 && (
+                      {[...serverMap.values()].some((e) => e.success === true) && (
                         <Button
                           size="sm"
                           variant="ghost"
                           className="text-muted-foreground text-xs"
-                          disabled={resettingPlatforms.size > 0 || publishingPlatforms.size > 0}
+                          disabled={resettingPlatforms.size > 0}
                           onClick={() => handleResetPosted()}
                         >
                           {resettingPlatforms.size > 0 ? (
@@ -810,95 +961,191 @@ export default function VideoDetailPage() {
                           )}
                         </Button>
                       )}
-                      {unpostedConnected.length > 1 && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={publishingPlatforms.size > 0}
-                          onClick={() => handlePublishAll(unpostedConnected.map((p) => p.key))}
-                        >
-                          {unpostedConnected.some((p) => publishingPlatforms.has(p.key)) ? (
-                            <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
-                          ) : (
-                            <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
-                          )}
-                        </Button>
-                      )}
+                      {postablePlatforms.length > 1 && (() => {
+                        const anyServerFail = postablePlatforms.some((p) => serverMap.get(p.key)?.success === false);
+                        const anyClientFail = postablePlatforms.some((p) => failedPublishes.has(p.key));
+                        const anyFailed = anyServerFail || anyClientFail;
+                        return (
+                          <Button
+                            size="sm"
+                            variant={anyFailed ? "destructive" : "outline"}
+                            disabled={postablePlatforms.every((p) => publishingPlatforms.has(p.key))}
+                            onClick={() => handlePublishAll(postablePlatforms.filter((p) => !publishingPlatforms.has(p.key)).map((p) => p.key))}
+                          >
+                            {postablePlatforms.some((p) => publishingPlatforms.has(p.key)) ? (
+                              <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
+                            ) : anyFailed ? (
+                              <><RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry All</>
+                            ) : (
+                              <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
+                            )}
+                          </Button>
+                        );
+                      })()}
                     </div>
                   </div>
 
                   {PLATFORMS.map(({ key, label, icon: Icon, color }) => {
-                    const posted = postedMap.has(key);
-                    const postUrl = postedMap.get(key);
+                    const entry = serverMap.get(key);
+                    const isPosted = entry?.success === true;
+                    const isUploading = entry?.success === "uploading";
+                    const isServerFailed = entry?.success === false;
+                    const postUrl = isPosted ? (entry.url ?? undefined) : undefined;
                     const connected = connectedSet.has(key);
                     const isPublishing = publishingPlatforms.has(key);
-                    const result = publishResults?.find((r) => r.platform === key);
+                    const clientFailError = failedPublishes.get(key);
+                    const serverFailError = isServerFailed ? entry.error : undefined;
+                    const failError = clientFailError || serverFailError;
+                    const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted;
+                    const isEditingThisLink = editingLink === key;
+
+                    let rowBg = "";
+                    if (isPosted) rowBg = "bg-green-50 border-green-200";
+                    else if (isUploading || isPublishing) rowBg = "bg-blue-50/60 border-blue-200";
+                    else if (hasFailed) rowBg = "bg-red-50/60 border-red-200";
 
                     return (
-                      <div
-                        key={key}
-                        className={`flex items-center gap-3 rounded-lg border p-3 ${
-                          posted ? "bg-green-50 border-green-200" : result && !result.success ? "bg-red-50 border-red-200" : ""
-                        }`}
-                      >
-                        <Icon className={`h-5 w-5 shrink-0 ${color}`} />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium">{label}</span>
-                          {posted && postUrl && (
-                            <a
-                              href={postUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block text-xs text-green-700 underline underline-offset-2 hover:text-green-900 truncate"
-                            >
-                              {postUrl}
-                            </a>
-                          )}
-                          {result && !result.success && (
-                            <p className="text-xs text-red-600 truncate">{result.error}</p>
-                          )}
-                          {!connected && !posted && (
-                            <p className="text-xs text-muted-foreground">Not connected</p>
-                          )}
-                        </div>
-                        <div className="shrink-0">
-                          {posted ? (
-                            <div className="flex items-center gap-2">
-                              <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
-                                <CheckCircle2 className="h-4 w-4" /> Posted
-                              </span>
-                              <Button
-                                size="icon-xs"
-                                variant="ghost"
-                                className="text-muted-foreground hover:text-foreground"
-                                disabled={resettingPlatforms.has(key) || publishingPlatforms.size > 0}
-                                onClick={() => handleResetPosted([key])}
-                                title="Reset to re-post"
+                      <div key={key} className={`rounded-lg border p-3 transition-colors ${rowBg}`}>
+                        <div className="flex items-center gap-3">
+                          <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium">{label}</span>
+                            {isPosted && postUrl && !isEditingThisLink && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <a
+                                  href={postUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-green-700 underline underline-offset-2 hover:text-green-900 truncate"
+                                >
+                                  {postUrl}
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditingLink(key); setLinkInput(postUrl); setLinkError(""); }}
+                                  className="text-green-600 hover:text-green-800 shrink-0"
+                                  title="Edit link"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              </div>
+                            )}
+                            {isPosted && !postUrl && !isEditingThisLink && (
+                              <button
+                                type="button"
+                                onClick={() => { setEditingLink(key); setLinkInput(""); setLinkError(""); }}
+                                className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-900 mt-0.5"
                               >
-                                {resettingPlatforms.has(key) ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                <Link2 className="h-3 w-3" /> Add link
+                              </button>
+                            )}
+                            {(isUploading || isPublishing) && !isPosted && (
+                              <p className="text-xs text-blue-600 mt-0.5">Uploading to {label}...</p>
+                            )}
+                            {hasFailed && failError && (
+                              <p className="text-xs text-red-600 mt-0.5">{humanizePublishError(failError)}</p>
+                            )}
+                            {!connected && !isPosted && !isUploading && !hasFailed && (
+                              <p className="text-xs text-muted-foreground">Not connected</p>
+                            )}
+                          </div>
+                          <div className="shrink-0">
+                            {isPosted ? (
+                              <div className="flex items-center gap-2">
+                                <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
+                                  <CheckCircle2 className="h-4 w-4" /> Posted
+                                </span>
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-muted-foreground hover:text-foreground"
+                                  disabled={resettingPlatforms.has(key) || isPublishing}
+                                  onClick={() => handleResetPosted([key])}
+                                  title="Reset to re-post"
+                                >
+                                  {resettingPlatforms.has(key) ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                </Button>
+                              </div>
+                            ) : isUploading || isPublishing ? (
+                              <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading
+                              </span>
+                            ) : connected ? (
+                              <Button
+                                size="sm"
+                                variant={hasFailed ? "destructive" : "outline"}
+                                className={hasFailed ? "gap-1.5" : ""}
+                                disabled={isPublishing}
+                                onClick={() => handlePublishPlatform(key)}
+                                title={hasFailed ? failError : undefined}
+                              >
+                                {isPublishing ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : hasFailed ? (
+                                  <><RefreshCw className="h-3.5 w-3.5" /> Retry</>
                                 ) : (
-                                  <RefreshCw className="h-3 w-3" />
+                                  <><Send className="mr-1 h-3.5 w-3.5" /> Post</>
                                 )}
                               </Button>
-                            </div>
-                          ) : connected ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={publishingPlatforms.size > 0}
-                              onClick={() => handlePublishPlatform(key)}
-                            >
-                              {isPublishing ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <><Send className="mr-1 h-3.5 w-3.5" /> Post</>
-                              )}
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </div>
                         </div>
+
+                        {/* Inline link editor */}
+                        {isEditingThisLink && (
+                          <div className="mt-2 pl-8 space-y-1.5">
+                            <div className="flex gap-1.5">
+                              <input
+                                type="url"
+                                placeholder={`Paste ${label} link here...`}
+                                value={linkInput}
+                                onChange={(e) => { setLinkInput(e.target.value); setLinkError(""); }}
+                                onKeyDown={(e) => { if (e.key === "Enter") handleSaveLink(key); if (e.key === "Escape") { setEditingLink(null); setLinkError(""); } }}
+                                className="flex-1 h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                                autoFocus
+                              />
+                              <Button
+                                size="xs"
+                                variant="default"
+                                disabled={savingLink || !linkInput.trim()}
+                                onClick={() => handleSaveLink(key)}
+                              >
+                                {savingLink ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Check className="h-3 w-3 mr-1" /> Save</>}
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => { setEditingLink(null); setLinkError(""); }}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                            {linkError && (
+                              <p className="text-[11px] text-red-600 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3 shrink-0" /> {linkError}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* "Already posted? Add link" for non-posted platforms */}
+                        {!isPosted && !isUploading && !isEditingThisLink && !isPublishing && (
+                          <div className="mt-1.5 pl-8">
+                            <button
+                              type="button"
+                              onClick={() => { setEditingLink(key); setLinkInput(""); setLinkError(""); }}
+                              className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                            >
+                              <Link2 className="h-3 w-3" /> Already posted? Add link manually
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

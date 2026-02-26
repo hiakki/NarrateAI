@@ -7,10 +7,14 @@ import { generateScript } from "../src/services/script-generator";
 import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
 import { resolveProviders } from "../src/services/providers/resolve";
+import { getDefaultVoiceId } from "../src/config/voices";
 import { createLogger } from "../src/lib/logger";
 
 const db = new PrismaClient();
 const { log, warn, error: err } = createLogger("Scheduler");
+
+const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
+const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
 
 interface AutoRow {
   id: string;
@@ -40,7 +44,8 @@ interface AutoRow {
 
 function isDue(auto: AutoRow): { due: boolean; reason: string } {
   const now = new Date();
-  const [hours, minutes] = auto.postTime.split(":").map(Number);
+  const postTimes = auto.postTime.split(",").map((t) => t.trim());
+  const timesPerDay = postTimes.length;
 
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: auto.timezone,
@@ -56,40 +61,64 @@ function isDue(auto: AutoRow): { due: boolean; reason: string } {
     parts.find((p) => p.type === "minute")?.value ?? "0",
   );
 
-  const withinWindow =
-    currentHour === hours && Math.abs(currentMin - minutes) < 10;
-  if (!withinWindow) {
+  const matchedSlot = postTimes.find((t) => {
+    const [h, m] = t.split(":").map(Number);
+    return currentHour === h && Math.abs(currentMin - m) < 10;
+  });
+
+  if (!matchedSlot) {
     return {
       due: false,
-      reason: `not in window (now=${currentHour}:${String(currentMin).padStart(2, "0")} ${auto.timezone}, target=${auto.postTime})`,
+      reason: `not in any window (now=${currentHour}:${String(currentMin).padStart(2, "0")} ${auto.timezone}, targets=${auto.postTime})`,
     };
   }
 
   if (!auto.lastRunAt) {
-    return { due: true, reason: "never run before" };
+    return { due: true, reason: `never run before, matched slot ${matchedSlot}` };
   }
 
   const hoursSinceLastRun =
     (now.getTime() - auto.lastRunAt.getTime()) / (1000 * 60 * 60);
 
-  const thresholds: Record<string, number> = {
+  // For multiple daily slots, minimum gap = half the interval between slots (at least 1h)
+  // For single slot, use the original frequency-based thresholds
+  const freqThresholds: Record<string, number> = {
     daily: 20,
     every_other_day: 44,
     weekly: 164,
   };
-  const threshold = thresholds[auto.frequency];
-  if (threshold === undefined) {
-    return { due: false, reason: `unknown frequency "${auto.frequency}"` };
+
+  let threshold: number;
+  if (timesPerDay > 1) {
+    // Minimum gap: slightly less than smallest interval between consecutive slots
+    const minuteValues = postTimes
+      .map((t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; })
+      .sort((a, b) => a - b);
+    let minGap = 1440; // full day
+    for (let i = 1; i < minuteValues.length; i++) {
+      minGap = Math.min(minGap, minuteValues[i] - minuteValues[i - 1]);
+    }
+    // Also check wrap-around gap (last to first next day)
+    minGap = Math.min(minGap, 1440 - minuteValues[minuteValues.length - 1] + minuteValues[0]);
+
+    // Threshold = 80% of smallest gap (in hours), minimum 1 hour
+    threshold = Math.max(1, (minGap * 0.8) / 60);
+
+    // For non-daily frequencies, multiply by the frequency factor
+    if (auto.frequency === "every_other_day") threshold = Math.max(threshold, 44);
+    if (auto.frequency === "weekly") threshold = Math.max(threshold, 164);
+  } else {
+    threshold = freqThresholds[auto.frequency] ?? 20;
   }
 
   if (hoursSinceLastRun < threshold) {
     return {
       due: false,
-      reason: `ran ${hoursSinceLastRun.toFixed(1)}h ago, need ${threshold}h (${auto.frequency})`,
+      reason: `ran ${hoursSinceLastRun.toFixed(1)}h ago, need ${threshold.toFixed(1)}h gap (slot=${matchedSlot})`,
     };
   }
 
-  return { due: true, reason: `${hoursSinceLastRun.toFixed(1)}h since last run, threshold ${threshold}h` };
+  return { due: true, reason: `${hoursSinceLastRun.toFixed(1)}h since last run, threshold ${threshold.toFixed(1)}h, slot=${matchedSlot}` };
 }
 
 async function checkSchedules() {
@@ -273,6 +302,8 @@ async function checkReadyVideosForPosting() {
       take: 10,
     });
 
+    const STALE_UPLOAD_MS = 10 * 60 * 1000;
+
     for (const video of readyVideos) {
       const auto = automationsWithTargets.find(
         (a) => a.seriesId === video.seriesId,
@@ -280,19 +311,132 @@ async function checkReadyVideosForPosting() {
       if (!auto) continue;
 
       const targets = auto.targetPlatforms as string[];
-      const rawPosted = (video.postedPlatforms ?? []) as (string | { platform: string })[];
-      const postedSet = new Set(
-        rawPosted.map((p) => (typeof p === "string" ? p : p.platform)),
-      );
-      const remaining = targets.filter((t) => !postedSet.has(t));
+      const rawPosted = (video.postedPlatforms ?? []) as (
+        | string
+        | { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; startedAt?: number }
+      )[];
+
+      const remaining = targets.filter((t) => {
+        const entry = rawPosted.find((p) =>
+          typeof p === "string" ? p === t : p.platform === t,
+        );
+        if (!entry) return true;
+        if (typeof entry === "string") return false; // legacy success
+        if (entry.success === true) return false;
+        if (entry.success === undefined && (entry.postId || entry.url)) return false; // posted but missing success flag
+        if (entry.success === "uploading") {
+          const age = Date.now() - (entry.startedAt ?? 0);
+          return age >= STALE_UPLOAD_MS; // only retry stale uploads
+        }
+        return true; // failed → retry
+      });
 
       if (remaining.length === 0) continue;
 
       log(`Auto-posting video ${video.id} to ${remaining.join(", ")}`);
-      await postVideoToSocials(video.id);
+      await postVideoToSocials(video.id, remaining);
     }
   } catch (e) {
     err("Error checking ready videos:", e);
+  }
+}
+
+async function recoverStuckVideos() {
+  try {
+    const now = Date.now();
+
+    // Find videos stuck in GENERATING or QUEUED for too long
+    const stuckVideos = await db.video.findMany({
+      where: {
+        status: { in: ["GENERATING", "QUEUED"] },
+      },
+      include: {
+        series: {
+          include: {
+            automation: { select: { id: true, name: true } },
+            user: {
+              select: {
+                id: true,
+                defaultLlmProvider: true,
+                defaultTtsProvider: true,
+                defaultImageProvider: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (stuckVideos.length === 0) return;
+    log(`Found ${stuckVideos.length} video(s) in GENERATING/QUEUED state, checking for stuck ones...`);
+
+    for (const video of stuckVideos) {
+      const age = now - new Date(video.updatedAt).getTime();
+      const threshold = video.status === "GENERATING" ? STUCK_GENERATING_MS : STUCK_QUEUED_MS;
+
+      if (age < threshold) {
+        log(`Video ${video.id} (${video.status}) updated ${Math.round(age / 1000)}s ago — still within threshold, skipping`);
+        continue;
+      }
+
+      const autoName = video.series.automation?.name ?? "manual";
+      const hasCheckpoint = video.checkpointData && typeof video.checkpointData === "object";
+      const completedStages = (video.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
+
+      log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}", checkpoint=[${completedStages.join(",")}])`);
+
+      try {
+        const resolved = resolveProviders(video.series, video.series.user);
+        const artStyle = getArtStyleById(video.series.artStyle);
+        const niche = getNicheById(video.series.niche);
+        const scenes = (video.scenesJson as { text: string; visualDescription: string }[]) ?? [];
+
+        if (scenes.length === 0) {
+          warn(`Video ${video.id} has no scenes, marking as FAILED`);
+          await db.video.update({
+            where: { id: video.id },
+            data: { status: "FAILED", generationStage: null, errorMessage: "Recovery failed: no scene data" },
+          });
+          continue;
+        }
+
+        // Reset status to QUEUED so the worker picks it up fresh (checkpoint will handle resume)
+        await db.video.update({
+          where: { id: video.id },
+          data: { status: "QUEUED", errorMessage: null },
+        });
+
+        await enqueueVideoGeneration({
+          videoId: video.id,
+          seriesId: video.seriesId,
+          title: video.title ?? "Untitled",
+          scriptText: video.scriptText ?? "",
+          scenes,
+          artStyle: video.series.artStyle,
+          artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
+          negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
+          tone: video.series.tone ?? "dramatic",
+          niche: video.series.niche,
+          voiceId: video.series.voiceId ?? getDefaultVoiceId(resolved.tts),
+          language: video.series.language ?? "en",
+          musicPath: niche?.defaultMusic,
+          duration: video.targetDuration ?? video.duration ?? 45,
+          llmProvider: resolved.llm,
+          ttsProvider: resolved.tts,
+          imageProvider: resolved.image,
+        });
+
+        log(`Re-enqueued video ${video.id} for recovery (will resume from ${hasCheckpoint ? `stage after [${completedStages.join(",")}]` : "beginning"})`);
+      } catch (e) {
+        err(`Failed to recover video ${video.id}:`, e);
+        await db.video.update({
+          where: { id: video.id },
+          data: { status: "FAILED", generationStage: null, errorMessage: `Recovery failed: ${e instanceof Error ? e.message : "Unknown"}` },
+        }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    err("Error in recoverStuckVideos:", e);
   }
 }
 
@@ -305,6 +449,7 @@ async function tick() {
   }
   running = true;
   try {
+    await recoverStuckVideos();
     await checkSchedules();
   } finally {
     running = false;

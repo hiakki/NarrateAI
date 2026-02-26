@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { hash } from "bcryptjs";
 import { z } from "zod/v4";
 import { db } from "@/lib/db";
+import { validateEmailDomain } from "@/lib/email/validate";
 
 const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -13,6 +14,14 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { name, email, password } = registerSchema.parse(body);
+
+    const emailCheck = validateEmailDomain(email);
+    if (!emailCheck.valid) {
+      return NextResponse.json(
+        { error: emailCheck.reason },
+        { status: 400 },
+      );
+    }
 
     const existingUser = await db.user.findUnique({
       where: { email },
@@ -32,6 +41,7 @@ export async function POST(req: NextRequest) {
         name,
         email,
         passwordHash,
+        emailVerified: false,
       },
     });
 

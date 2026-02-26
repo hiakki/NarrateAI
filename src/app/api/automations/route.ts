@@ -18,7 +18,10 @@ const createSchema = z.object({
   enabled: z.boolean().default(true),
   includeAiTags: z.boolean().default(true),
   frequency: z.enum(["daily", "every_other_day", "weekly"]).default("daily"),
-  postTime: z.string().regex(/^\d{2}:\d{2}$/).default("09:00"),
+  postTime: z.string().refine(
+    (v) => v.split(",").every((t) => /^\d{2}:\d{2}$/.test(t.trim())),
+    "Each time must be HH:MM, comma-separated for multiple",
+  ).default("09:00"),
   timezone: z.string().min(1),
 });
 
@@ -32,13 +35,37 @@ export async function GET() {
       where: { userId: session.user.id },
       include: {
         series: {
-          include: { _count: { select: { videos: true } } },
+          include: {
+            _count: { select: { videos: true } },
+            videos: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                postedPlatforms: true,
+                createdAt: true,
+                updatedAt: true,
+              },
+            },
+          },
         },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json({ data: automations });
+    const data = automations.map((a) => ({
+      ...a,
+      series: a.series
+        ? {
+            _count: a.series._count,
+            lastVideo: a.series.videos[0] ?? null,
+          }
+        : null,
+    }));
+
+    return NextResponse.json({ data });
   } catch (error) {
     console.error("List automations error:", error);
     return NextResponse.json(

@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -42,10 +42,25 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: session, status } = useSession();
   const [mounted, setMounted] = useState(false);
+  const verifyChecked = useRef(false);
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (!mounted || status !== "authenticated" || !session?.user) return;
+    if (verifyChecked.current) return;
+    verifyChecked.current = true;
+
+    fetch("/api/auth/check-verified")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.verified === false) router.replace("/verify-email");
+      })
+      .catch(() => {});
+  }, [mounted, status, session, router]);
 
   const user = mounted && status === "authenticated" ? session?.user : undefined;
   const isAdmin = user?.role === "OWNER" || user?.role === "ADMIN";
