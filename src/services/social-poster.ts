@@ -1,9 +1,9 @@
 import { PrismaClient, Platform } from "@prisma/client";
 import { decrypt } from "@/lib/social/encrypt";
-import { postInstagramReel } from "@/lib/social/instagram";
-import { postFacebookReel } from "@/lib/social/facebook";
-import { uploadYouTubeShort } from "@/lib/social/youtube";
-import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
+import { postInstagramReel, postInstagramComment } from "@/lib/social/instagram";
+import { postFacebookReel, postFacebookComment } from "@/lib/social/facebook";
+import { uploadYouTubeShort, postYouTubeComment } from "@/lib/social/youtube";
+import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption, generateFirstComment } from "@/lib/social/seo";
 import { createLogger } from "@/lib/logger";
 import path from "path";
 
@@ -32,9 +32,43 @@ const STALE_UPLOAD_MS = 10 * 60 * 1000; // 10 minutes
 const POST_COOLDOWN_MS = 10_000; // wait after video becomes READY before posting
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 10_000;
+const PLATFORM_POST_GAP_MINUTES = parseInt(process.env.PLATFORM_POST_GAP_MINUTES ?? "60", 10);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function entryIsSuccessful(entry: string | PlatformEntry, platform: string): boolean {
+  if (typeof entry === "string") return entry === platform;
+  if (entry.platform !== platform) return false;
+  if (entry.success === true) return true;
+  return entry.success === undefined && !!(entry.postId || entry.url);
+}
+
+async function getLatestPlatformSuccessTime(
+  userId: string,
+  platform: string,
+  excludeVideoId: string,
+): Promise<Date | null> {
+  // Look back 48h for recent success entries; enough for cooldown checks.
+  const recent = await db.video.findMany({
+    where: {
+      id: { not: excludeVideoId },
+      updatedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+      series: { userId },
+    },
+    select: { id: true, updatedAt: true, postedPlatforms: true },
+    orderBy: { updatedAt: "desc" },
+    take: 200,
+  });
+
+  for (const v of recent) {
+    const entries = (v.postedPlatforms ?? []) as (string | PlatformEntry)[];
+    if (entries.some((e) => entryIsSuccessful(e, platform))) {
+      return v.updatedAt;
+    }
+  }
+  return null;
 }
 
 /**
@@ -236,18 +270,16 @@ export async function postVideoToSocials(
   const ytSeo = generateVideoSEO(title, nicheId, scriptText, includeAiTags, previousYtUrl);
   const igCaption = generateInstagramCaption(title, nicheId, scriptText, includeAiTags);
   const fbCaption = generateFacebookCaption(title, nicheId, scriptText, includeAiTags);
+  const firstComment = generateFirstComment(nicheId, scriptText);
 
-  const results: PostResult[] = [];
-
-  for (const platform of targetPlatforms) {
-    // Claim the platform in DB — this is the atomic lock
+  // Post to all platforms in parallel
+  async function postToPlatform(platform: string): Promise<PostResult> {
     const claimed = await claimPlatform(videoId, platform);
     if (!claimed) {
-      results.push({ platform, success: true, postId: "already-handled" });
-      continue;
+      return { platform, success: true, postId: "already-handled" };
     }
 
-    const accounts = video.series.user.socialAccounts.filter(
+    const accounts = video!.series.user.socialAccounts.filter(
       (a) => a.platform === platform,
     );
 
@@ -255,8 +287,27 @@ export async function postVideoToSocials(
       await finalizePlatform(videoId, {
         platform, success: false, error: "No connected account",
       });
-      results.push({ platform, success: false, error: "No connected account" });
-      continue;
+      return { platform, success: false, error: "No connected account" };
+    }
+
+    // Enforce minimum gap between successful posts per platform per user.
+    const gapMs = Math.max(0, PLATFORM_POST_GAP_MINUTES) * 60 * 1000;
+    if (gapMs > 0) {
+      const latestSuccessAt = await getLatestPlatformSuccessTime(
+        video.series.user.id,
+        platform,
+        videoId,
+      );
+      if (latestSuccessAt) {
+        const elapsedMs = Date.now() - latestSuccessAt.getTime();
+        if (elapsedMs < gapMs) {
+          const remainingMin = Math.ceil((gapMs - elapsedMs) / 60000);
+          const msg = `Platform cooldown active: wait ~${remainingMin}m before next ${platform} post`;
+          log.warn(`${msg} (video=${videoId})`);
+          await finalizePlatform(videoId, { platform, success: false, error: msg });
+          return { platform, success: false, error: msg };
+        }
+      }
     }
 
     for (const account of accounts) {
@@ -276,6 +327,8 @@ export async function postVideoToSocials(
                 accessToken,
                 videoPath,
                 igCaption,
+                refreshToken,
+                account.pageId,
               );
               break;
 
@@ -297,7 +350,7 @@ export async function postVideoToSocials(
                 ytSeo.description,
                 ytSeo.tags,
                 account.platformUserId,
-                video.series.user.id,
+                video!.series.user.id,
                 ytSeo.categoryId,
               );
               break;
@@ -323,7 +376,6 @@ export async function postVideoToSocials(
       }
 
       const result = lastResult!;
-      results.push({ platform, ...result });
 
       if (result.success) {
         const url = result.postUrl
@@ -333,13 +385,55 @@ export async function postVideoToSocials(
         await finalizePlatform(videoId, {
           platform, success: true, postId: result.postId ?? null, url: url ?? null,
         });
+
+        if (result.postId) {
+          void (async () => {
+            try {
+              // Do not block platform posting completion; comments run best-effort in parallel.
+              await sleep(3000);
+              switch (platform) {
+                case "INSTAGRAM":
+                  await postInstagramComment(result.postId, accessToken, firstComment.ig);
+                  break;
+                case "FACEBOOK":
+                  await postFacebookComment(result.postId, accessToken, firstComment.fb);
+                  break;
+                case "YOUTUBE":
+                  await postYouTubeComment(
+                    accessToken,
+                    refreshToken,
+                    result.postId,
+                    firstComment.yt,
+                    account.platformUserId,
+                    video!.series.user.id,
+                  );
+                  break;
+              }
+            } catch (e) {
+              log.warn(`First comment failed for ${platform} (${result.postId}):`, e);
+            }
+          })();
+        }
       } else {
         await finalizePlatform(videoId, {
           platform, success: false, error: result.error ?? "Unknown error",
         });
       }
+
+      return { platform, ...result };
     }
+
+    return { platform, success: false, error: "No accounts processed" };
   }
+
+  log.log(`Posting video ${videoId} to ${targetPlatforms.join(", ")} in parallel`);
+  const settled = await Promise.allSettled(targetPlatforms.map(postToPlatform));
+
+  const results: PostResult[] = settled.map((s, i) => {
+    if (s.status === "fulfilled") return s.value;
+    log.error(`Platform ${targetPlatforms[i]} threw:`, s.reason);
+    return { platform: targetPlatforms[i], success: false, error: String(s.reason) };
+  });
 
   return results;
 }

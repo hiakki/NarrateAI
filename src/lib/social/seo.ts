@@ -383,6 +383,69 @@ export function generateInstagramCaption(
 // Facebook Reels
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// First Comment (all platforms)
+// ---------------------------------------------------------------------------
+
+interface FirstCommentConfig {
+  ig: string;
+  fb: string;
+  yt: string;
+}
+
+export function generateFirstComment(
+  niche: string,
+  scriptText?: string,
+): FirstCommentConfig {
+  const cfg = NICHE_SEO[niche] ?? FALLBACK;
+
+  const engagement = pick(cfg.engagements);
+  const cta = pick(cfg.ctas);
+  const hook = extractHook(scriptText);
+
+  // IG first comment — engagement question + extra hashtags real creators move here
+  const igExtraHashtags = pickN(cfg.hashtags, Math.floor(Math.random() * 2) + 2);
+  const igParts = [
+    pick([engagement, `${engagement} 👇`, `💬 ${engagement}`]),
+    "",
+    cta,
+    "",
+    igExtraHashtags.join(" "),
+  ];
+
+  // FB first comment — conversational, engagement-driven
+  const fbParts = [
+    pick([
+      engagement,
+      `${engagement} 👇`,
+      hook ? `${hook}... ${engagement}` : engagement,
+    ]),
+    "",
+    pick([cta, `${cta} 🔥`]),
+  ];
+
+  // YT first comment — pin-worthy, engagement + CTA
+  const ytParts = [
+    pick([
+      `📌 ${engagement}`,
+      engagement,
+      hook ? `"${hook}..." — ${engagement}` : engagement,
+    ]),
+    "",
+    pick([cta, `${cta} 🔔`, `👉 ${cta}`]),
+  ];
+
+  return {
+    ig: igParts.join("\n"),
+    fb: fbParts.join("\n"),
+    yt: ytParts.join("\n"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Facebook Reels
+// ---------------------------------------------------------------------------
+
 export function generateFacebookCaption(
   originalTitle: string,
   niche: string,

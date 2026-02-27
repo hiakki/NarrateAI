@@ -12,6 +12,7 @@ import { createLogger } from "../src/lib/logger";
 
 const db = new PrismaClient();
 const { log, warn, error: err } = createLogger("Scheduler");
+const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
@@ -121,6 +122,142 @@ function isDue(auto: AutoRow): { due: boolean; reason: string } {
   return { due: true, reason: `${hoursSinceLastRun.toFixed(1)}h since last run, threshold ${threshold.toFixed(1)}h, slot=${matchedSlot}` };
 }
 
+async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
+  const { due, reason } = isDue(auto as unknown as AutoRow);
+  log(
+    `"${auto.name}" | time=${auto.postTime} tz=${auto.timezone} freq=${auto.frequency} lastRun=${auto.lastRunAt?.toISOString() ?? "never"} | due=${due} (${reason})`,
+  );
+
+  if (!due) return;
+
+  log(`Triggering automation "${auto.name}" (${auto.id})`);
+
+  if (!auto.seriesId) {
+    log(`Automation "${auto.name}" has no linked series, creating one...`);
+    const newSeries = await db.series.create({
+      data: {
+        userId: auto.user.id,
+        name: `[Auto] ${auto.name}`,
+        niche: auto.niche,
+        artStyle: auto.artStyle,
+        voiceId: auto.voiceId,
+        language: auto.language,
+        tone: auto.tone,
+        llmProvider: auto.llmProvider as never,
+        ttsProvider: auto.ttsProvider as never,
+        imageProvider: auto.imageProvider as never,
+      },
+    });
+    await db.automation.update({
+      where: { id: auto.id },
+      data: { seriesId: newSeries.id },
+    });
+    (auto as { seriesId: string | null }).seriesId = newSeries.id;
+    log(`Created series "${newSeries.name}" (${newSeries.id}) for automation "${auto.name}"`);
+  }
+
+  const pendingVideo = await db.video.findFirst({
+    where: {
+      seriesId: auto.seriesId,
+      status: { in: ["QUEUED", "GENERATING"] },
+    },
+  });
+  if (pendingVideo) {
+    log(`Automation "${auto.name}" already has a video in progress (${pendingVideo.id}), skipping`);
+    return;
+  }
+
+  await db.automation.update({
+    where: { id: auto.id },
+    data: { lastRunAt: new Date() },
+  });
+
+  const artStyle = getArtStyleById(auto.artStyle);
+  const niche = getNicheById(auto.niche);
+
+  const providers = resolveProviders(
+    {
+      llmProvider: auto.llmProvider,
+      ttsProvider: auto.ttsProvider,
+      imageProvider: auto.imageProvider,
+    },
+    auto.user,
+  );
+
+  try {
+    log(
+      `Generating script for "${auto.name}" (LLM: ${providers.llm})`,
+    );
+
+    const script = await generateScript(
+      {
+        niche: auto.niche,
+        tone: auto.tone,
+        artStyle: auto.artStyle,
+        duration: auto.duration,
+        language: auto.language,
+      },
+      providers.llm,
+    );
+
+    const recheck = await db.video.findFirst({
+      where: {
+        seriesId: auto.seriesId,
+        status: { in: ["QUEUED", "GENERATING"] },
+      },
+    });
+    if (recheck) {
+      log(`Automation "${auto.name}" — another video appeared while script was generating (${recheck.id}), discarding script`);
+      return;
+    }
+
+    const video = await db.video.create({
+      data: {
+        seriesId: auto.seriesId,
+        title: script.title,
+        scriptText: script.fullScript,
+        scenesJson: script.scenes as never,
+        targetDuration: auto.duration,
+        status: "QUEUED",
+      },
+    });
+
+    await enqueueVideoGeneration({
+      videoId: video.id,
+      seriesId: auto.seriesId,
+      title: script.title,
+      scriptText: video.scriptText!,
+      scenes: script.scenes,
+      artStyle: auto.artStyle,
+      artStylePrompt:
+        artStyle?.promptModifier ?? "cinematic, high quality",
+      negativePrompt:
+        artStyle?.negativePrompt ??
+        "low quality, blurry, watermark, text",
+      tone: auto.tone,
+      niche: auto.niche,
+      voiceId: auto.voiceId ?? "default",
+      language: auto.language,
+      musicPath: niche?.defaultMusic,
+      duration: auto.duration,
+      llmProvider: providers.llm,
+      ttsProvider: providers.tts,
+      imageProvider: providers.image,
+    });
+
+    log(`Enqueued video ${video.id} for automation "${auto.name}"`);
+  } catch (e) {
+    err(`Failed to auto-generate for "${auto.name}":`, e);
+  }
+}
+
+async function runInBatches<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    await Promise.allSettled(batch.map(fn));
+  }
+}
+
 async function checkSchedules() {
   try {
     const automations = await db.automation.findMany({
@@ -137,137 +274,9 @@ async function checkSchedules() {
       },
     });
 
-    log(`Found ${automations.length} enabled automation(s)`);
+    log(`Found ${automations.length} enabled automation(s), processing in batches of ${SCHEDULER_CONCURRENCY}`);
 
-    for (const auto of automations) {
-      const { due, reason } = isDue(auto as unknown as AutoRow);
-      log(
-        `"${auto.name}" | time=${auto.postTime} tz=${auto.timezone} freq=${auto.frequency} lastRun=${auto.lastRunAt?.toISOString() ?? "never"} | due=${due} (${reason})`,
-      );
-
-      if (!due) continue;
-
-      log(`Triggering automation "${auto.name}" (${auto.id})`);
-
-      if (!auto.seriesId) {
-        log(`Automation "${auto.name}" has no linked series, creating one...`);
-        const newSeries = await db.series.create({
-          data: {
-            userId: auto.user.id,
-            name: `[Auto] ${auto.name}`,
-            niche: auto.niche,
-            artStyle: auto.artStyle,
-            voiceId: auto.voiceId,
-            language: auto.language,
-            tone: auto.tone,
-            llmProvider: auto.llmProvider as never,
-            ttsProvider: auto.ttsProvider as never,
-            imageProvider: auto.imageProvider as never,
-          },
-        });
-        await db.automation.update({
-          where: { id: auto.id },
-          data: { seriesId: newSeries.id },
-        });
-        (auto as { seriesId: string | null }).seriesId = newSeries.id;
-        log(`Created series "${newSeries.name}" (${newSeries.id}) for automation "${auto.name}"`);
-      }
-
-      const pendingVideo = await db.video.findFirst({
-        where: {
-          seriesId: auto.seriesId,
-          status: { in: ["QUEUED", "GENERATING"] },
-        },
-      });
-      if (pendingVideo) {
-        log(`Automation "${auto.name}" already has a video in progress (${pendingVideo.id}), skipping`);
-        continue;
-      }
-
-      await db.automation.update({
-        where: { id: auto.id },
-        data: { lastRunAt: new Date() },
-      });
-
-      const artStyle = getArtStyleById(auto.artStyle);
-      const niche = getNicheById(auto.niche);
-
-      const providers = resolveProviders(
-        {
-          llmProvider: auto.llmProvider,
-          ttsProvider: auto.ttsProvider,
-          imageProvider: auto.imageProvider,
-        },
-        auto.user,
-      );
-
-      try {
-        log(
-          `Generating script for "${auto.name}" (LLM: ${providers.llm})`,
-        );
-
-        const script = await generateScript(
-          {
-            niche: auto.niche,
-            tone: auto.tone,
-            artStyle: auto.artStyle,
-            duration: auto.duration,
-            language: auto.language,
-          },
-          providers.llm,
-        );
-
-        const recheck = await db.video.findFirst({
-          where: {
-            seriesId: auto.seriesId,
-            status: { in: ["QUEUED", "GENERATING"] },
-          },
-        });
-        if (recheck) {
-          log(`Automation "${auto.name}" — another video appeared while script was generating (${recheck.id}), discarding script`);
-          continue;
-        }
-
-        const video = await db.video.create({
-          data: {
-            seriesId: auto.seriesId,
-            title: script.title,
-            scriptText: script.fullScript,
-            scenesJson: script.scenes as never,
-            targetDuration: auto.duration,
-            status: "QUEUED",
-          },
-        });
-
-        await enqueueVideoGeneration({
-          videoId: video.id,
-          seriesId: auto.seriesId,
-          title: script.title,
-          scriptText: video.scriptText!,
-          scenes: script.scenes,
-          artStyle: auto.artStyle,
-          artStylePrompt:
-            artStyle?.promptModifier ?? "cinematic, high quality",
-          negativePrompt:
-            artStyle?.negativePrompt ??
-            "low quality, blurry, watermark, text",
-          tone: auto.tone,
-          niche: auto.niche,
-          voiceId: auto.voiceId ?? "default",
-          language: auto.language,
-          musicPath: niche?.defaultMusic,
-          duration: auto.duration,
-          llmProvider: providers.llm,
-          ttsProvider: providers.tts,
-          imageProvider: providers.image,
-        });
-
-        log(`Enqueued video ${video.id} for automation "${auto.name}"`);
-      } catch (e) {
-        err(`Failed to auto-generate for "${auto.name}":`, e);
-      }
-    }
-
+    await runInBatches(automations, SCHEDULER_CONCURRENCY, processAutomation);
     await checkReadyVideosForPosting();
   } catch (e) {
     err("Error in schedule check:", e);
@@ -304,11 +313,11 @@ async function checkReadyVideosForPosting() {
 
     const STALE_UPLOAD_MS = 10 * 60 * 1000;
 
-    for (const video of readyVideos) {
+    const postTasks = readyVideos.map((video) => {
       const auto = automationsWithTargets.find(
         (a) => a.seriesId === video.seriesId,
       );
-      if (!auto) continue;
+      if (!auto) return null;
 
       const targets = auto.targetPlatforms as string[];
       const rawPosted = (video.postedPlatforms ?? []) as (
@@ -321,20 +330,28 @@ async function checkReadyVideosForPosting() {
           typeof p === "string" ? p === t : p.platform === t,
         );
         if (!entry) return true;
-        if (typeof entry === "string") return false; // legacy success
+        if (typeof entry === "string") return false;
         if (entry.success === true) return false;
-        if (entry.success === undefined && (entry.postId || entry.url)) return false; // posted but missing success flag
+        if (entry.success === undefined && (entry.postId || entry.url)) return false;
         if (entry.success === "uploading") {
           const age = Date.now() - (entry.startedAt ?? 0);
-          return age >= STALE_UPLOAD_MS; // only retry stale uploads
+          return age >= STALE_UPLOAD_MS;
         }
-        return true; // failed → retry
+        return true;
       });
 
-      if (remaining.length === 0) continue;
+      if (remaining.length === 0) return null;
+      return { videoId: video.id, remaining };
+    }).filter((t): t is { videoId: string; remaining: string[] } => t !== null);
 
-      log(`Auto-posting video ${video.id} to ${remaining.join(", ")}`);
-      await postVideoToSocials(video.id, remaining);
+    if (postTasks.length > 0) {
+      log(`Auto-posting ${postTasks.length} ready video(s) in parallel`);
+      await Promise.allSettled(
+        postTasks.map(({ videoId, remaining }) => {
+          log(`Posting video ${videoId} to ${remaining.join(", ")}`);
+          return postVideoToSocials(videoId, remaining);
+        }),
+      );
     }
   } catch (e) {
     err("Error checking ready videos:", e);

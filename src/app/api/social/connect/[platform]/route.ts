@@ -34,6 +34,7 @@ function buildYouTubeOAuthUrl(): string {
     scope: [
       "https://www.googleapis.com/auth/youtube.upload",
       "https://www.googleapis.com/auth/youtube.readonly",
+      "https://www.googleapis.com/auth/youtube.force-ssl",
     ].join(" "),
     response_type: "code",
     access_type: "offline",
@@ -62,6 +63,7 @@ export async function GET(
         redirectUrl = buildMetaOAuthUrl([
           "instagram_basic",
           "instagram_content_publish",
+          "instagram_manage_comments",
           "pages_show_list",
           "pages_read_engagement",
         ]);
@@ -71,6 +73,7 @@ export async function GET(
         redirectUrl = buildMetaOAuthUrl([
           "pages_show_list",
           "pages_manage_posts",
+          "pages_manage_engagement",
           "pages_read_engagement",
           "business_management",
         ]);

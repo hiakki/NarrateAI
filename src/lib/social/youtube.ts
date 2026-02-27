@@ -92,6 +92,28 @@ function isAuthError(err: unknown): boolean {
   );
 }
 
+/** Translate raw YouTube API errors into actionable messages for logs & UI. */
+function classifyYtError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("token has been expired or revoked"))
+    return "YouTube token expired/revoked. Reconnect YouTube in Channels.";
+  if (lower.includes("quota") || lower.includes("quotaexceeded"))
+    return "YouTube daily upload quota exceeded. Quota resets at midnight Pacific Time. Try again tomorrow.";
+  if (lower.includes("forbidden") || lower.includes("insufficient permission"))
+    return "Missing YouTube permissions. Reconnect your account in Channels with full upload access.";
+  if (lower.includes("rateLimitExceeded") || lower.includes("rate limit"))
+    return "YouTube rate limit hit. Wait a few minutes and retry.";
+  if (lower.includes("duplicate"))
+    return "Duplicate video — YouTube rejected this upload because it already exists on your channel.";
+  if (lower.includes("video is too long") || lower.includes("file too large"))
+    return "Video exceeds YouTube Shorts limits (max 60 seconds, 256 MB).";
+  if (lower.includes("not found") || lower.includes("channel not found"))
+    return "YouTube channel not found. Make sure your connected account has an active channel.";
+  if (lower.includes("network") || lower.includes("econnrefused") || lower.includes("timeout"))
+    return "Network error while uploading to YouTube. Check your connection and retry.";
+  return raw;
+}
+
 export async function uploadYouTubeShort(
   accessToken: string,
   refreshToken: string | null,
@@ -145,10 +167,8 @@ export async function uploadYouTubeShort(
       return { success: true, postId: res.data.id ?? undefined };
     } catch (err: unknown) {
       if (!isAuthError(err) || !refreshToken || !platformUserId || !userId) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-        };
+        const raw = err instanceof Error ? err.message : String(err);
+        return { success: false, error: classifyYtError(raw) };
       }
 
       log.log(`Auth failed on upload, refreshing token...`);
@@ -167,9 +187,54 @@ export async function uploadYouTubeShort(
       return { success: true, postId: res.data.id ?? undefined };
     }
   } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : "Unknown error",
-    };
+    const raw = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, error: classifyYtError(raw) };
+  }
+}
+
+/** Post a first comment on a published YouTube video/short. */
+export async function postYouTubeComment(
+  accessToken: string,
+  refreshToken: string | null,
+  videoId: string,
+  text: string,
+  platformUserId?: string,
+  userId?: string,
+): Promise<{ success: boolean; commentId?: string; error?: string }> {
+  try {
+    const token = await getFreshAccessToken(
+      accessToken,
+      refreshToken,
+      platformUserId,
+      userId,
+    );
+
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: token,
+      refresh_token: refreshToken ?? undefined,
+    });
+
+    const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+
+    const res = await youtube.commentThreads.insert({
+      part: ["snippet"],
+      requestBody: {
+        snippet: {
+          videoId,
+          topLevelComment: {
+            snippet: { textOriginal: text },
+          },
+        },
+      },
+    });
+
+    const commentId = res.data.id ?? undefined;
+    log.log(`YT first comment posted: ${commentId} on video ${videoId} at ${new Date().toISOString()} | text: "${text.slice(0, 80)}..."`);
+    return { success: true, commentId };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : "Unknown error";
+    log.warn(`YT first comment failed on ${videoId}: ${raw}`);
+    return { success: false, error: classifyYtError(raw) };
   }
 }

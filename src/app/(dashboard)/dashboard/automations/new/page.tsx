@@ -13,7 +13,7 @@ import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
 import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
 import { LANGUAGES, isLanguageSupportedByTts } from "@/config/languages";
-import { getVoicesForProvider, getDefaultVoiceId } from "@/config/voices";
+import { getVoicesForProvider, getDefaultVoiceId, getVoiceById, type Voice } from "@/config/voices";
 import {
   ArrowLeft, ArrowRight, Loader2, Check, ChevronDown, ChevronUp,
   Cpu, Mic, Image as ImageIcon, Instagram, Youtube, Facebook, Clock,
@@ -22,6 +22,7 @@ import {
 import Link from "next/link";
 
 type Step = 1 | 2 | 3;
+type PlatformKey = "FACEBOOK" | "YOUTUBE" | "INSTAGRAM";
 
 interface ProviderInfo {
   id: string; name: string; description: string; costEstimate: string; qualityLabel: string;
@@ -58,6 +59,56 @@ const COMMON_TIMEZONES = [
   "Europe/London", "Europe/Paris", "Asia/Kolkata", "Asia/Tokyo", "Australia/Sydney",
 ] as const;
 
+const SCORE_WEIGHTS = { topic: 30, art: 15, voice: 10, language: 15, tone: 10, time: 20 } as const;
+const PLATFORMS: PlatformKey[] = ["FACEBOOK", "YOUTUBE", "INSTAGRAM"];
+
+const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
+  "scary-stories": { FACEBOOK: 76, YOUTUBE: 70, INSTAGRAM: 84 },
+  mythology: { FACEBOOK: 78, YOUTUBE: 74, INSTAGRAM: 72 },
+  history: { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 68 },
+  "true-crime": { FACEBOOK: 80, YOUTUBE: 75, INSTAGRAM: 82 },
+  "anime-recaps": { FACEBOOK: 62, YOUTUBE: 78, INSTAGRAM: 86 },
+  "life-hacks": { FACEBOOK: 72, YOUTUBE: 70, INSTAGRAM: 82 },
+  motivation: { FACEBOOK: 74, YOUTUBE: 72, INSTAGRAM: 80 },
+  "science-facts": { FACEBOOK: 70, YOUTUBE: 76, INSTAGRAM: 74 },
+  "conspiracy-theories": { FACEBOOK: 77, YOUTUBE: 68, INSTAGRAM: 79 },
+  "biblical-stories": { FACEBOOK: 82, YOUTUBE: 66, INSTAGRAM: 62 },
+  "urban-legends": { FACEBOOK: 74, YOUTUBE: 69, INSTAGRAM: 81 },
+  heists: { FACEBOOK: 78, YOUTUBE: 74, INSTAGRAM: 77 },
+};
+
+function clamp(n: number, lo = 0, hi = 100) {
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+function hmToMinutes(hm: string): number {
+  const [h, m] = hm.split(":").map(Number);
+  return (h * 60) + m;
+}
+
+function circularMinuteDiff(a: number, b: number): number {
+  const d = Math.abs(a - b);
+  return Math.min(d, 1440 - d);
+}
+
+function scoreFromMinuteDiff(diff: number): number {
+  if (diff <= 30) return 95;
+  if (diff <= 60) return 86;
+  if (diff <= 120) return 75;
+  if (diff <= 240) return 62;
+  return 48;
+}
+
+function recommendVoice(voices: Voice[], tone: string): Voice | null {
+  if (voices.length === 0) return null;
+  const byKeyword = (keywords: string[]) =>
+    voices.find((v) => keywords.some((k) => `${v.name} ${v.description}`.toLowerCase().includes(k)));
+  if (tone === "dramatic") return byKeyword(["deep", "narrator", "intense", "authoritative"]) ?? voices[0];
+  if (tone === "educational") return byKeyword(["clear", "professional", "calm", "steady"]) ?? voices[0];
+  if (tone === "funny") return byKeyword(["upbeat", "lively", "energetic", "friendly"]) ?? voices[0];
+  return byKeyword(["warm", "natural", "friendly", "conversational"]) ?? voices[0];
+}
+
 export default function NewAutomationPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
@@ -89,6 +140,7 @@ export default function NewAutomationPage() {
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
+  const [focusedNicheId, setFocusedNicheId] = useState("");
 
   const niche = NICHES.find((n) => n.id === selectedNiche);
 
@@ -106,6 +158,117 @@ export default function NewAutomationPage() {
 
   const effectiveTts = ttsProvider || providerData?.defaults.ttsProvider || providerData?.platformDefaults.tts || "GEMINI_TTS";
   const voices = getVoicesForProvider(effectiveTts, language);
+
+  const selectedVoice = getVoiceById(voiceId) ?? null;
+  const activeNicheForScore = focusedNicheId || selectedNiche;
+  const scorePlatforms = selectedPlatforms.size > 0
+    ? PLATFORMS.filter((p) => selectedPlatforms.has(p))
+    : PLATFORMS;
+
+  const scoreForConfig = useCallback((cfg: {
+    nicheId: string;
+    artStyleId: string;
+    voice: Voice | null;
+    languageId: string;
+    toneId: string;
+    times: string[];
+  }) => {
+    const nicheDef = NICHES.find((n) => n.id === cfg.nicheId);
+    const baseByPlatform = NICHE_PLATFORM_BASE[cfg.nicheId] ?? { FACEBOOK: 68, YOUTUBE: 68, INSTAGRAM: 68 };
+    const schedule = getScheduleForNiche(cfg.nicheId, cfg.languageId);
+    const recommendedLocalSlots = schedule.slots.map((s) => hmToMinutes(convertTime(s.time, schedule.viewerTimezone, timezone)));
+    const selectedMins = (cfg.times.length > 0
+      ? cfg.times
+      : [recommendedLocalSlots[0] ? `${String(Math.floor(recommendedLocalSlots[0] / 60)).padStart(2, "0")}:${String(recommendedLocalSlots[0] % 60).padStart(2, "0")}` : "12:00"]
+    ).map(hmToMinutes);
+    const bestDiff = recommendedLocalSlots.length > 0
+      ? Math.min(...selectedMins.map((sm) => Math.min(...recommendedLocalSlots.map((rm) => circularMinuteDiff(sm, rm)))))
+      : 180;
+    const timeBase = scoreFromMinuteDiff(bestDiff);
+
+    const artBase = cfg.artStyleId === nicheDef?.defaultArtStyle ? 92 : 72;
+    const toneBase = cfg.toneId === nicheDef?.defaultTone ? 90 : 70;
+    const languageBase = cfg.languageId === "en" ? 80 : cfg.languageId === "hi" ? 84 : 72;
+    const voiceText = `${cfg.voice?.name ?? ""} ${cfg.voice?.description ?? ""}`.toLowerCase();
+    const voiceBase =
+      (cfg.toneId === "dramatic" && /deep|narrator|authoritative|intense/.test(voiceText)) ? 90
+        : (cfg.toneId === "educational" && /clear|professional|calm|steady/.test(voiceText)) ? 88
+          : (cfg.toneId === "casual" && /friendly|warm|natural|conversational/.test(voiceText)) ? 86
+            : cfg.voice ? 78 : 70;
+
+    const perPlatform = Object.fromEntries(PLATFORMS.map((platform) => {
+      const topic = baseByPlatform[platform];
+      const art = platform === "INSTAGRAM" ? artBase + 2 : platform === "YOUTUBE" ? artBase - 1 : artBase;
+      const voice = platform === "YOUTUBE" ? voiceBase + 3 : voiceBase;
+      const lang = platform === "FACEBOOK" && cfg.languageId === "hi" ? languageBase + 4 : languageBase;
+      const toneScore = toneBase;
+      const time = platform === "INSTAGRAM" ? timeBase + 2 : timeBase;
+      const overall = clamp(
+        (topic * SCORE_WEIGHTS.topic
+          + art * SCORE_WEIGHTS.art
+          + voice * SCORE_WEIGHTS.voice
+          + lang * SCORE_WEIGHTS.language
+          + toneScore * SCORE_WEIGHTS.tone
+          + time * SCORE_WEIGHTS.time) / 100,
+      );
+      return [platform, {
+        overall,
+        components: {
+          topic: clamp(topic),
+          art: clamp(art),
+          voice: clamp(voice),
+          language: clamp(lang),
+          tone: clamp(toneScore),
+          time: clamp(time),
+        },
+      }];
+    })) as Record<PlatformKey, { overall: number; components: Record<string, number> }>;
+
+    const overall = clamp(PLATFORMS.reduce((sum, p) => sum + perPlatform[p].overall, 0) / PLATFORMS.length);
+    return { overall, perPlatform };
+  }, [timezone]);
+
+  const nicheCards = useMemo(() => {
+    return NICHES.map((n) => {
+      const recVoice = recommendVoice(voices, n.defaultTone);
+      const score = scoreForConfig({
+        nicheId: n.id,
+        artStyleId: n.defaultArtStyle,
+        voice: recVoice,
+        languageId: language,
+        toneId: n.defaultTone,
+        times: postTimes,
+      });
+      return { niche: n, score };
+    });
+  }, [language, postTimes, scoreForConfig, voices]);
+
+  const activeNicheScore = useMemo(() => {
+    if (!activeNicheForScore) return null;
+    return scoreForConfig({
+      nicheId: activeNicheForScore,
+      artStyleId: artStyle || (NICHES.find((n) => n.id === activeNicheForScore)?.defaultArtStyle ?? "realistic"),
+      voice: selectedVoice ?? recommendVoice(voices, tone),
+      languageId: language,
+      toneId: tone,
+      times: postTimes,
+    });
+  }, [activeNicheForScore, artStyle, selectedVoice, voices, tone, language, postTimes, scoreForConfig]);
+
+  const finalScore = useMemo(() => {
+    if (!selectedNiche || !activeNicheScore) return null;
+    const avg = scorePlatforms.reduce((sum, p) => sum + activeNicheScore.perPlatform[p].overall, 0) / scorePlatforms.length;
+    return clamp(avg);
+  }, [selectedNiche, activeNicheScore, scorePlatforms]);
+
+  const factorAverages = useMemo(() => {
+    if (!activeNicheScore) return null;
+    const keys: Array<keyof typeof SCORE_WEIGHTS> = ["topic", "art", "voice", "language", "tone", "time"];
+    return Object.fromEntries(keys.map((k) => {
+      const avg = scorePlatforms.reduce((sum, p) => sum + activeNicheScore.perPlatform[p].components[k], 0) / scorePlatforms.length;
+      return [k, clamp(avg)];
+    })) as Record<keyof typeof SCORE_WEIGHTS, number>;
+  }, [activeNicheScore, scorePlatforms]);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -225,16 +388,84 @@ export default function NewAutomationPage() {
 
           <div>
             <h2 className="text-xl font-semibold mb-4">Niche</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {NICHES.map((n) => (
-                <Card key={n.id} className={`flex flex-col cursor-pointer transition-all hover:border-primary/50 ${selectedNiche === n.id ? "border-primary ring-2 ring-primary/20" : ""}`}
-                  onClick={() => { setSelectedNiche(n.id); if (!artStyle) setArtStyle(n.defaultArtStyle); setTone(n.defaultTone); }}>
-                  <CardContent className="p-4 text-center flex flex-col flex-1 items-center justify-center">
-                    <div className="text-2xl mb-2">{n.icon}</div>
-                    <div className="font-medium text-sm">{n.name}</div>
-                  </CardContent>
-                </Card>
-              ))}
+            <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {nicheCards.map(({ niche: n, score }) => (
+                  <Card
+                    key={n.id}
+                    className={`flex flex-col cursor-pointer transition-all hover:border-primary/50 ${
+                      selectedNiche === n.id ? "border-primary ring-2 ring-primary/20" : ""
+                    }`}
+                    onClick={() => {
+                      setFocusedNicheId(n.id);
+                      setSelectedNiche(n.id);
+                      if (!artStyle) setArtStyle(n.defaultArtStyle);
+                      setTone(n.defaultTone);
+                    }}
+                  >
+                    <CardContent className="p-4 text-center flex flex-col flex-1 items-center justify-center gap-1.5">
+                      <div className="text-2xl">{n.icon}</div>
+                      <div className="font-medium text-sm">{n.name}</div>
+                      <Badge variant="secondary" className="text-[11px]">
+                        Overall {score.overall}%
+                      </Badge>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              <Card className="h-fit">
+                <CardContent className="p-4 space-y-3">
+                  <div className="text-sm font-semibold">Niche Score Card</div>
+                  {activeNicheScore ? (
+                    <>
+                      <div className="rounded-md border p-3 bg-muted/30">
+                        <p className="text-xs text-muted-foreground">Overall potential</p>
+                        <p className="text-2xl font-bold">{activeNicheScore.overall}%</p>
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          Based on topic, art style, voice, language, tone and time.
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        {PLATFORMS.map((p) => (
+                          <div key={p} className="flex items-center justify-between rounded-md border px-2.5 py-1.5 text-xs">
+                            <span>{p === "FACEBOOK" ? "FB" : p === "YOUTUBE" ? "YT" : "IG"}</span>
+                            <span className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {factorAverages && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Topic: <span className="font-semibold">{factorAverages.topic}%</span></div>
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Art: <span className="font-semibold">{factorAverages.art}%</span></div>
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Voice: <span className="font-semibold">{factorAverages.voice}%</span></div>
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Language: <span className="font-semibold">{factorAverages.language}%</span></div>
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Tone: <span className="font-semibold">{factorAverages.tone}%</span></div>
+                          <div className="rounded-md border px-2 py-1 text-[11px]">Time: <span className="font-semibold">{factorAverages.time}%</span></div>
+                        </div>
+                      )}
+
+                      <Separator />
+                      <div className="space-y-1 text-xs">
+                        <p><span className="text-muted-foreground">Recommended art:</span> {NICHES.find((n) => n.id === activeNicheForScore)?.defaultArtStyle.replace(/-/g, " ")}</p>
+                        <p><span className="text-muted-foreground">Recommended voice:</span> {recommendVoice(voices, tone)?.name ?? "Auto"}</p>
+                        <p><span className="text-muted-foreground">Recommended language:</span> {language.toUpperCase()}</p>
+                        <p><span className="text-muted-foreground">Recommended tone:</span> <span className="capitalize">{NICHES.find((n) => n.id === activeNicheForScore)?.defaultTone ?? tone}</span></p>
+                        <p>
+                          <span className="text-muted-foreground">Recommended time:</span>{" "}
+                          {activeNicheForScore && suggestedSchedule?.localSlots[0]?.localTime
+                            ? `${suggestedSchedule.localSlots[0].localTime} (best window for shorts/reels)`
+                            : "Select a niche to see best shorts/reels time"}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Select a niche to view score details.</p>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
 
@@ -557,6 +788,26 @@ export default function NewAutomationPage() {
           <h2 className="text-xl font-semibold">Review Automation</h2>
           <Card>
             <CardContent className="p-6 space-y-4">
+              {finalScore !== null && activeNicheScore && (
+                <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold">Final Score</p>
+                      <p className="text-xs text-muted-foreground">Average of selected platforms</p>
+                    </div>
+                    <p className="text-2xl font-bold">{finalScore}%</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    {PLATFORMS.filter((p) => selectedPlatforms.size === 0 || selectedPlatforms.has(p)).map((p) => (
+                      <div key={p} className="rounded-md border px-2 py-1 text-center">
+                        <div className="text-muted-foreground">{p === "FACEBOOK" ? "FB" : p === "YOUTUBE" ? "YT" : "IG"}</div>
+                        <div className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-muted-foreground">Name</span>

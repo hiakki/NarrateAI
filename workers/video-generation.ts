@@ -282,10 +282,10 @@ const worker = new Worker<VideoJobData>(
       throw error;
     }
   },
-  { connection: redis as never, concurrency: 1 }
+  { connection: redis as never, concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10) }
 );
 
 worker.on("completed", (job) => log.log(`Job ${job.id} completed`));
 worker.on("failed", (job, err) => log.error(`Job ${job?.id} failed:`, err.message));
 
-log.log("Video generation worker started. Waiting for jobs...");
+log.log(`Video generation worker started (concurrency=${worker.opts.concurrency}). Waiting for jobs...`);
