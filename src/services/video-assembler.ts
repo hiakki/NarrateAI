@@ -26,6 +26,8 @@ const MUSIC_VOLUME: Record<string, number> = {
   educational: 0.12,
 };
 
+const TRANSITION_SECONDS = 0.18;
+
 const DRAMATIC_TONES = new Set(["dramatic"]);
 const HORROR_NICHES = new Set(["scary-stories", "urban-legends", "true-crime", "conspiracy-theories"]);
 
@@ -204,8 +206,13 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   const audioIdx = imagePaths.length;
   args.push("-i", audioPath);
 
+  const includeMusic = musicPath ? await hasAudioStream(musicPath) : false;
+  if (musicPath && !includeMusic) {
+    log.warn(`Music input has no audio stream, skipping BGM: ${musicPath}`);
+  }
+
   let musicIdx = -1;
-  if (musicPath) {
+  if (musicPath && includeMusic) {
     musicIdx = audioIdx + 1;
     args.push("-i", musicPath);
   }
@@ -218,11 +225,17 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     const dur = Math.max(1, (sceneTimings[i].endMs - sceneTimings[i].startMs) / 1000);
     const frames = Math.round(dur * FPS);
     const kb = getKenBurnsEffect(i, imagePaths.length, isDramatic);
+    const fadeIn = i === 0 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
+    const fadeOut = i === imagePaths.length - 1 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
+    const fadeOutStart = Math.max(0, dur - fadeOut);
 
     log.log(`Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
 
     filterParts.push(
-      `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`
+      `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS`
+      + `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}`
+      + `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}`
+      + `[v${i}]`,
     );
     concatInputs.push(`[v${i}]`);
   }
@@ -238,10 +251,13 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   );
 
   let audioMap: string;
-  if (musicPath) {
-    filterParts.push(`[${audioIdx}:a]volume=1.0[voice]`);
-    filterParts.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[music]`);
-    filterParts.push(`[voice][music]amix=inputs=2:duration=first[aout]`);
+  if (musicPath && includeMusic) {
+    // ffmpeg 8+ forbids using the same filter pad as input to multiple filters.
+    // Use asplit to fan the voice stream into two copies.
+    filterParts.push(`[${audioIdx}:a]volume=1.0,asplit=2[va][vb]`);
+    filterParts.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[bgm]`);
+    filterParts.push(`[bgm][vb]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=220:makeup=1[ducked]`);
+    filterParts.push(`[va][ducked]amix=inputs=2:duration=first:dropout_transition=0[aout]`);
     audioMap = "[aout]";
   } else {
     audioMap = `${audioIdx}:a:0`;
@@ -279,11 +295,40 @@ function runFfmpeg(args: string[]): Promise<void> {
       if (code === 0) {
         resolve();
       } else {
-        const tail = stderr.slice(-800);
-        reject(new Error(`ffmpeg exited ${code}: ${tail}`));
+        // Extract meaningful error lines instead of dumping raw filter text
+        const lines = stderr.split("\n");
+        const errorLines = lines.filter((l) =>
+          /error|invalid|no such|matches no|not found|cannot|failed/i.test(l),
+        );
+        const useful = errorLines.length > 0
+          ? errorLines.slice(-5).join(" | ")
+          : stderr.slice(-600);
+        reject(new Error(`ffmpeg exited ${code}: ${useful}`));
       }
     });
     proc.on("error", (err) => reject(new Error(`ffmpeg spawn: ${err.message}`)));
+  });
+}
+
+function hasAudioStream(inputPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const args = [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=codec_type",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      inputPath,
+    ];
+    const proc = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+    proc.on("close", (code) => {
+      if (code !== 0) return resolve(false);
+      resolve(/\baudio\b/i.test(out));
+    });
+    proc.on("error", () => resolve(false));
   });
 }
 
@@ -303,25 +348,55 @@ async function writeWordChunkSRT(
   const lines: string[] = [];
   let counter = 1;
   const maxChunk = getChunkSize(language);
+  const minChunkMs = 500;
+  const maxChunkMs = 2200;
 
   for (let i = 0; i < scenes.length; i++) {
-    const words = scenes[i].text.split(/\s+/).filter(Boolean);
+    const text = scenes[i].text.trim();
+    const words = text.split(/\s+/).filter(Boolean);
     if (words.length === 0) continue;
 
     const sceneStart = timings[i].startMs;
     const sceneDur = timings[i].endMs - timings[i].startMs;
-    const chunkSize = Math.min(maxChunk, Math.max(2, Math.ceil(words.length / 4)));
     const chunks: string[] = [];
 
-    for (let w = 0; w < words.length; w += chunkSize) {
-      chunks.push(words.slice(w, w + chunkSize).join(" "));
+    // Prefer phrase boundaries first; fallback to word chunking.
+    const phraseCandidates = text
+      .split(/(?<=[,.;:!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (phraseCandidates.length >= 2) {
+      for (const p of phraseCandidates) {
+        const pw = p.split(/\s+/).filter(Boolean);
+        if (pw.length <= maxChunk + 1) {
+          chunks.push(p);
+        } else {
+          for (let w = 0; w < pw.length; w += maxChunk) {
+            chunks.push(pw.slice(w, w + maxChunk).join(" "));
+          }
+        }
+      }
+    } else {
+      const chunkSize = Math.min(maxChunk, Math.max(2, Math.ceil(words.length / 4)));
+      for (let w = 0; w < words.length; w += chunkSize) {
+        chunks.push(words.slice(w, w + chunkSize).join(" "));
+      }
     }
 
-    const chunkDur = sceneDur / chunks.length;
+    // Allocate chunk duration proportionally by character length for tighter sync.
+    const lengths = chunks.map((c) => Math.max(1, c.replace(/\s+/g, "").length));
+    const totalLen = lengths.reduce((a, b) => a + b, 0);
+    let cursor = sceneStart;
 
     for (let c = 0; c < chunks.length; c++) {
-      const start = Math.round(sceneStart + c * chunkDur);
-      const end = Math.round(sceneStart + (c + 1) * chunkDur);
+      const baseDur = Math.round((lengths[c] / totalLen) * sceneDur);
+      const dur = Math.max(minChunkMs, Math.min(maxChunkMs, baseDur));
+      const start = cursor;
+      const end = c === chunks.length - 1
+        ? sceneStart + sceneDur
+        : Math.min(sceneStart + sceneDur, cursor + dur);
+      cursor = end;
       lines.push(`${counter}`);
       lines.push(`${fmtTime(start)} --> ${fmtTime(end)}`);
       lines.push(chunks[c]);

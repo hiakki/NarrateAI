@@ -93,6 +93,8 @@ export async function POST(
     await enqueueVideoGeneration({
       videoId: id,
       seriesId: video.seriesId,
+      userId: session.user.id,
+      userName: session.user.name ?? session.user.email?.split("@")[0] ?? "user",
       title: video.title ?? "Untitled",
       scriptText: video.scriptText ?? "",
       scenes,

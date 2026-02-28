@@ -11,11 +11,14 @@ import { getDefaultVoiceId } from "../src/config/voices";
 import { createLogger } from "../src/lib/logger";
 
 const db = new PrismaClient();
-const { log, warn, error: err } = createLogger("Scheduler");
+const logger = createLogger("Scheduler");
+const { log, warn, error: err, debug } = logger;
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
+const FAILED_RETRY_AFTER_MS = 10 * 60 * 1000; // retry FAILED after 10 min
+const MAX_AUTO_RETRIES = 2;
 
 interface AutoRow {
   id: string;
@@ -37,6 +40,8 @@ interface AutoRow {
   seriesId: string | null;
   user: {
     id: string;
+    name: string | null;
+    email: string;
     defaultLlmProvider: string | null;
     defaultTtsProvider: string | null;
     defaultImageProvider: string | null;
@@ -124,13 +129,13 @@ function isDue(auto: AutoRow): { due: boolean; reason: string } {
 
 async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
   const { due, reason } = isDue(auto as unknown as AutoRow);
-  log(
-    `"${auto.name}" | time=${auto.postTime} tz=${auto.timezone} freq=${auto.frequency} lastRun=${auto.lastRunAt?.toISOString() ?? "never"} | due=${due} (${reason})`,
-  );
 
-  if (!due) return;
+  if (!due) {
+    debug(`SKIP "${auto.name}" — ${reason}`);
+    return;
+  }
 
-  log(`Triggering automation "${auto.name}" (${auto.id})`);
+  log(`TRIGGER "${auto.name}" (${auto.id}) — ${reason}`);
 
   if (!auto.seriesId) {
     log(`Automation "${auto.name}" has no linked series, creating one...`);
@@ -225,6 +230,8 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     await enqueueVideoGeneration({
       videoId: video.id,
       seriesId: auto.seriesId,
+      userId: auto.user.id,
+      userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
       title: script.title,
       scriptText: video.scriptText!,
       scenes: script.scenes,
@@ -266,6 +273,8 @@ async function checkSchedules() {
         user: {
           select: {
             id: true,
+            name: true,
+            email: true,
             defaultLlmProvider: true,
             defaultTtsProvider: true,
             defaultImageProvider: true,
@@ -274,7 +283,7 @@ async function checkSchedules() {
       },
     });
 
-    log(`Found ${automations.length} enabled automation(s), processing in batches of ${SCHEDULER_CONCURRENCY}`);
+    debug(`${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
     await runInBatches(automations, SCHEDULER_CONCURRENCY, processAutomation);
     await checkReadyVideosForPosting();
@@ -362,18 +371,19 @@ async function recoverStuckVideos() {
   try {
     const now = Date.now();
 
-    // Find videos stuck in GENERATING or QUEUED for too long
-    const stuckVideos = await db.video.findMany({
+    const recoverable = await db.video.findMany({
       where: {
-        status: { in: ["GENERATING", "QUEUED"] },
+        status: { in: ["GENERATING", "QUEUED", "FAILED"] },
       },
       include: {
         series: {
           include: {
-            automation: { select: { id: true, name: true } },
+            automation: { select: { id: true, name: true, enabled: true } },
             user: {
               select: {
                 id: true,
+                name: true,
+                email: true,
                 defaultLlmProvider: true,
                 defaultTtsProvider: true,
                 defaultImageProvider: true,
@@ -384,23 +394,37 @@ async function recoverStuckVideos() {
       },
     });
 
-    if (stuckVideos.length === 0) return;
-    log(`Found ${stuckVideos.length} video(s) in GENERATING/QUEUED state, checking for stuck ones...`);
+    if (recoverable.length === 0) return;
+    log(`Found ${recoverable.length} video(s) in GENERATING/QUEUED/FAILED state, checking for recoverable ones...`);
 
-    for (const video of stuckVideos) {
+    for (const video of recoverable) {
       const age = now - new Date(video.updatedAt).getTime();
-      const threshold = video.status === "GENERATING" ? STUCK_GENERATING_MS : STUCK_QUEUED_MS;
+      const retryCount = video.retryCount ?? 0;
 
-      if (age < threshold) {
-        log(`Video ${video.id} (${video.status}) updated ${Math.round(age / 1000)}s ago — still within threshold, skipping`);
-        continue;
+      if (video.status === "FAILED") {
+        // Only auto-retry FAILED videos that belong to an enabled automation
+        const auto = video.series.automation;
+        if (!auto?.enabled) continue;
+        if (retryCount >= MAX_AUTO_RETRIES) {
+          if (retryCount === MAX_AUTO_RETRIES) {
+            log(`Video ${video.id} exhausted ${MAX_AUTO_RETRIES} auto-retries, leaving as FAILED`);
+          }
+          continue;
+        }
+        if (age < FAILED_RETRY_AFTER_MS) continue;
+        log(`Auto-retrying FAILED video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES}, auto="${auto.name}", failed ${Math.round(age / 60000)}m ago)`);
+      } else {
+        const threshold = video.status === "GENERATING" ? STUCK_GENERATING_MS : STUCK_QUEUED_MS;
+        if (age < threshold) {
+          debug(`SKIP ${video.id} (${video.status}) — ${Math.round(age / 1000)}s old, threshold=${Math.round(threshold / 1000)}s`);
+          continue;
+        }
+        const autoName = video.series.automation?.name ?? "manual";
+        log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}")`);
       }
 
-      const autoName = video.series.automation?.name ?? "manual";
       const hasCheckpoint = video.checkpointData && typeof video.checkpointData === "object";
       const completedStages = (video.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
-
-      log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}", checkpoint=[${completedStages.join(",")}])`);
 
       try {
         const resolved = resolveProviders(video.series, video.series.user);
@@ -417,15 +441,21 @@ async function recoverStuckVideos() {
           continue;
         }
 
-        // Reset status to QUEUED so the worker picks it up fresh (checkpoint will handle resume)
         await db.video.update({
           where: { id: video.id },
-          data: { status: "QUEUED", errorMessage: null },
+          data: {
+            status: "QUEUED",
+            errorMessage: null,
+            retryCount: { increment: 1 },
+          },
         });
 
+        const usr = video.series.user;
         await enqueueVideoGeneration({
           videoId: video.id,
           seriesId: video.seriesId,
+          userId: usr.id,
+          userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
           title: video.title ?? "Untitled",
           scriptText: video.scriptText ?? "",
           scenes,

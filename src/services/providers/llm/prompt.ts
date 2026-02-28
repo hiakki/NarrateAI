@@ -50,8 +50,10 @@ ${visualGuideBlock}
 - The "text" field is narration spoken by AI voiceover — write it to be HEARD, not read
 - Target approximately ${input.duration} seconds of narration across all ${sceneCount} scenes
 - Use short, punchy sentences. Every word must earn its place.
+- Scene 1 MUST open with a strong hook in the first 2 seconds (surprise, conflict, shocking fact, or emotional trigger).
 - Build emotional intensity across scenes — never repeat the same energy level
 - Tell a COMPLETE story with a beginning, rising tension, climax, and resolution — do NOT leave the story unfinished
+- Keep each scene narration in a tight 1-2 lines so pacing stays fast for reels/shorts.
 ${languageRule}
 
 ═══ VISUAL DESCRIPTION RULES (CRITICAL — READ CAREFULLY) ═══
@@ -96,6 +98,11 @@ Return ONLY valid JSON:
 }
 
 Generate exactly ${sceneCount} scenes. Every scene must be visually DISTINCT — different camera angle, different color temperature, different subject focus. ESCALATE visual intensity with the story.
+Intensity curve guidance:
+- Scene 1: Hook (high curiosity/shock)
+- Scenes 2-${Math.max(2, sceneCount - 2)}: Build tension and stakes with progressively stronger visual/action beats
+- Scene ${Math.max(2, sceneCount - 1)}: Peak intensity / climax frame
+- Scene ${sceneCount}: Resolution frame with payoff (still emotionally strong, but narratively conclusive)
 
 FINAL CHECK — Ask yourself for EACH scene:
 1. Does the image show EXACTLY what the narration describes? (If text says "he ran", does the image show running?)

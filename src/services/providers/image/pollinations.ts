@@ -28,10 +28,12 @@ export class PollinationsImageProvider implements ImageProviderInterface {
       const scene = scenes[i];
       const imagePath = path.join(tmpDir, `scene-${i.toString().padStart(3, "0")}.jpg`);
 
-      const rawPrompt = `${scene.visualDescription}, ${artStylePrompt}`.slice(0, 1500);
+      // scene.visualDescription is already style-enhanced upstream.
+      // Appending artStylePrompt again can over-compress/truncate useful specifics.
+      const rawPrompt = `${scene.visualDescription}`.slice(0, 1500);
       const encoded = encodeURIComponent(rawPrompt);
       const seed = (Date.now() % 1_000_000) + i;
-      const url = `${API_URL}/${encoded}?width=768&height=1344&nologo=true&model=flux&seed=${seed}&key=${apiKey}`;
+      const url = `${API_URL}/${encoded}?width=832&height=1472&nologo=true&model=flux&seed=${seed}&key=${apiKey}`;
 
       let buffer: Buffer | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {

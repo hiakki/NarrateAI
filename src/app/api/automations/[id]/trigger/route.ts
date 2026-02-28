@@ -24,6 +24,8 @@ export async function POST(
         user: {
           select: {
             id: true,
+            name: true,
+            email: true,
             defaultLlmProvider: true,
             defaultTtsProvider: true,
             defaultImageProvider: true,
@@ -108,6 +110,8 @@ export async function POST(
     await enqueueVideoGeneration({
       videoId: video.id,
       seriesId: auto.seriesId,
+      userId: auto.user.id,
+      userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
       title: script.title,
       scriptText: video.scriptText!,
       scenes: script.scenes,

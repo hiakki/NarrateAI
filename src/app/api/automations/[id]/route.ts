@@ -148,7 +148,7 @@ export async function DELETE(
     const automation = await db.automation.findUnique({
       where: { id },
       include: {
-        series: { include: { videos: { select: { id: true } } } },
+        series: { include: { videos: { select: { id: true, videoUrl: true } } } },
       },
     });
 
@@ -158,11 +158,15 @@ export async function DELETE(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     if (automation.series) {
-      const videoDir = path.join(process.cwd(), "public", "videos");
       await Promise.allSettled(
-        automation.series.videos.map((v) =>
-          fs.unlink(path.join(videoDir, `${v.id}.mp4`)).catch(() => {}),
-        ),
+        automation.series.videos.map(async (v) => {
+          if (v.videoUrl?.includes("/video.mp4")) {
+            const dir = path.join(process.cwd(), "public", v.videoUrl.replace(/^\//, "").replace(/\/video\.mp4$/, ""));
+            await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+          }
+          await fs.unlink(path.join(process.cwd(), "public", "videos", `${v.id}.mp4`)).catch(() => {});
+          await fs.rm(path.join(process.cwd(), "public", "videos", v.id), { recursive: true, force: true }).catch(() => {});
+        }),
       );
       await db.series.delete({ where: { id: automation.series.id } });
     }

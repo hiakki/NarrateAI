@@ -235,7 +235,7 @@ export async function postVideoToSocials(
     return [];
   }
 
-  const videoPath = path.join(process.cwd(), "public", "videos", `${videoId}.mp4`);
+  const videoPath = path.join(process.cwd(), "public", (video.videoUrl ?? "").replace(/^\//, ""));
   const nicheId = video.series.niche ?? "";
   const title = video.title ?? "Check this out!";
   const scriptText = video.scriptText ?? undefined;

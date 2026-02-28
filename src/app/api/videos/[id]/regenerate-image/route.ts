@@ -60,9 +60,13 @@ export async function POST(
     const newImagePath = result.imagePaths[0];
     const ext = path.extname(newImagePath) || ".png";
 
-    const scenesDir = path.join(process.cwd(), "public", "videos", id, "scenes");
+    const { resolveScenesDir } = await import("@/lib/video-paths");
+    const scenesDir = video.videoUrl
+      ? resolveScenesDir(video.videoUrl)
+      : path.join(process.cwd(), "public", "videos", id, "scenes");
     await fs.mkdir(scenesDir, { recursive: true });
-    const dest = path.join(scenesDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
+    const sceneName = `scene-${index.toString().padStart(3, "0")}${ext}`;
+    const dest = path.join(scenesDir, sceneName);
     await fs.copyFile(newImagePath, dest);
 
     checkpoint.imagePaths[index] = newImagePath;
@@ -73,8 +77,12 @@ export async function POST(
       data: { checkpointData: checkpoint as never },
     });
 
+    const baseUrl = video.videoUrl
+      ? video.videoUrl.replace(/\/video\.mp4$/, "")
+      : `/videos/${id}`;
+
     return NextResponse.json({
-      data: { url: `/videos/${id}/scenes/scene-${index.toString().padStart(3, "0")}${ext}` },
+      data: { url: `${baseUrl}/scenes/${sceneName}` },
     });
   } catch (error) {
     console.error("Regenerate image error:", error);

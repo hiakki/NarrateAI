@@ -18,14 +18,39 @@ export class GeminiLlmProvider implements LlmProviderInterface {
     log.log(`LLM prompt:\n${"─".repeat(60)}\n${prompt}\n${"─".repeat(60)}`);
 
     const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: { responseMimeType: "application/json" },
-    });
+    const configured = (process.env.GEMINI_MODEL ?? "").trim();
+    log.log(`Configured GEMINI_MODEL="${configured || "gemini-2.5-flash (default)"}"`);
+    const modelCandidates = [...new Set([
+      configured || "gemini-2.5-flash",
+      // Optional preview fallback if user explicitly configures it.
+      "gemini-2.5-flash",
+    ])].filter(Boolean);
+
+    let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+    let lastErr: unknown = null;
+    let usedModel = modelCandidates[0];
+
+    for (const model of modelCandidates) {
+      try {
+        usedModel = model;
+        response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: "application/json" },
+        });
+        break;
+      } catch (err) {
+        lastErr = err;
+        log.warn(`Model "${model}" failed, trying fallback if available: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (!response) {
+      throw (lastErr instanceof Error ? lastErr : new Error("Gemini generation failed for all model candidates"));
+    }
 
     const text = response.text ?? "";
-    log.log(`Raw response length: ${text.length} chars`);
+    log.log(`Raw response length: ${text.length} chars (model=${usedModel})`);
 
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
     const scenes: Scene[] = (parsed.scenes as Scene[]) || [];

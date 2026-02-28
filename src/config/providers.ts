@@ -9,11 +9,18 @@ export interface ProviderInfo {
   envVar: string;
 }
 
+function getGeminiDisplayName(): string {
+  const model = (process.env.GEMINI_MODEL ?? "").trim();
+  if (!model) return "Gemini 2.5 Flash";
+  if (/gemini-3.*flash/i.test(model)) return "Gemini 3 Flash Preview";
+  return `Gemini (${model})`;
+}
+
 export const LLM_PROVIDERS: Record<string, ProviderInfo> = {
   GEMINI_FLASH: {
     id: "GEMINI_FLASH",
-    name: "Gemini 2.5 Flash",
-    description: "Fast, structured output, great value",
+    name: getGeminiDisplayName(),
+    description: "Fast, structured output, configurable via GEMINI_MODEL",
     costEstimate: "~$0.003/script",
     qualityLabel: "Great",
     envVar: "GEMINI_API_KEY",

@@ -212,6 +212,7 @@ model Video {
   postedPlatforms  Json             @default("[]")
   errorMessage     String?
   checkpointData   Json?
+  retryCount       Int              @default(0)
 
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt

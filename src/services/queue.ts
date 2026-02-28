@@ -7,6 +7,8 @@ const log = createLogger("Queue");
 export interface VideoJobData {
   videoId: string;
   seriesId: string;
+  userId: string;
+  userName: string;
   title: string;
   scriptText: string;
   scenes: { text: string; visualDescription: string }[];
@@ -52,6 +54,25 @@ function getQueue(): Queue<VideoJobData> {
 export async function enqueueVideoGeneration(data: VideoJobData): Promise<string> {
   const queue = getQueue();
   const jobId = data.videoId;
+
+  // BullMQ silently ignores add() when a job with the same ID already exists
+  // (even in failed/completed state). Remove stale jobs first so retries work.
+  try {
+    const existing = await queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === "failed" || state === "completed" || state === "unknown") {
+        await existing.remove();
+        log.log(`Removed stale ${state} job ${jobId} before re-enqueue`);
+      } else if (state === "active" || state === "waiting" || state === "delayed") {
+        log.warn(`Job ${jobId} already ${state} in queue, skipping duplicate enqueue`);
+        return jobId;
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not check/remove existing job ${jobId}:`, e);
+  }
+
   log.log(`Enqueuing job ${jobId} (LLM: ${data.llmProvider}, TTS: ${data.ttsProvider}, Image: ${data.imageProvider})`);
   const job = await queue.add("generate", data, { jobId });
   log.log(`Job enqueued: ${job.id}`);
