@@ -5,7 +5,9 @@ const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 const threshold = LEVELS[LOG_LEVEL as keyof typeof LEVELS] ?? LEVELS.info;
 
 function ts(): string {
-  return new Date().toISOString().replace("T", " ").slice(0, 19);
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function prefix(tag: string): string {

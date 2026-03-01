@@ -10,7 +10,7 @@ export function getSceneCount(duration: number): number {
   return Math.min(12, Math.round(duration / 10));
 }
 
-export function buildPrompt(input: ScriptInput, sceneCount: number): string {
+export function buildPrompt(input: ScriptInput, sceneCount: number, characterPrompt?: string): string {
   const lang = input.language ?? "en";
   const langName = getLanguageName(lang);
   const isNonEnglish = lang !== "en";
@@ -40,7 +40,25 @@ export function buildPrompt(input: ScriptInput, sceneCount: number): string {
     .map((g, i) => `  Scene ${i + 1}: ${g}`)
     .join("\n");
 
-  return `You are an expert short-form video scriptwriter AND cinematic image prompt engineer who creates VIRAL content. Create a script for a ~${input.duration}-second faceless narration video.
+  const characterBlock = characterPrompt ? `
+═══ CHARACTER MODE (ACTIVE) ═══
+This video features a RECURRING MAIN CHARACTER who MUST appear in EVERY scene.
+
+CHARACTER APPEARANCE (include this description VERBATIM at the start of every visualDescription):
+"${characterPrompt}"
+
+CHARACTER RULES:
+1. The character above is the PROTAGONIST — every scene shows THEM doing something.
+2. EVERY visualDescription MUST begin with the full character description, then describe the character's specific action, expression, and pose for that scene.
+3. VISUAL CONSISTENCY IS CRITICAL: same body type, same clothing, same features in EVERY image. AI image generators have no memory between scenes — the ONLY way to maintain consistency is repeating the exact same character description.
+4. Narration should reference the character's actions, reactions, and dialogue.
+5. Vary the character's EXPRESSION and POSE per scene to match the story beat, but NEVER change their physical appearance or outfit.
+
+` : "";
+
+  const videoTypeLabel = characterPrompt ? "character-driven narration" : "faceless narration";
+
+  return `You are an expert short-form video scriptwriter AND cinematic image prompt engineer who creates VIRAL content. Create a script for a ~${input.duration}-second ${videoTypeLabel} video.
 
 NICHE: ${input.niche}
 TONE: ${input.tone}
@@ -48,7 +66,7 @@ ART STYLE: ${input.artStyle}
 MOOD: ${enhancer.moodKeywords}
 LANGUAGE: ${langName}
 ${input.topic ? `TOPIC: ${input.topic}` : "Choose a trending, highly engaging topic for this niche."}
-
+${characterBlock}
 STORYTELLING RULES (follow these precisely):
 ${storytellingBlock}
 
@@ -124,6 +142,7 @@ FINAL CHECK — Ask yourself for EACH scene:
 2. Does the image feel ALIVE — with motion, energy, and a captured-in-the-moment quality?
 3. Would a viewer IMMEDIATELY understand what is happening in the story just from the image?
 4. WORD COUNT CHECK: Count every word in "text" across ALL scenes. Must be between ${minTotalWords}–${maxTotalWords} words (target ${targetTotalWords}). Too few → expand scenes. Too many → trim sentences.
-5. Does the story feel COMPLETE? Does the last scene give closure (resolution, answer to the hook, or clear takeaway)? Would a viewer feel satisfied, not cut off? If the ending feels abrupt or like a cliffhanger, rewrite the final scene(s).
-If any answer is NO, rewrite until all five are YES.`;
+5. Does the story feel COMPLETE? Does the last scene give closure (resolution, answer to the hook, or clear takeaway)? Would a viewer feel satisfied, not cut off? If the ending feels abrupt or like a cliffhanger, rewrite the final scene(s).${characterPrompt ? `
+6. CHARACTER CHECK: Does every visualDescription start with the full character description? Is the character the main focus of every scene? Are their appearance and outfit IDENTICAL across all scenes?` : ""}
+If any answer is NO, rewrite until all are YES.`;
 }

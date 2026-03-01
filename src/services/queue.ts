@@ -26,6 +26,7 @@ export interface VideoJobData {
   ttsProvider: string;
   imageProvider: string;
   reviewMode?: boolean;
+  characterPrompt?: string;
 }
 
 function createRedisConnection() {

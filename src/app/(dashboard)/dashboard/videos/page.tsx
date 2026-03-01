@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Plus, Film, Trash2, Loader2, X,
-  Instagram, Youtube, Facebook, CloudOff,
+  Instagram, Youtube, Facebook, CloudOff, Star, EyeOff,
 } from "lucide-react";
 
 interface PostedEntry {
@@ -26,6 +26,7 @@ interface SeriesItem {
   name: string;
   niche: string;
   artStyle: string;
+  characterId: string | null;
   _count: { videos: number };
   videos: {
     status: string;
@@ -207,10 +208,19 @@ export default function VideosPage() {
                       <span className="capitalize">{s.niche}</span>
                       <span>{s._count.videos} video{s._count.videos !== 1 ? "s" : ""}</span>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
                       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs capitalize">
                         {s.artStyle.replace(/-/g, " ")}
                       </span>
+                      {s.characterId ? (
+                        <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700">
+                          <Star className="h-2.5 w-2.5 mr-0.5" /> Star
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                          <EyeOff className="h-2.5 w-2.5 mr-0.5" /> Faceless
+                        </span>
+                      )}
                       {vs && (
                         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${vs.className}`}>
                           {vs.label}

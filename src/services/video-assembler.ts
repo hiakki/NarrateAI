@@ -29,7 +29,7 @@ const MUSIC_VOLUME: Record<string, number> = {
 const TRANSITION_SECONDS = 0.18;
 
 const DRAMATIC_TONES = new Set(["dramatic"]);
-const HORROR_NICHES = new Set(["scary-stories", "urban-legends", "true-crime", "conspiracy-theories"]);
+const HORROR_NICHES = new Set(["scary-stories", "true-crime", "conspiracy-theories", "dark-psychology", "survival"]);
 
 type KenBurnsEffect = {
   zExpr: string;

@@ -48,6 +48,7 @@ const createSchema = z.object({
   llmProvider: z.string().optional(),
   ttsProvider: z.string().optional(),
   imageProvider: z.string().optional(),
+  characterId: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -85,6 +86,15 @@ export async function POST(req: NextRequest) {
 
     const resolved = resolveProviders(seriesProviders, user);
 
+    let characterPrompt: string | undefined;
+    if (input.characterId) {
+      const char = await db.character.findUnique({
+        where: { id: input.characterId },
+        select: { fullPrompt: true, userId: true },
+      });
+      if (char && char.userId === session.user.id) characterPrompt = char.fullPrompt;
+    }
+
     const result = await db.$transaction(async (tx) => {
       const series = await tx.series.create({
         data: {
@@ -95,6 +105,7 @@ export async function POST(req: NextRequest) {
           voiceId: input.voiceId,
           language: input.language,
           tone: input.tone,
+          characterId: input.characterId ?? null,
           llmProvider: (input.llmProvider as never) ?? null,
           ttsProvider: (input.ttsProvider as never) ?? null,
           imageProvider: (input.imageProvider as never) ?? null,
@@ -134,6 +145,7 @@ export async function POST(req: NextRequest) {
       ttsProvider: resolved.tts,
       imageProvider: resolved.image,
       reviewMode: true,
+      characterPrompt,
     });
 
     return NextResponse.json({ data: { seriesId: result.series.id, videoId: result.video.id } }, { status: 201 });

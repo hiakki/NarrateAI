@@ -5,6 +5,7 @@ export interface ScriptInput {
   duration: number;
   topic?: string;
   language?: string;
+  characterPrompt?: string;
 }
 
 export interface Scene {

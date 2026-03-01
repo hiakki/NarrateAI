@@ -146,26 +146,7 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
       moodKeywords: "paranoid tension, hidden truths, surveillance aesthetic, glitch reality, something they don't want you to see, deep state atmosphere",
     },
   },
-  "urban-legends": {
-    dramatic: {
-      storytellingRules: [
-        "Start as if telling a friend: 'You know that road on the edge of town? Don't go there after midnight.'",
-        "Ground the legend in a specific place and time to make it feel real",
-        "Build dread through small, specific details — not jump scares",
-        "Include the 'rules' of the legend: what triggers it, how to survive",
-        "End with 'and some say...' — leave the legend alive",
-      ],
-      visualStyleGuide: [
-        "HOOK: An empty two-lane highway at 3am stretching into fog, a single broken streetlight flickering orange, faded road signs barely visible, tire marks swerving off the asphalt into darkness — cold steel-blue moonlight with sickly sodium-orange streetlight, mist hugging the road surface",
-        "BUILD: A suburban neighborhood where the fog has rolled in thick — every house dark except one with a pale light in the attic window, an empty children's playground with one swing still moving, leaves blowing across an empty sidewalk — creeping blue fog against warm house-light amber, deep shadows between houses",
-        "ESCALATE: A normal bathroom mirror where the reflection is slightly wrong — the reflection's eyes are looking in a different direction, a figure barely visible in the dark hallway behind, water droplets on the glass distorting part of the image — harsh fluorescent overhead light against pitch-dark reflected hallway, sickly green tint",
-        "REVEAL: A tall impossibly thin figure standing at the tree line just beyond the reach of a porch light, unnaturally long limbs, face obscured by shadow except for two reflective pinpoints where eyes should be — backlit by distant lightning, volumetric fog, near-total silhouette with just enough detail to disturb",
-        "AFTERMATH: The same location from the hook, now in pale dawn light — everything looks normal except for one detail that proves something was there: fresh scratches on a door, muddy footprints that lead from the road and stop at a wall, a window left open that was closed — cold blue pre-dawn with warming pink on the horizon",
-      ],
-      moodKeywords: "suburban dread, familiar places turned threatening, midnight atmosphere, foggy roads, that feeling of being followed, liminal nocturnal spaces",
-    },
-  },
-  "biblical-stories": {
+  "religious-epics": {
     dramatic: {
       storytellingRules: [
         "Open with the divine stakes — what hangs in the balance between God and man",
@@ -182,25 +163,6 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
         "GLORY: Brilliant sunrise breaking over a mountaintop with a figure standing arms raised, dark storm clouds parting to reveal pure golden light flooding a valley below, a rainbow arcing across the cleared sky — transcendent warm gold and white center against receding deep purple-grey storm, maximum light contrast",
       ],
       moodKeywords: "divine awe, sacred grandeur, Renaissance masterpiece, heavenly light against earthly darkness, faith tested and proven, biblical scale",
-    },
-  },
-  "heists": {
-    dramatic: {
-      storytellingRules: [
-        "Open with what was stolen — the impossible target, the astronomical value",
-        "Introduce the crew or mastermind with respect: 'They weren't ordinary criminals...'",
-        "Walk through the plan step by step — make the viewer feel like an accomplice",
-        "Include the moment it almost went wrong — the twist, the close call",
-        "End with the aftermath: caught or vanished? Where is the loot today?",
-      ],
-      visualStyleGuide: [
-        "HOOK: A mountain of gold bars stacked inside a massive steel vault, each bar catching a different angle of sharp spotlight, reflections dancing on polished metal walls, a single red laser security beam cutting diagonally across — deep metallic gold against cold steel-grey, cinematic shallow depth of field on nearest bar",
-        "PLAN: An overhead shot of blueprints spread on a table in a dimly lit warehouse, miniature building model alongside, black leather gloves and lockpicking tools arranged precisely, a laptop showing security camera feeds — warm desk lamp circle of light against dark industrial space, technical precision aesthetic",
-        "EXECUTION: Extreme close-up of black-gloved fingers entering a code on a vault keypad, LED numbers glowing green, sweat droplets on the glove surface, the vault mechanism beginning to turn with visible gears — shallow DOF on fingers with blurred vault behind, cold blue-green tech glow against dark steel",
-        "TENSION: A security guard's flashlight beam sweeping around a corner just as a dark figure presses flat against a wall in shadow, alarm panel on the wall with one light turning from green to amber — harsh white flashlight beam cutting through darkness, red alarm accent, silhouette-heavy composition",
-        "AFTERMATH: An empty vault with its massive door hanging open, shelves bare, a single calling card left on the floor, dust settling in the spotlights — cold industrial lighting on empty metal, the absence of treasure more dramatic than its presence, wide-angle showing the scale of emptiness",
-      ],
-      moodKeywords: "heist thriller, Ocean's Eleven tension, blueprint precision, adrenaline, the perfect crime, cold professionalism",
     },
   },
   "anime-recaps": {
@@ -276,6 +238,224 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
         "RESULT: The final transformed space or object — everything organized perfectly in matching containers, cables routed neatly, a zen-like organized desk or closet, small plant accent — bright airy natural window light, fresh mint and white palette, everything gleaming and satisfying, wide-angle to show full transformation",
       ],
       moodKeywords: "bright, clean, satisfying, before-and-after transformation, clever simplicity, visual ASMR, organizational joy",
+    },
+  },
+  "what-if": {
+    educational: {
+      storytellingRules: [
+        "Open with the scenario stated as simply as possible: 'What if gravity just... stopped?'",
+        "Immediately show the first consequence — the thing that happens in the first 5 seconds",
+        "Escalate through a chain reaction: each scene reveals a bigger, more terrifying consequence",
+        "Include the science — real physics, biology, or logic that makes it feel plausible",
+        "End with the final, mind-blowing consequence that nobody would have predicted",
+        "Make the viewer feel like they're watching it happen in real time",
+      ],
+      visualStyleGuide: [
+        "HOOK: The impossible moment frozen mid-frame — people floating off the ground with shocked expressions, water rising from a glass in a perfect sphere, cars drifting off roads into the sky — bright daylight making the impossibility feel MORE unsettling, hyper-real detail, sharp focus",
+        "CHAIN: The escalating consequence — oceans lifting off the seabed revealing the dark ocean floor, buildings cracking as their foundations shift, the atmosphere visibly thinning as gas escapes upward — wide establishing shots showing planetary scale, warm-to-cold color transition as things get worse",
+        "SCIENCE: A dramatic visualization of the underlying physics — gravitational field lines bending, molecular bonds stretching, tidal forces visualized as flowing energy — deep cosmic blue with bright orange scientific visualization overlays, clean infographic aesthetic merged with cinematic drama",
+        "PEAK: Maximum catastrophe — the Earth's crust fracturing, the sun's appearance changing, a skyline collapsing or floating apart — extreme wide angle showing the full scale of destruction, split lighting between the normal world and the transformed one",
+        "AFTERMATH: The haunting new reality — a transformed Earth landscape that's both beautiful and terrifying, alien but recognizable, silent and vast — cold ethereal lighting, muted post-apocalyptic palette with one striking color accent",
+      ],
+      moodKeywords: "mind-bending curiosity, scientific wonder, escalating dread, the impossible made real, cosmic scale consequences, thought experiment brought to life",
+    },
+    dramatic: {
+      storytellingRules: [
+        "Present the scenario like a thriller: 'It's 3:42 PM when the impossible happens'",
+        "Use a human perspective — follow one person experiencing the event",
+        "Each scene is a new stage of escalation",
+        "End with a haunting final image that stays with the viewer",
+      ],
+      visualStyleGuide: [
+        "HOOK: A single frozen moment of the impossible — a wave hanging motionless in the air, a person's shadow moving independently, the sky turning an unnatural color — hyper-real photographic quality, unsettling stillness, warm light with creeping cold edges",
+        "ESCALATE: Chaos building through human experience — crowds running, emergency sirens, a child pointing at something impossible in the sky — handheld documentary feel, desaturating colors as reality breaks down",
+        "CLIMAX: Full-scale reality break — the most dramatic visualization of the scenario at its peak, maximum visual impact, split between beauty and terror — extreme contrast, volumetric light, cinematic scale",
+      ],
+      moodKeywords: "existential dread meets wonder, reality glitching, thriller pacing, what-if anxiety, the impossible happening NOW",
+    },
+  },
+  "dark-psychology": {
+    dramatic: {
+      storytellingRules: [
+        "Open with a disturbing truth: 'You're being manipulated right now — and you don't even know it'",
+        "Present each trick or tactic as a numbered reveal — viewers love countdowns of dark knowledge",
+        "Use real-world examples: 'Advertisers use this', 'Narcissists always do this'",
+        "Make the viewer feel like they're getting forbidden knowledge — insider secrets",
+        "End with how to PROTECT yourself — turn the dark knowledge into a shield",
+        "Use second person: 'you' — put the viewer IN the scenario",
+      ],
+      visualStyleGuide: [
+        "HOOK: A close-up of an eye with a reflection showing puppet strings controlling a silhouette, or a face half in shadow with one eye glowing — dark moody lighting with a single harsh spotlight, deep indigo and crimson palette, noir aesthetic, shallow depth of field",
+        "REVEAL: A visual metaphor for manipulation — chess pieces where one is controlling others, a maze seen from above with one figure watching from outside, strings attached to a person's limbs leading to a shadowy hand above — cold blue steel lighting with warm amber accents on the controller, high contrast",
+        "EVIDENCE: Social scenarios rendered cinematically — a boardroom where one person subtly dominates, a conversation where body language tells a different story than words, a crowd unknowingly following a pattern — warm everyday lighting with subtle dark undertones, documentary-meets-thriller feel",
+        "SHIELD: Empowerment — a figure standing in light breaking free of chains or puppet strings, shattered mirror reflecting a stronger self, armor of awareness glowing around a person — transitioning from dark cold tones to warm empowering gold, dramatic rim lighting",
+      ],
+      moodKeywords: "forbidden knowledge, dark insight, manipulation exposed, noir psychological thriller, mind games revealed, empowerment through awareness",
+    },
+  },
+  "space-cosmos": {
+    dramatic: {
+      storytellingRules: [
+        "Open with scale — make the viewer feel infinitely small: 'There's a star out there so big, our entire solar system could fit inside it'",
+        "Use comparison to familiar things: 'If the Sun were a basketball, Earth would be a peppercorn 26 meters away'",
+        "Build wonder through increasingly mind-blowing facts",
+        "Include the existential question: why does this matter to us, here, now?",
+        "End with the biggest unanswered mystery — leave them staring at the ceiling at 2 AM",
+      ],
+      visualStyleGuide: [
+        "HOOK: A jaw-dropping cosmic vista — a nebula in full color spanning the entire frame, or Earth seen as a tiny pale dot from the edge of the solar system, or a supermassive black hole warping light around it — deep space black with vivid nebula colors (electric blue, magenta, gold), volumetric god rays, ultra-detailed particle effects",
+        "SCALE: Dramatic size comparison — planets lined up showing Earth as a speck, or zooming from a human to a galaxy in stages — clean dark background with objects at true color, measurement lines and subtle UI overlays, awe-inspiring logarithmic scale",
+        "WONDER: The most beautiful cosmic phenomenon — a pulsar spinning with visible energy jets, binary stars dancing around each other, aurora on an alien planet — rich saturated cosmic palette, stellar lens flares, crystalline detail on celestial objects",
+        "MYSTERY: The unknown visualized — dark matter web connecting galaxies, the edge of the observable universe as a shimmering boundary, or a visualization of what lies beyond — deep ultraviolet and cosmic indigo, ethereal ghostly structures, the vastness of the unknown",
+        "AWE: The final mind-expanding image — Earth from space with all city lights visible, or the Milky Way from its edge showing all its spiral arms — warm golden human-scale elements against cold infinite cosmic backdrop, the smallness of humanity against the grandeur of space",
+      ],
+      moodKeywords: "cosmic awe, infinite scale, existential wonder, the beauty of the void, stargazer's dream, universe at the edge of understanding",
+    },
+    educational: {
+      storytellingRules: [
+        "Present space facts as discoveries the viewer is making alongside you",
+        "Use vivid analogies: explain light-years using road trips, temperatures using everyday objects",
+        "Each scene reveals something more incredible than the last",
+        "End with the question science still can't answer",
+      ],
+      visualStyleGuide: [
+        "HOOK: A stunning space photograph brought to life — Hubble-quality deep field with thousands of galaxies, or a close-up of a planetary surface with visible geology — scientifically accurate colors, clean informational aesthetic",
+        "EXPLAIN: Clear scientific visualization — orbital mechanics, stellar lifecycle, or cosmic distance scales with clean labels and warm lighting — educational blue-white palette with vivid accents on key elements",
+        "CLIMAX: The most spectacular cosmic event — a supernova explosion, galaxy collision, or neutron star merger — maximum visual spectacle with scientifically grounded detail",
+      ],
+      moodKeywords: "cosmic classroom, stellar wonder, documentary beauty, the universe explained, scientific awe",
+    },
+  },
+  "animal-kingdom": {
+    educational: {
+      storytellingRules: [
+        "Open with the most shocking animal fact: 'This creature can survive being frozen solid — and come back to life'",
+        "Present each animal ability like a superpower — make it feel extraordinary",
+        "Use comparison to humans: 'If you could do what this ant does, you could carry a car'",
+        "Include the evolutionary WHY — what drove this insane adaptation",
+        "End with the animal that's the most mind-blowing of all — save the best for last",
+      ],
+      visualStyleGuide: [
+        "HOOK: An extreme close-up of the animal in its most dramatic moment — a chameleon's tongue mid-strike, an eagle diving at full speed with wings tucked, a deep-sea creature glowing bioluminescent in pitch darkness — macro lens detail, vivid natural colors, frozen action with motion blur on the background",
+        "ABILITY: The animal demonstrating its superpower — a mantis shrimp punching with visible shockwave, an octopus changing color and texture, a gecko walking upside down with visible toe pads — scientific visualization merged with National Geographic photography, bright natural lighting",
+        "SCALE: Size or ability comparison — the animal next to a human hand or a familiar object for scale, or a split-screen showing the human equivalent of the animal's ability — clean white background with the animal in vivid color, infographic-style comparison lines",
+        "HABITAT: The animal in its natural world — a coral reef teeming with life, a savanna at golden hour, a deep ocean trench with bioluminescence — rich environmental colors, cinematic wide shots, the animal as protagonist in its world",
+        "REVEAL: The most mind-blowing fact visualized — the animal's internal structure, its vision of the world (UV, infrared), or its impossible survival mechanism — scientific visualization with artistic beauty, cross-section or x-ray aesthetic with warm biological tones",
+      ],
+      moodKeywords: "nature's greatest hits, animal superpowers, macro wonder, National Geographic meets superhero, evolutionary marvel, the wild kingdom's secrets",
+    },
+  },
+  survival: {
+    dramatic: {
+      storytellingRules: [
+        "Open with the life-or-death scenario: 'You're 30,000 feet up. The engine just died. You have 4 minutes.'",
+        "Use second person — put the viewer IN the survival situation",
+        "Present survival steps as a countdown or sequence: 'First... then... whatever you do, DON'T...'",
+        "Include the real story of someone who survived (or didn't) to make it visceral",
+        "End with the ONE thing that separates survivors from victims — the mindset shift",
+        "Each scene should escalate the danger before revealing the solution",
+      ],
+      visualStyleGuide: [
+        "HOOK: The disaster moment frozen in time — a crashing wave about to engulf a boat, a crack spreading across ice under someone's feet, smoke filling an airplane cabin — hyper-real detail, warm human skin tones against cold hostile environment, single sharp focus point on the danger, adrenaline-freeze aesthetic",
+        "DANGER: The full scale of the threat — aerial view of a person alone in a vast ocean, a forest fire approaching a ridge, a mountain crevasse opening — extreme wide angle showing human smallness against nature's power, desaturated cold tones with hot danger accents (fire orange, deep water blue)",
+        "SURVIVAL: The critical action being taken — hands building a shelter from debris, a figure signaling with a mirror, someone applying a tourniquet — close-up on hands and tools, warm determined lighting on the person against dark threatening surroundings, shallow DOF creating intimacy",
+        "TENSION: The moment it almost fails — a rope fraying, water rising to chin level, the last match being struck — extreme macro close-up on the failing element, harsh split lighting, time-frozen at the peak moment, maximum contrast between hope and failure",
+        "RESCUE: Survival earned — a helicopter searchlight finding a person in darkness, first responders reaching the survivor, or the survivor walking out of the wilderness into civilization — warm golden rescue-light flooding cold blue scene, emotional rim lighting, the transition from death-tones to life-tones",
+      ],
+      moodKeywords: "life or death stakes, survival instinct, against nature, adrenaline and determination, human resilience, the thin line between living and dying",
+    },
+  },
+  "money-wealth": {
+    dramatic: {
+      storytellingRules: [
+        "Open with a mind-shifting money fact: 'The richest man who ever lived had so much gold, he crashed an entire economy just by walking through a country'",
+        "Present wealth secrets as forbidden knowledge: 'Here's what they'll never teach you in school about money'",
+        "Use specific numbers — '$47 billion', '3:45 AM wake-up' — precision creates credibility",
+        "Contrast the rich and the average: show what's different about their THINKING, not their stuff",
+        "End with an actionable mindset shift the viewer can apply TODAY",
+        "Make it aspirational but grounded — not 'get rich quick' but 'think differently about money'",
+      ],
+      visualStyleGuide: [
+        "HOOK: Opulent wealth made visual — a penthouse overlooking a glittering city skyline at night, a hand placing a chess piece on a board made of gold and crystal, stacks of cash in a vault with dramatic lighting — rich warm gold and deep black, shallow depth of field on the luxury object, cinematic noir-meets-luxury aesthetic",
+        "CONTRAST: Side-by-side comparison — split frame showing two morning routines, two desks, two approaches to the same problem — one side in cold fluorescent everyday tones, the other in warm rich golden tones, visual metaphor for the mindset difference",
+        "INSIGHT: The wealth principle visualized — compound interest as a growing tree, passive income as water flowing from multiple streams into one river, leverage as a small figure moving a massive boulder — clean conceptual illustration style with warm amber and deep navy, elegant minimal composition",
+        "PROOF: Real-world evidence — a timeline of wealth accumulation, a before-and-after of an investment, a graph rendered as a mountain landscape — data visualization merged with cinematic beauty, gold accents on dark sophisticated background",
+        "SHIFT: The empowering close — a figure at a crossroads choosing the road less taken, or standing at the base of a golden staircase looking up with determination — warm rising-sun gold flooding the frame, aspirational upward angle, the feeling of possibility",
+      ],
+      moodKeywords: "aspirational wealth, forbidden financial knowledge, golden luxury meets strategic thinking, the millionaire mindset, elegant ambition, money mastery",
+    },
+  },
+  "funny-stories": {
+    funny: {
+      storytellingRules: [
+        "Open with a relatable situation everyone has experienced — then twist it into absurdity",
+        "Use the comedy rule of three: set up expectation twice, subvert it the third time",
+        "Keep the punchline for the end of each scene — never telegraph the joke early",
+        "Use specific, visual humor — describe exactly what went wrong, not just 'it was funny'",
+        "End with the biggest laugh saved for last — the callback or the escalation that tops everything",
+        "Write like telling the story to a friend at a bar: natural, punchy, with comedic pauses built in",
+      ],
+      visualStyleGuide: [
+        "HOOK: A hilariously exaggerated facial expression — eyes comically wide, jaw dropped to the floor, a coffee mug frozen mid-spill in a brightly lit cartoon-like kitchen, vibrant warm colors, soft shadows, Pixar-quality 3D rendering with playful bounce lighting — bright saturated palette, comedic timing frozen in a single frame",
+        "BUILD: A relatable everyday scene going subtly wrong — a leaning tower of dishes about to topple, a cat sitting on a laptop during a video call, a person confidently walking toward a glass door — bright cheerful natural lighting, warm household colors, exaggerated perspective for comedic effect",
+        "ESCALATE: Full comedic chaos — a birthday cake sliding off a table in slow motion, a chain reaction of dominoes knocking over increasingly absurd objects, someone's face covered in whipped cream while still smiling — dynamic low angle, bright saturated colors, confetti or debris mid-air, frozen peak-comedy moment",
+        "PUNCHLINE: The aftermath — a person standing in total wreckage with a thumbs up, a dog proudly sitting next to a destroyed couch, someone reading a rejection letter and laughing — warm golden lighting with a sense of 'everything is fine', bright and inviting, comedic contrast between destruction and calm acceptance",
+      ],
+      moodKeywords: "laugh-out-loud, relatable chaos, comedic timing, bright and cheerful, exaggerated expressions, Pixar warmth, feel-good comedy",
+    },
+    casual: {
+      storytellingRules: [
+        "Tell it like a friend sharing a hilarious thing that just happened",
+        "Use conversational language — 'so this guy' not 'a gentleman proceeded to'",
+        "Build the joke with increasingly absurd details",
+        "End with a mic-drop punchline or ironic twist",
+      ],
+      visualStyleGuide: [
+        "HOOK: A bright, cheerful scene with one comically wrong detail — a giant rubber duck in a swimming pool filled with spaghetti, a cat wearing a tiny business suit — saturated warm colors, playful soft lighting, slight fish-eye lens distortion for comedic exaggeration",
+        "BUILD: The setup scene with a calm-before-the-storm vibe — everything looks normal but one element is slightly off — bright daylight, clean modern environment, subtle visual foreshadowing of the coming chaos",
+        "PUNCHLINE: Maximum comedic impact — the moment everything goes wrong captured in freeze-frame, exaggerated expressions, objects mid-flight, a perfectly timed visual gag — bright flash lighting, vibrant saturated palette, dynamic perspective",
+      ],
+      moodKeywords: "bright, warm, playful, relatable humor, slice of life comedy, feel-good vibes",
+    },
+  },
+  "zero-to-hero": {
+    dramatic: {
+      storytellingRules: [
+        "Open at the ABSOLUTE lowest point — not just 'things were hard' but a vivid, gut-wrenching moment of despair that the viewer feels physically",
+        "Show the specific turning point: the one decision, conversation, or realization that changed everything",
+        "Include the montage of grind — sleepless nights, closed doors, empty bank accounts, eating cheap noodles alone",
+        "Build to the breakthrough where effort finally meets opportunity — make it feel EARNED, not lucky",
+        "End with the triumphant present: the person standing where they once only dreamed — make the viewer feel 'if they did it, I can too'",
+        "Always tie the ending back to the opening scene — show the contrast between rock bottom and the peak",
+      ],
+      visualStyleGuide: [
+        "HOOK: Rock bottom — a figure huddled on a park bench in the rain at night, wet cardboard serving as a pillow, a single flickering streetlight barely illuminating their silhouette, water running through gutters, shoes with holes — desaturated cold blue tones, harsh single streetlight creating deep shadows, rain streaks visible in the light cone, oppressive darkness surrounding",
+        "STRUGGLE: The grind made visible — calloused hands stitching fabric by candlelight in a cramped room, a stack of rejection letters on a worn wooden table, an alarm clock showing 3:47 AM with someone already dressed for work — warm but dim single-source lighting, gritty textures, confined claustrophobic framing, muted earth tones",
+        "TURNING POINT: The spark of change — a determined pair of eyes reflecting a laptop screen in a dark room, a hand drawing a business plan on a napkin in a diner, or picking up a book from a trash can — warm amber glow from a single light source against surrounding darkness, the first hint of gold entering the color palette",
+        "RISE: Momentum building — a figure jogging at dawn past a city skyline with the sun just breaking the horizon, or presenting to a small room of people leaning forward with interest, or opening the doors of a new small shop — golden hour warmth flooding in, desaturation giving way to rich color, low angle emphasizing growing stature",
+        "TRIUMPH: Full glory — the same person from scene 1 now standing on a rooftop or stage, city lights or crowd below, perfectly dressed, sunrise or golden light creating a blazing halo, arms open wide or fist raised — maximum warm gold and amber, epic wide angle, lens flare bursting from behind them, the ultimate before-and-after contrast",
+      ],
+      moodKeywords: "rags to riches, underdog triumph, raw grit becoming gold, against impossible odds, emotional transformation, cinematic inspiration, the viewer should feel tears forming",
+    },
+  },
+  "satisfying": {
+    casual: {
+      storytellingRules: [
+        "Open with the most instantly satisfying visual — no buildup needed, hook them in 1 second",
+        "Narrate what's happening with calm, almost ASMR-like pacing — describe textures, sounds, sensations",
+        "Each scene should be a new type of satisfaction: visual symmetry, perfect cuts, smooth flows, impossible precision",
+        "Build variety — alternate between cutting, pouring, rolling, pressing, peeling, aligning",
+        "End with the most satisfying moment of all — the grand finale that makes viewers replay the video",
+        "Keep narration minimal and smooth — let the visuals do 90% of the work",
+      ],
+      visualStyleGuide: [
+        "HOOK: Extreme close-up of a razor-sharp blade slicing through a perfectly smooth block of colored kinetic sand, each layer revealed in a different pastel color, fine particles falling in slow motion — bright diffused studio lighting from above, macro lens detail showing every grain, clean white background, soft pastel color palette",
+        "BUILD: Thick golden honey pouring in a perfect spiral from a dipper into a glass jar, the rope of honey folding over itself in flawless coils, light refracting through the amber liquid — warm golden backlight creating translucent glow through the honey, clean surface reflection, tight framing on the pour, everything in pristine slow-motion detail",
+        "VARIETY: A row of identical glass marbles rolling down a perfectly crafted wooden track, splitting into channels, clicking together in sequence, each marble a different jewel color catching the light — bright clean studio lighting with soft shadows, polished surfaces reflecting everything, bird's eye view showing the perfect geometric path, satisfying symmetry",
+        "PEAK: The ultimate oddly satisfying moment — a hydraulic press slowly flattening a perfectly round sphere into a flawless disc, or a cake being frosted in one impossibly smooth motion, or dominoes falling in a perfect spiral pattern — bright even lighting, extreme macro detail, slow motion capturing every millisecond of the transformation, clean minimal background",
+        "FINALE: The completed result in perfect stillness — a row of perfectly aligned objects, a flawlessly organized color gradient, or a sculpture of sliced objects arranged in impossible precision — clean bright studio lighting, white or soft gradient background, maximum visual symmetry, the frame itself feels balanced and complete",
+      ],
+      moodKeywords: "oddly satisfying, ASMR visual, clean precision, smooth perfection, calm zen, slow motion beauty, tactile pleasure, the feeling of everything being exactly right",
     },
   },
 };

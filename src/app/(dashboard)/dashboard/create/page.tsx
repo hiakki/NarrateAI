@@ -15,8 +15,9 @@ import { getVoicesForProvider, getDefaultVoiceId } from "@/config/voices";
 import {
   ArrowLeft, ArrowRight, Loader2, RefreshCw, Sparkles, Check,
   ChevronDown, ChevronUp, Cpu, Mic, Image as ImageIcon,
-  LayoutGrid, SlidersHorizontal, FileText,
+  LayoutGrid, SlidersHorizontal, FileText, EyeOff, Star,
 } from "lucide-react";
+import Link from "next/link";
 
 type Step = 1 | 2 | 3;
 
@@ -33,6 +34,14 @@ interface ProviderData {
   available: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
   all: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
   platformDefaults: { llm: string; tts: string; image: string };
+}
+
+interface CharacterSummary {
+  id: string;
+  name: string;
+  type: string;
+  fullPrompt: string;
+  previewUrl: string | null;
 }
 
 interface CreatePrefs {
@@ -66,6 +75,11 @@ export default function CreatePage() {
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState("");
   const [prefsLoaded, setPrefsLoaded] = useState(false);
+
+  const [videoStyle, setVideoStyle] = useState<"faceless" | "star">("faceless");
+  const [characters, setCharacters] = useState<CharacterSummary[]>([]);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string>("");
+  const selectedCharacter = characters.find((c) => c.id === selectedCharacterId);
 
   const [showProviders, setShowProviders] = useState(false);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
@@ -109,10 +123,19 @@ export default function CreatePage() {
     setPrefsLoaded(true);
   }, []);
 
+  const fetchCharacters = useCallback(async () => {
+    try {
+      const res = await fetch("/api/characters");
+      const json = await res.json();
+      if (json.data) setCharacters(json.data);
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchProviders();
     loadPrefs();
-  }, [fetchProviders, loadPrefs]);
+    fetchCharacters();
+  }, [fetchProviders, loadPrefs, fetchCharacters]);
 
   useEffect(() => {
     if (!prefsLoaded) return;
@@ -150,6 +173,7 @@ export default function CreatePage() {
           topic: customTopic || undefined,
           language,
           llmProvider: llmProvider || undefined,
+          characterPrompt: selectedCharacter?.fullPrompt || undefined,
         }),
       });
       const data = await res.json();
@@ -180,6 +204,7 @@ export default function CreatePage() {
           llmProvider: llmProvider || undefined,
           ttsProvider: ttsProvider || undefined,
           imageProvider: imageProvider || undefined,
+          characterId: selectedCharacterId || undefined,
         }),
       });
       const data = await res.json();
@@ -273,6 +298,95 @@ export default function CreatePage() {
 
       {step === 2 && (
         <div className="space-y-6">
+          {/* Video Style toggle */}
+          <div>
+            <h2 className="text-xl font-semibold mb-3">Video Style</h2>
+            <div className="grid grid-cols-2 gap-3 max-w-md">
+              <button
+                type="button"
+                onClick={() => { setVideoStyle("faceless"); setSelectedCharacterId(""); }}
+                className={`flex flex-col items-center gap-2 rounded-xl border-2 p-4 transition-all ${
+                  videoStyle === "faceless"
+                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <EyeOff className={`h-6 w-6 ${videoStyle === "faceless" ? "text-primary" : "text-muted-foreground"}`} />
+                <div className="text-center">
+                  <div className="font-medium text-sm">Faceless</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">Narration with cinematic imagery</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVideoStyle("star")}
+                className={`flex flex-col items-center gap-2 rounded-xl border-2 p-4 transition-all ${
+                  videoStyle === "star"
+                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <Star className={`h-6 w-6 ${videoStyle === "star" ? "text-primary" : "text-muted-foreground"}`} />
+                <div className="text-center">
+                  <div className="font-medium text-sm">Star Mode</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">Consistent character in every scene</div>
+                </div>
+              </button>
+            </div>
+
+            {videoStyle === "star" && (
+              <div className="mt-4 rounded-lg border bg-muted/20 p-4 max-w-lg space-y-3">
+                {characters.length > 0 ? (
+                  <>
+                    <Label className="text-xs block">Choose a character</Label>
+                    <div className="space-y-2">
+                      {characters.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => setSelectedCharacterId(c.id)}
+                          className={`w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all ${
+                            selectedCharacterId === c.id
+                              ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                              : "hover:border-primary/40"
+                          }`}
+                        >
+                          <div className="w-10 h-10 rounded-md overflow-hidden bg-muted/40 shrink-0 flex items-center justify-center">
+                            {c.previewUrl ? (
+                              <img src={c.previewUrl} alt={c.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <Star className="h-4 w-4 text-muted-foreground" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-sm">{c.name}</div>
+                            <div className="text-[11px] text-muted-foreground truncate">{c.fullPrompt}</div>
+                          </div>
+                          <Badge variant="secondary" className="text-[10px] capitalize shrink-0">{c.type}</Badge>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No characters yet.</p>
+                )}
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/dashboard/characters/new">
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Create New Character
+                  </Link>
+                </Button>
+                {selectedCharacter && (
+                  <div className="rounded-md bg-muted/50 p-2.5">
+                    <p className="text-[10px] font-medium text-muted-foreground mb-1">Character prompt (used in every scene):</p>
+                    <p className="text-xs">{selectedCharacter.fullPrompt}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <Separator />
+
           <div>
             <h2 className="text-xl font-semibold mb-4">Art Style</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

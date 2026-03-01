@@ -71,7 +71,7 @@ const worker = new Worker<VideoJobData>(
     const {
       videoId, userId, userName, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
-      tone, niche, artStyle, reviewMode,
+      tone, niche, artStyle, reviewMode, characterPrompt,
     } = job.data;
 
     let title = job.data.title;
@@ -92,6 +92,7 @@ const worker = new Worker<VideoJobData>(
       const script = await generateScript(
         { niche: niche ?? "", tone: tone ?? "dramatic", artStyle: artStyle ?? "", duration: job.data.duration, language: language ?? "en" },
         llmProvider,
+        characterPrompt,
       );
       title = script.title;
       scriptText = script.fullScript;
@@ -134,7 +135,10 @@ const worker = new Worker<VideoJobData>(
 
     ctx.push(`CONTEXT LOG — ${title}\nVideo ID : ${videoId}\nUser     : ${userName} (${userId})\nCreated  : ${new Date().toISOString()}\n`);
     ctx.push(`Providers: LLM=${llmProvider}  TTS=${ttsProvider}  Image=${imageProvider}`);
-    ctx.push(`Niche=${niche}  Tone=${tone}  Art=${artStyle}  Duration=${job.data.duration}s  Language=${language ?? "en"}\n`);
+    ctx.push(`Niche=${niche}  Tone=${tone}  Art=${artStyle}  Duration=${job.data.duration}s  Language=${language ?? "en"}`);
+    ctx.push(`Video Style: ${characterPrompt ? "Star Mode" : "Faceless"}`);
+    if (characterPrompt) ctx.push(`Character Prompt: ${characterPrompt}`);
+    ctx.push("");
 
     try {
       // ── Script (log to context.txt) ──
@@ -147,7 +151,7 @@ const worker = new Worker<VideoJobData>(
           niche: niche ?? "", tone: tone ?? "dramatic",
           artStyle: artStyle ?? "", duration: job.data.duration,
           topic: undefined, language: language ?? "en",
-        }, sceneCount);
+        }, sceneCount, characterPrompt);
 
         ctxSection("1 · SCRIPT GENERATION (LLM)",
           "── SCRIPT (full narration text) ──\n" + scriptText,
@@ -212,7 +216,7 @@ const worker = new Worker<VideoJobData>(
         let enhancedSlots = imageSlots.map((s) => ({ ...s }));
         if (resolvedArtStyle) {
           enhancedSlots = imageSlots.map((s, i) => {
-            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, imageSlots.length);
+            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, imageSlots.length, characterPrompt);
             return { ...s, visualDescription: built.prompt };
           });
         }

@@ -15,7 +15,7 @@ export class LocalLlmProvider implements LlmProviderInterface {
     const apiKey = process.env.LOCAL_LLM_API_KEY || "not-needed";
 
     const sceneCount = getSceneCount(input.duration);
-    const prompt = buildPrompt(input, sceneCount);
+    const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
 
     const endpoint = `${baseURL}/chat/completions`;
     log.log(`── REQUEST ── model=${model} niche=${input.niche} duration=${input.duration}s scenes=${sceneCount}`);

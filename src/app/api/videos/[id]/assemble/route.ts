@@ -25,6 +25,7 @@ export async function POST(
             voiceId: true, language: true,
             llmProvider: true, ttsProvider: true, imageProvider: true,
             automation: { select: { name: true } },
+            character: { select: { fullPrompt: true } },
           },
         },
       },
@@ -113,6 +114,7 @@ export async function POST(
       ttsProvider: resolved.tts,
       imageProvider: resolved.image,
       reviewMode: false,
+      characterPrompt: video.series.character?.fullPrompt ?? undefined,
     });
 
     return NextResponse.json({ data: { status: "GENERATING" } });

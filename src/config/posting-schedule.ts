@@ -115,35 +115,105 @@ const EN_SCHEDULES: Record<string, NicheSchedule> = {
     ],
     reason: "Conspiracy content thrives late at night — the classic 'falling down the rabbit hole at 2 AM' effect.",
   },
-  "biblical-stories": {
+  "religious-epics": {
     viewerTimezone: US_CENTRAL,
-    viewerRegion: "US (Central / Bible Belt)",
+    viewerRegion: "US (Central / Global)",
     slots: [
       { time: "06:00", label: "Morning devotion" },
-      { time: "08:00", label: "Sunday morning" },
-      { time: "20:00", label: "Evening prayer" },
+      { time: "08:00", label: "Weekend morning" },
+      { time: "20:00", label: "Evening reflection" },
     ],
-    reason: "Faith content peaks during morning devotional time and evening wind-down. US Central/Southern audience is the core.",
+    reason: "Faith and spiritual content peaks during morning devotional time and evening wind-down. Broad global appeal across religions.",
   },
-  "urban-legends": {
+  "what-if": {
     viewerTimezone: US_EAST,
     viewerRegion: "US (East Coast)",
     slots: [
-      { time: "21:00", label: "Night time" },
-      { time: "22:30", label: "Before bed" },
-      { time: "18:00", label: "Evening" },
+      { time: "12:00", label: "Lunch brain food" },
+      { time: "18:00", label: "Evening commute" },
+      { time: "21:00", label: "Night curiosity" },
     ],
-    reason: "Same pattern as horror — urban legends perform best at night when the mood is right.",
+    reason: "What-If scenarios go viral during lunch breaks (shareable) and late evening when curiosity peaks. High comment engagement.",
   },
-  heists: {
+  "dark-psychology": {
     viewerTimezone: US_EAST,
     viewerRegion: "US (East Coast)",
     slots: [
-      { time: "19:00", label: "Evening entertainment" },
-      { time: "21:00", label: "Prime time" },
+      { time: "20:00", label: "Evening scroll" },
+      { time: "22:00", label: "Late night learning" },
+      { time: "12:00", label: "Lunch deep-dive" },
+    ],
+    reason: "Dark psychology content has insane save-rates. Performs best in evening when people are in 'learning' mode and late night rabbit holes.",
+  },
+  "space-cosmos": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "21:00", label: "Night sky gazing" },
+      { time: "12:00", label: "Lunch mind-blow" },
+      { time: "18:00", label: "Evening wonder" },
+    ],
+    reason: "Space content performs best at night (looking up at stars mood) and lunch breaks. One of the highest share-rates of any niche.",
+  },
+  "animal-kingdom": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "07:00", label: "Morning scroll" },
+      { time: "12:00", label: "Lunch break" },
+      { time: "19:00", label: "Evening relaxation" },
+    ],
+    reason: "Animal content has universal appeal and strong morning/lunch engagement. Family-friendly means it performs across all time slots.",
+  },
+  survival: {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "18:00", label: "After work" },
+      { time: "20:00", label: "Prime time" },
       { time: "13:00", label: "Lunch break" },
     ],
-    reason: "Heist stories are entertainment content — performs best during prime time TV hours when people want to be entertained.",
+    reason: "Survival content hooks viewers immediately — highest watch-through rate. Evening prime time and lunch breaks drive the most views.",
+  },
+  "money-wealth": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "06:30", label: "Hustle morning" },
+      { time: "12:00", label: "Lunch ambition" },
+      { time: "21:00", label: "Night planning" },
+    ],
+    reason: "Wealth content peaks early morning (hustle culture), lunch (aspiration scroll), and late night (planning/dreaming). Highest save-rate on IG.",
+  },
+  "funny-stories": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "12:00", label: "Lunch laugh break" },
+      { time: "17:00", label: "Post-work pick-me-up" },
+      { time: "20:00", label: "Evening scroll" },
+    ],
+    reason: "Comedy content peaks during lunch breaks and after work when people want to decompress and laugh.",
+  },
+  "zero-to-hero": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "06:00", label: "Early riser grind" },
+      { time: "07:30", label: "Morning commute" },
+      { time: "21:00", label: "Night reflection" },
+    ],
+    reason: "Underdog stories hit hardest early morning (people starting their day motivated) and at night (reflecting on their own journey).",
+  },
+  satisfying: {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "22:00", label: "Before sleep zen" },
+      { time: "12:00", label: "Lunch scroll" },
+      { time: "15:00", label: "Afternoon break" },
+    ],
+    reason: "Satisfying content performs best during downtime — lunch scroll, afternoon slump, and the pre-sleep relaxation window.",
   },
 };
 
@@ -240,7 +310,7 @@ const HI_SCHEDULES: Record<string, NicheSchedule> = {
     ],
     reason: "Conspiracy/mystery Hindi content blows up late at night. Afternoon boredom scrolling is a strong secondary window.",
   },
-  "biblical-stories": {
+  "religious-epics": {
     viewerTimezone: INDIA,
     viewerRegion: "India",
     slots: [
@@ -248,27 +318,97 @@ const HI_SCHEDULES: Record<string, NicheSchedule> = {
       { time: "20:00", label: "Shaam ki prarthana" },
       { time: "12:00", label: "Dopahar" },
     ],
-    reason: "Hindi faith content resonates morning and evening, aligned with prayer/devotional routines in India.",
+    reason: "Hindi faith content (Mahabharata, Ramayan, Shiv) resonates morning and evening, aligned with devotional routines in India.",
   },
-  "urban-legends": {
+  "what-if": {
     viewerTimezone: INDIA,
     viewerRegion: "India",
     slots: [
-      { time: "22:00", label: "Raat ki kahaniyaan" },
-      { time: "21:00", label: "After dinner" },
-      { time: "14:00", label: "Afternoon" },
+      { time: "13:00", label: "Lunch ka sochna" },
+      { time: "19:00", label: "Shaam ka curiosity" },
+      { time: "22:00", label: "Raat ka dimag" },
     ],
-    reason: "Urban legends in Hindi go viral late night — perfect WhatsApp-forward energy. After dinner is peak sharing time.",
+    reason: "What-If content in Hindi gets massive shares during lunch and late night. Students and curious minds drive engagement.",
   },
-  heists: {
+  "dark-psychology": {
     viewerTimezone: INDIA,
     viewerRegion: "India",
     slots: [
-      { time: "20:00", label: "Evening entertainment" },
-      { time: "22:00", label: "Late night" },
+      { time: "21:00", label: "Raat ka gyaan" },
+      { time: "13:00", label: "Lunch scroll" },
+      { time: "22:30", label: "Late night learning" },
+    ],
+    reason: "Dark psychology in Hindi has explosive save-rates. Evening and late night are peak times for this 'secret knowledge' content.",
+  },
+  "space-cosmos": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "21:00", label: "Raat ka aasman" },
+      { time: "13:00", label: "Lunch ka mind-blow" },
+      { time: "08:00", label: "Subah ka facts" },
+    ],
+    reason: "Space content in Hindi performs great at night and during study hours. Students are the primary audience.",
+  },
+  "animal-kingdom": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "07:00", label: "Subah ka scroll" },
+      { time: "13:00", label: "Lunch break" },
+      { time: "19:00", label: "Shaam ka entertainment" },
+    ],
+    reason: "Animal content in Hindi has universal family appeal. Morning and evening family screen time drive views.",
+  },
+  survival: {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "19:00", label: "Shaam ka thrill" },
+      { time: "21:00", label: "Prime time" },
       { time: "13:00", label: "Lunch break" },
     ],
-    reason: "Heist/crime stories in Hindi perform during evening entertainment hours — same pattern as Bollywood crime thrillers.",
+    reason: "Survival content in Hindi hooks viewers during evening entertainment hours. Similar pattern to action/thriller content.",
+  },
+  "money-wealth": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "06:00", label: "Subah ki hustle" },
+      { time: "13:00", label: "Lunch ka sapna" },
+      { time: "22:00", label: "Raat ka plan" },
+    ],
+    reason: "Wealth content in Hindi peaks early morning for hustlers/students, lunch for aspiration, and late night for dreamers planning ahead.",
+  },
+  "funny-stories": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "13:00", label: "Lunch ka mazaak" },
+      { time: "18:00", label: "Shaam ka chill" },
+      { time: "21:00", label: "Family laugh time" },
+    ],
+    reason: "Hindi comedy content goes viral during lunch breaks and evening family screen time. WhatsApp sharing peaks post-dinner.",
+  },
+  "zero-to-hero": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "05:30", label: "Subah ki hustle" },
+      { time: "07:00", label: "Commute motivation" },
+      { time: "22:00", label: "Raat ka sapna" },
+    ],
+    reason: "Underdog stories in Hindi hit hardest early morning for students/hustlers and late night when people dream about their future.",
+  },
+  satisfying: {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "22:30", label: "Neend se pehle" },
+      { time: "13:00", label: "Dopahar ka scroll" },
+      { time: "16:00", label: "Afternoon chill" },
+    ],
+    reason: "Satisfying content in India trends during afternoon downtime and the pre-sleep scrolling window — calming, addictive loops.",
   },
 };
 

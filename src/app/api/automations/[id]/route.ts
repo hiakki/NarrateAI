@@ -16,6 +16,7 @@ const updateSchema = z.object({
   llmProvider: z.string().nullable().optional(),
   ttsProvider: z.string().nullable().optional(),
   imageProvider: z.string().nullable().optional(),
+  characterId: z.string().nullable().optional(),
   targetPlatforms: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   includeAiTags: z.boolean().optional(),
@@ -104,6 +105,8 @@ export async function PATCH(
     if (input.ttsProvider !== undefined) data.ttsProvider = input.ttsProvider;
     if (input.imageProvider !== undefined)
       data.imageProvider = input.imageProvider;
+    if (input.characterId !== undefined)
+      data.characterId = input.characterId;
     if (input.targetPlatforms !== undefined) {
       const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK"]);
       data.targetPlatforms = input.targetPlatforms.filter((p) => valid.has(p));

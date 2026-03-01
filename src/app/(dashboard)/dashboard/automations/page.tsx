@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Bot, Plus, Clock, Loader2, Instagram, Youtube, Facebook,
   Trash2, Film, Zap, AlertCircle, CheckCircle2, XCircle, RefreshCw, Send,
-  Pause, Play, Square, CheckSquare, SquareIcon,
+  Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -46,6 +46,7 @@ interface Automation {
   frequency: string;
   postTime: string;
   timezone: string;
+  characterId: string | null;
   lastRunAt: string | null;
   createdAt: string;
   series: { _count: { videos: number }; lastVideo: LastVideo | null } | null;
@@ -1029,6 +1030,15 @@ export default function AutomationsPage() {
                       <Badge variant="outline" className="capitalize text-xs">
                         {auto.tone}
                       </Badge>
+                      {auto.characterId ? (
+                        <Badge variant="default" className="text-xs bg-amber-500 hover:bg-amber-600">
+                          <Star className="h-2.5 w-2.5 mr-0.5" /> Star
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs text-muted-foreground">
+                          <EyeOff className="h-2.5 w-2.5 mr-0.5" /> Faceless
+                        </Badge>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -172,10 +172,14 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     return;
   }
 
-  await db.automation.update({
-    where: { id: auto.id },
-    data: { lastRunAt: new Date() },
-  });
+  let characterPrompt: string | undefined;
+  if ((auto as Record<string, unknown>).characterId) {
+    const char = await db.character.findUnique({
+      where: { id: (auto as Record<string, unknown>).characterId as string },
+      select: { fullPrompt: true },
+    });
+    if (char) characterPrompt = char.fullPrompt;
+  }
 
   const artStyle = getArtStyleById(auto.artStyle);
   const niche = getNicheById(auto.niche);
@@ -216,6 +220,12 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       llmProvider: providers.llm,
       ttsProvider: providers.tts,
       imageProvider: providers.image,
+      characterPrompt,
+    });
+
+    await db.automation.update({
+      where: { id: auto.id },
+      data: { lastRunAt: new Date() },
     });
 
     log(`Queued video ${video.id} for "${auto.name}" (script gen in worker)`);
@@ -345,7 +355,8 @@ async function recoverStuckVideos() {
       include: {
         series: {
           include: {
-            automation: { select: { id: true, name: true, enabled: true } },
+            automation: { select: { id: true, name: true, enabled: true, characterId: true } },
+            character: { select: { fullPrompt: true } },
             user: {
               select: {
                 id: true,
@@ -439,6 +450,7 @@ async function recoverStuckVideos() {
           llmProvider: resolved.llm,
           ttsProvider: resolved.tts,
           imageProvider: resolved.image,
+          characterPrompt: video.series.character?.fullPrompt ?? undefined,
         });
 
         log(`Re-enqueued video ${video.id} for recovery (will resume from ${hasCheckpoint ? `stage after [${completedStages.join(",")}]` : "beginning"})`);

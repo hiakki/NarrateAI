@@ -18,6 +18,7 @@ import {
 import {
   ArrowLeft, Loader2, Clock, Trash2, Instagram, Youtube, Facebook,
   CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown, Zap, Sparkles, Globe, Plus, XCircle,
+  Star, EyeOff,
 } from "lucide-react";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
@@ -49,6 +50,7 @@ interface AutomationDetail {
   llmProvider: string | null;
   ttsProvider: string | null;
   imageProvider: string | null;
+  characterId: string | null;
   targetPlatforms: string[];
   enabled: boolean;
   includeAiTags: boolean;
@@ -65,6 +67,14 @@ interface SocialAccount {
   platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK";
   username: string | null;
   pageName: string | null;
+}
+
+interface CharacterSummary {
+  id: string;
+  name: string;
+  type: string;
+  fullPrompt: string;
+  previewUrl: string | null;
 }
 
 interface ProviderInfo {
@@ -123,6 +133,7 @@ export default function AutomationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
+  const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -139,6 +150,7 @@ export default function AutomationDetailPage() {
   const [editLlmProvider, setEditLlmProvider] = useState("");
   const [editTtsProvider, setEditTtsProvider] = useState("");
   const [editImageProvider, setEditImageProvider] = useState("");
+  const [editCharacterId, setEditCharacterId] = useState<string>("");
   const [editFrequency, setEditFrequency] = useState("daily");
   const [editPostTimes, setEditPostTimes] = useState<string[]>(["09:00"]);
   const [editTimezone, setEditTimezone] = useState("Asia/Kolkata");
@@ -167,17 +179,20 @@ export default function AutomationDetailPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [autoRes, acctRes, provRes] = await Promise.all([
+      const [autoRes, acctRes, provRes, charRes] = await Promise.all([
         fetch(`/api/automations/${id}`),
         fetch("/api/social/accounts"),
         fetch("/api/settings/providers"),
+        fetch("/api/characters"),
       ]);
       const autoJson = await autoRes.json();
       const acctJson = await acctRes.json();
       const provJson = await provRes.json();
+      const charJson = await charRes.json();
       if (autoJson.data) setAuto(autoJson.data);
       if (acctJson.data) setAccounts(acctJson.data);
       if (provJson.data) setProviderData(provJson.data);
+      if (charJson.data) setCharacters(charJson.data);
     } catch { /* ignore */ }
     setLoading(false);
   }, [id]);
@@ -203,6 +218,7 @@ export default function AutomationDetailPage() {
     setEditLlmProvider(auto.llmProvider ?? "");
     setEditTtsProvider(auto.ttsProvider ?? "");
     setEditImageProvider(auto.imageProvider ?? "");
+    setEditCharacterId(auto.characterId ?? "");
     setEditFrequency(auto.frequency);
     setEditPostTimes(auto.postTime.split(",").map((t: string) => t.trim()));
     setEditTimezone(auto.timezone);
@@ -229,6 +245,7 @@ export default function AutomationDetailPage() {
           llmProvider: editLlmProvider && editLlmProvider !== (providerData?.defaults.llmProvider ?? providerData?.platformDefaults.llm) ? editLlmProvider : null,
           ttsProvider: editTtsProvider && editTtsProvider !== (providerData?.defaults.ttsProvider ?? providerData?.platformDefaults.tts) ? editTtsProvider : null,
           imageProvider: editImageProvider && editImageProvider !== (providerData?.defaults.imageProvider ?? providerData?.platformDefaults.image) ? editImageProvider : null,
+          characterId: editCharacterId || null,
           frequency: editFrequency,
           postTime: editPostTimes.join(","),
           timezone: editTimezone,
@@ -473,6 +490,77 @@ export default function AutomationDetailPage() {
                   <Label className="text-xs mb-1 block">Name</Label>
                   <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-8 text-sm" />
                 </div>
+
+                {/* Video Style toggle */}
+                <div>
+                  <Label className="text-xs mb-1.5 block">Video Style</Label>
+                  <div className="grid grid-cols-2 gap-2 max-w-xs">
+                    <button
+                      type="button"
+                      onClick={() => { setEditCharacterId(""); }}
+                      className={`flex items-center gap-1.5 rounded-lg border-2 p-2 transition-all text-xs ${
+                        !editCharacterId
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                          : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <EyeOff className={`h-3.5 w-3.5 ${!editCharacterId ? "text-primary" : "text-muted-foreground"}`} />
+                      <span className="font-medium">Faceless</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!editCharacterId && characters.length > 0) setEditCharacterId(characters[0].id);
+                      }}
+                      className={`flex items-center gap-1.5 rounded-lg border-2 p-2 transition-all text-xs ${
+                        editCharacterId
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                          : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${editCharacterId ? "text-primary" : "text-muted-foreground"}`} />
+                      <span className="font-medium">Star Mode</span>
+                    </button>
+                  </div>
+                  {editCharacterId && (
+                    <div className="mt-2 rounded-lg border bg-muted/20 p-2 max-w-xs space-y-1.5">
+                      {characters.length > 0 ? (
+                        characters.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setEditCharacterId(c.id)}
+                            className={`w-full flex items-center gap-2 rounded-md border p-1.5 text-left transition-all text-xs ${
+                              editCharacterId === c.id
+                                ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                                : "hover:border-primary/40"
+                            }`}
+                          >
+                            <div className="w-7 h-7 rounded overflow-hidden bg-muted/40 shrink-0 flex items-center justify-center">
+                              {c.previewUrl ? (
+                                <img src={c.previewUrl} alt={c.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <Star className="h-3 w-3 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="font-medium">{c.name}</span>
+                              <p className="text-[10px] text-muted-foreground truncate">{c.fullPrompt}</p>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">No characters yet.</p>
+                      )}
+                      <Button variant="outline" size="xs" asChild>
+                        <Link href="/dashboard/characters/new">
+                          <Plus className="mr-1 h-2.5 w-2.5" /> New Character
+                        </Link>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <Label className="text-xs mb-1 block">Niche</Label>
                   <div className="flex flex-wrap gap-1.5">
@@ -630,6 +718,34 @@ export default function AutomationDetailPage() {
                       <span className="text-muted-foreground">Default</span>
                     )}
                   </p>
+                </div>
+                <div className="col-span-2">
+                  <Separator className="my-1" />
+                  <span className="text-muted-foreground text-xs">Video Style</span>
+                  {auto.characterId ? (() => {
+                    const char = characters.find((c) => c.id === auto.characterId);
+                    return (
+                      <div className="flex items-center gap-3 mt-1">
+                        {char?.previewUrl ? (
+                          <img src={char.previewUrl} alt={char.name} className="w-10 h-10 rounded-md object-cover shrink-0" />
+                        ) : (
+                          <Star className="h-3.5 w-3.5 text-primary shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium">Star Mode</span>
+                            {char && <Badge variant="secondary" className="text-[10px]">{char.name}</Badge>}
+                          </div>
+                          {char && <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{char.fullPrompt}</p>}
+                        </div>
+                      </div>
+                    );
+                  })() : (
+                    <div className="flex items-center gap-2 mt-1">
+                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium">Faceless</span>
+                    </div>
+                  )}
                 </div>
                 {(auto.llmProvider || auto.ttsProvider || auto.imageProvider) && (
                   <>

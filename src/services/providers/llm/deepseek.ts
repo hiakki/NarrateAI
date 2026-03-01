@@ -12,7 +12,7 @@ export class DeepSeekLlmProvider implements LlmProviderInterface {
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured");
 
     const sceneCount = getSceneCount(input.duration);
-    const prompt = buildPrompt(input, sceneCount);
+    const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
 
     log.log(`Generating script: niche=${input.niche}, tone=${input.tone}, duration=${input.duration}s, scenes=${sceneCount}`);
     log.debug(`LLM prompt (${prompt.length} chars):\n${prompt}`);

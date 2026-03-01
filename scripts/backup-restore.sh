@@ -4,14 +4,15 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
 # NarrateAI — Backup & Restore
 #
-# Backs up PostgreSQL database + generated video assets (public/videos/).
-# Produces a single .tar.gz that can be restored on any machine.
+# Backs up PostgreSQL database, generated videos, environment config,
+# fonts, music, characters, and Prisma schema into a single .tar.gz.
 #
 # Usage:
-#   ./scripts/backup-restore.sh backup              # full backup (DB + videos)
-#   ./scripts/backup-restore.sh backup --db-only     # database only
+#   ./scripts/backup-restore.sh backup              # full backup (DB + all assets)
+#   ./scripts/backup-restore.sh backup --db-only    # database + config only
 #   ./scripts/backup-restore.sh restore <file.tar.gz>
-#   ./scripts/backup-restore.sh list                 # list available backups
+#   ./scripts/backup-restore.sh restore <file.tar.gz> --yes   # skip confirmation
+#   ./scripts/backup-restore.sh list                # list available backups
 #
 # Environment variables (auto-read from .env if present):
 #   DATABASE_URL  — postgres connection string
@@ -22,6 +23,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
 VIDEOS_DIR="$PROJECT_DIR/public/videos"
+CHARACTERS_DIR="$PROJECT_DIR/public/characters"
+MUSIC_DIR="$PROJECT_DIR/public/music"
+FONTS_DIR="$PROJECT_DIR/assets/fonts"
+SCHEMA_FILE="$PROJECT_DIR/prisma/schema.prisma"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -39,8 +44,8 @@ load_env() {
     while IFS='=' read -r key value; do
       key="$(echo "$key" | tr -d '[:space:]')"
       [[ -z "$key" || "$key" == \#* ]] && continue
-      value="${value%%\#*}"           # strip inline comments
-      value="${value#\"}" ; value="${value%\"}"  # strip surrounding quotes
+      value="${value%%\#*}"
+      value="${value#\"}" ; value="${value%\"}"
       export "$key=$value" 2>/dev/null
     done < "$envfile"
     set -e
@@ -55,7 +60,6 @@ parse_db_url() {
     exit 1
   fi
 
-  # postgresql://user:pass@host:port/dbname?params
   DB_USER="$(echo "$url" | sed -E 's|.*://([^:]+):.*|\1|')"
   DB_PASS="$(echo "$url" | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')"
   DB_HOST="$(echo "$url" | sed -E 's|.*@([^:]+):.*|\1|')"
@@ -78,7 +82,6 @@ check_tools() {
     echo "Install PostgreSQL client tools:"
     echo "  macOS:   brew install postgresql@15"
     echo "  Ubuntu:  sudo apt-get install postgresql-client-15"
-    echo "  Docker:  you can also run this script inside the postgres container"
     exit 1
   fi
 }
@@ -92,6 +95,20 @@ check_db() {
     exit 1
   fi
   ok "Database connection OK ($DB_HOST:$DB_PORT/$DB_NAME)"
+}
+
+# ── Helper: copy dir if non-empty ────────────────────────────────────────────
+copy_dir_if_exists() {
+  local src="$1" dest="$2" label="$3"
+  if [[ -d "$src" ]] && [[ "$(ls -A "$src" 2>/dev/null)" ]]; then
+    mkdir -p "$dest"
+    cp -r "$src/"* "$dest/"
+    local sz
+    sz="$(du -sh "$dest" | cut -f1)"
+    ok "$label: $sz"
+  else
+    warn "No $label found at $src"
+  fi
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -126,14 +143,43 @@ do_backup() {
   dump_size="$(du -sh "$dump_file" | cut -f1)"
   ok "Database dump: $dump_size"
 
+  # ── .env (contains secrets — warn user) ────────────────────────────────
+  if [[ -f "$PROJECT_DIR/.env" ]]; then
+    cp "$PROJECT_DIR/.env" "$work_dir/dot-env"
+    ok ".env saved (WARNING: contains API keys and secrets)"
+  else
+    warn "No .env file found"
+  fi
+
+  # ── Prisma schema ──────────────────────────────────────────────────────
+  if [[ -f "$SCHEMA_FILE" ]]; then
+    mkdir -p "$work_dir/prisma"
+    cp "$SCHEMA_FILE" "$work_dir/prisma/schema.prisma"
+    ok "Prisma schema saved"
+  fi
+
+  # ── Fonts ──────────────────────────────────────────────────────────────
+  copy_dir_if_exists "$FONTS_DIR" "$work_dir/assets-fonts" "Fonts"
+
+  # ── Music ──────────────────────────────────────────────────────────────
+  copy_dir_if_exists "$MUSIC_DIR" "$work_dir/public-music" "Music"
+
+  # ── Characters ─────────────────────────────────────────────────────────
+  copy_dir_if_exists "$CHARACTERS_DIR" "$work_dir/public-characters" "Characters"
+
   # ── Metadata ───────────────────────────────────────────────────────────
   cat > "$work_dir/backup-meta.json" <<METAEOF
 {
   "app": "NarrateAI",
+  "version": "1.1",
   "timestamp": "$TIMESTAMP",
   "database": "$DB_NAME",
   "db_host": "$DB_HOST",
   "includes_videos": $(if $db_only; then echo "false"; else echo "true"; fi),
+  "includes_env": $(if [[ -f "$PROJECT_DIR/.env" ]]; then echo "true"; else echo "false"; fi),
+  "includes_fonts": $(if [[ -d "$FONTS_DIR" ]]; then echo "true"; else echo "false"; fi),
+  "includes_music": $(if [[ -d "$MUSIC_DIR" ]]; then echo "true"; else echo "false"; fi),
+  "includes_characters": $(if [[ -d "$CHARACTERS_DIR" ]]; then echo "true"; else echo "false"; fi),
   "created_on": "$(uname -n)",
   "pg_version": "$(pg_dump --version | head -1)"
 }
@@ -146,16 +192,7 @@ METAEOF
     info "Skipping video assets (--db-only)"
   else
     archive_name="narrateai-backup-full-${TIMESTAMP}.tar.gz"
-    if [[ -d "$VIDEOS_DIR" ]] && [[ "$(ls -A "$VIDEOS_DIR" 2>/dev/null)" ]]; then
-      info "Copying video assets..."
-      cp -r "$VIDEOS_DIR" "$work_dir/videos"
-      local vid_size
-      vid_size="$(du -sh "$work_dir/videos" | cut -f1)"
-      ok "Video assets: $vid_size"
-    else
-      warn "No video assets found at $VIDEOS_DIR"
-      mkdir -p "$work_dir/videos"
-    fi
+    copy_dir_if_exists "$VIDEOS_DIR" "$work_dir/videos" "Videos"
   fi
 
   # ── Create archive ─────────────────────────────────────────────────────
@@ -173,6 +210,7 @@ METAEOF
   echo ""
   echo "  File: $archive_path"
   echo "  Size: $total_size"
+  echo "  Contains: DB$(if ! $db_only; then echo " + videos"; fi) + .env + fonts + music + characters + schema"
   echo ""
   echo "  To restore on another machine:"
   echo "    1. Copy this file to the target machine"
@@ -185,12 +223,14 @@ METAEOF
 # ═════════════════════════════════════════════════════════════════════════════
 do_restore() {
   local archive="${1:-}"
+  local auto_yes=false
+  [[ "${2:-}" == "--yes" || "${2:-}" == "-y" ]] && auto_yes=true
+
   if [[ -z "$archive" ]]; then
-    err "Usage: $0 restore <backup-file.tar.gz>"
+    err "Usage: $0 restore <backup-file.tar.gz> [--yes]"
     exit 1
   fi
 
-  # Resolve path
   if [[ ! -f "$archive" ]]; then
     if [[ -f "$BACKUP_DIR/$archive" ]]; then
       archive="$BACKUP_DIR/$archive"
@@ -211,24 +251,45 @@ do_restore() {
   if [[ -f "$work_dir/backup-meta.json" ]]; then
     echo ""
     info "Backup metadata:"
-    cat "$work_dir/backup-meta.json" | while IFS= read -r line; do echo "    $line"; done
+    while IFS= read -r line; do echo "    $line"; done < "$work_dir/backup-meta.json"
     echo ""
   fi
 
   # ── Confirm ────────────────────────────────────────────────────────────
-  echo -e "${YELLOW}⚠  This will OVERWRITE the current database '$DB_NAME' and video files.${NC}"
-  echo ""
-  read -rp "Continue? (y/N) " confirm
-  if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-    info "Restore cancelled."
-    exit 0
+  if ! $auto_yes; then
+    echo -e "${YELLOW}  This will OVERWRITE the current database and restore all assets.${NC}"
+    echo ""
+    read -rp "Continue? (y/N) " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      info "Restore cancelled."
+      exit 0
+    fi
+  fi
+
+  # ── Restore .env ───────────────────────────────────────────────────────
+  if [[ -f "$work_dir/dot-env" ]]; then
+    if [[ -f "$PROJECT_DIR/.env" ]]; then
+      if ! $auto_yes; then
+        read -rp ".env already exists. Overwrite? (y/N) " env_confirm
+        if [[ "$env_confirm" == "y" || "$env_confirm" == "Y" ]]; then
+          cp "$work_dir/dot-env" "$PROJECT_DIR/.env"
+          ok ".env restored"
+        else
+          info "Kept existing .env"
+        fi
+      else
+        info "Kept existing .env (use manual copy if needed)"
+      fi
+    else
+      cp "$work_dir/dot-env" "$PROJECT_DIR/.env"
+      ok ".env restored"
+    fi
   fi
 
   # ── Restore database ──────────────────────────────────────────────────
   if [[ -f "$work_dir/database.sql" ]]; then
     info "Restoring database..."
 
-    # Ensure the DB exists
     PGPASSWORD="$DB_PASS" psql \
       -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "postgres" \
       -c "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME';" | grep -q 1 || \
@@ -236,7 +297,6 @@ do_restore() {
       -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "postgres" \
       -c "CREATE DATABASE $DB_NAME;"
 
-    # Drop existing connections
     PGPASSWORD="$DB_PASS" psql \
       -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "postgres" \
       -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" &>/dev/null || true
@@ -250,7 +310,28 @@ do_restore() {
     warn "No database dump found in backup"
   fi
 
-  # ── Restore video assets ───────────────────────────────────────────────
+  # ── Restore fonts ──────────────────────────────────────────────────────
+  if [[ -d "$work_dir/assets-fonts" ]] && [[ "$(ls -A "$work_dir/assets-fonts" 2>/dev/null)" ]]; then
+    mkdir -p "$FONTS_DIR"
+    cp -r "$work_dir/assets-fonts/"* "$FONTS_DIR/"
+    ok "Fonts restored"
+  fi
+
+  # ── Restore music ──────────────────────────────────────────────────────
+  if [[ -d "$work_dir/public-music" ]] && [[ "$(ls -A "$work_dir/public-music" 2>/dev/null)" ]]; then
+    mkdir -p "$MUSIC_DIR"
+    cp -r "$work_dir/public-music/"* "$MUSIC_DIR/"
+    ok "Music restored"
+  fi
+
+  # ── Restore characters ─────────────────────────────────────────────────
+  if [[ -d "$work_dir/public-characters" ]] && [[ "$(ls -A "$work_dir/public-characters" 2>/dev/null)" ]]; then
+    mkdir -p "$CHARACTERS_DIR"
+    cp -r "$work_dir/public-characters/"* "$CHARACTERS_DIR/"
+    ok "Characters restored"
+  fi
+
+  # ── Restore videos ─────────────────────────────────────────────────────
   if [[ -d "$work_dir/videos" ]] && [[ "$(ls -A "$work_dir/videos" 2>/dev/null)" ]]; then
     info "Restoring video assets..."
     mkdir -p "$VIDEOS_DIR"
@@ -262,10 +343,16 @@ do_restore() {
     info "No video assets in this backup"
   fi
 
-  # ── Run Prisma migrations ──────────────────────────────────────────────
-  info "Running Prisma migrations (in case schema has changed)..."
+  # ── Restore Prisma schema + push ───────────────────────────────────────
+  if [[ -f "$work_dir/prisma/schema.prisma" ]]; then
+    mkdir -p "$PROJECT_DIR/prisma"
+    cp "$work_dir/prisma/schema.prisma" "$SCHEMA_FILE"
+    ok "Prisma schema restored"
+  fi
+
+  info "Syncing database schema..."
   cd "$PROJECT_DIR"
-  npx prisma migrate deploy 2>/dev/null && ok "Migrations applied" || warn "Migration skipped (may already be up to date)"
+  npx prisma db push --accept-data-loss 2>/dev/null && ok "Schema synced" || warn "Schema sync skipped (may already be up to date)"
 
   echo ""
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -273,9 +360,9 @@ do_restore() {
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo ""
   echo "  Next steps:"
-  echo "    1. Update .env with your API keys if needed"
-  echo "    2. Start the app:  pnpm dev"
-  echo "    3. Start workers:  pnpm scheduler"
+  echo "    1. Review .env and update API keys if needed"
+  echo "    2. Run: pnpm install"
+  echo "    3. Run: pnpm dev:all   (or use scripts/deploy.sh)"
   echo ""
 }
 
@@ -318,10 +405,20 @@ main() {
       echo "NarrateAI Backup & Restore"
       echo ""
       echo "Usage:"
-      echo "  $0 backup               Full backup (database + videos)"
-      echo "  $0 backup --db-only     Database only (faster, smaller)"
+      echo "  $0 backup               Full backup (DB + videos + config + assets)"
+      echo "  $0 backup --db-only     Database + config only (no videos)"
       echo "  $0 restore <file>       Restore from a backup archive"
+      echo "  $0 restore <file> --yes Skip confirmation prompts"
       echo "  $0 list                 List available backups"
+      echo ""
+      echo "Included in backup:"
+      echo "  - PostgreSQL database dump"
+      echo "  - .env (environment config with API keys)"
+      echo "  - assets/fonts/ (caption fonts for FFmpeg)"
+      echo "  - public/music/ (background music tracks)"
+      echo "  - public/characters/ (character preview images)"
+      echo "  - public/videos/ (generated videos, unless --db-only)"
+      echo "  - prisma/schema.prisma"
       echo ""
       echo "Backups are saved to: $BACKUP_DIR"
       echo ""

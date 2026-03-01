@@ -13,6 +13,7 @@ const schema = z.object({
   topic: z.string().optional(),
   language: z.string().optional(),
   llmProvider: z.string().optional(),
+  characterPrompt: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
       user
     );
 
-    const script = await generateScript(input, resolved.llm);
+    const script = await generateScript(input, resolved.llm, input.characterPrompt);
 
     return NextResponse.json({ data: script });
   } catch (error) {

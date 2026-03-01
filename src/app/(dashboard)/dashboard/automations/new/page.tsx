@@ -18,6 +18,7 @@ import {
   ArrowLeft, ArrowRight, Loader2, Check, ChevronDown, ChevronUp,
   Cpu, Mic, Image as ImageIcon, Instagram, Youtube, Facebook, Clock,
   LayoutGrid, CalendarClock, ClipboardCheck, Sparkles, Globe, Plus, XCircle,
+  EyeOff, Star,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -40,6 +41,14 @@ interface SocialAccount {
   platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK";
   username: string | null;
   pageName: string | null;
+}
+
+interface CharacterSummary {
+  id: string;
+  name: string;
+  type: string;
+  fullPrompt: string;
+  previewUrl: string | null;
 }
 
 const PLATFORM_CONFIG = {
@@ -72,9 +81,16 @@ const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
   motivation: { FACEBOOK: 74, YOUTUBE: 72, INSTAGRAM: 80 },
   "science-facts": { FACEBOOK: 70, YOUTUBE: 76, INSTAGRAM: 74 },
   "conspiracy-theories": { FACEBOOK: 77, YOUTUBE: 68, INSTAGRAM: 79 },
-  "biblical-stories": { FACEBOOK: 82, YOUTUBE: 66, INSTAGRAM: 62 },
-  "urban-legends": { FACEBOOK: 74, YOUTUBE: 69, INSTAGRAM: 81 },
-  heists: { FACEBOOK: 78, YOUTUBE: 74, INSTAGRAM: 77 },
+  "religious-epics": { FACEBOOK: 80, YOUTUBE: 68, INSTAGRAM: 66 },
+  "what-if": { FACEBOOK: 72, YOUTUBE: 82, INSTAGRAM: 78 },
+  "dark-psychology": { FACEBOOK: 80, YOUTUBE: 72, INSTAGRAM: 86 },
+  "space-cosmos": { FACEBOOK: 68, YOUTUBE: 84, INSTAGRAM: 76 },
+  "animal-kingdom": { FACEBOOK: 80, YOUTUBE: 78, INSTAGRAM: 84 },
+  survival: { FACEBOOK: 76, YOUTUBE: 80, INSTAGRAM: 78 },
+  "money-wealth": { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 86 },
+  "funny-stories": { FACEBOOK: 82, YOUTUBE: 80, INSTAGRAM: 88 },
+  "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84 },
+  satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90 },
 };
 
 function clamp(n: number, lo = 0, hi = 100) {
@@ -124,6 +140,11 @@ export default function NewAutomationPage() {
   const [tone, setTone] = useState("dramatic");
   const [duration, setDuration] = useState(45);
 
+  const [videoStyle, setVideoStyle] = useState<"faceless" | "star">("faceless");
+  const [characters, setCharacters] = useState<CharacterSummary[]>([]);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string>("");
+  const selectedCharacter = characters.find((c) => c.id === selectedCharacterId);
+
   const [automationCount, setAutomationCount] = useState(0);
   const [showProviders, setShowProviders] = useState(false);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
@@ -134,7 +155,7 @@ export default function NewAutomationPage() {
   // Step 2: Channels + Schedule
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
-  const [includeAiTags, setIncludeAiTags] = useState(true);
+  const [includeAiTags, setIncludeAiTags] = useState(false);
   const [frequency, setFrequency] = useState<string>("daily");
   const [postTimes, setPostTimes] = useState<string[]>(["09:00"]);
   const [timezone, setTimezone] = useState(
@@ -194,7 +215,8 @@ export default function NewAutomationPage() {
       (cfg.toneId === "dramatic" && /deep|narrator|authoritative|intense/.test(voiceText)) ? 90
         : (cfg.toneId === "educational" && /clear|professional|calm|steady/.test(voiceText)) ? 88
           : (cfg.toneId === "casual" && /friendly|warm|natural|conversational/.test(voiceText)) ? 86
-            : cfg.voice ? 78 : 70;
+            : (cfg.toneId === "funny" && /friendly|warm|energetic|upbeat|cheerful/.test(voiceText)) ? 88
+              : cfg.voice ? 78 : 70;
 
     const perPlatform = Object.fromEntries(PLATFORMS.map((platform) => {
       const topic = baseByPlatform[platform];
@@ -286,13 +308,22 @@ export default function NewAutomationPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchCharacters = useCallback(async () => {
+    try {
+      const res = await fetch("/api/characters");
+      const json = await res.json();
+      if (json.data) setCharacters(json.data);
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchProviders();
     fetchAccounts();
+    fetchCharacters();
     fetch("/api/automations").then(r => r.json()).then(j => {
       if (j.data) setAutomationCount(j.data.length);
     }).catch(() => {});
-  }, [fetchProviders, fetchAccounts]);
+  }, [fetchProviders, fetchAccounts, fetchCharacters]);
 
   useEffect(() => {
     const currentVoices = getVoicesForProvider(effectiveTts, language);
@@ -317,6 +348,7 @@ export default function NewAutomationPage() {
           targetPlatforms: [...selectedPlatforms],
           includeAiTags,
           frequency, postTime: postTimes.join(","), timezone,
+          characterId: selectedCharacterId || undefined,
         }),
       });
       const data = await res.json();
@@ -385,6 +417,85 @@ export default function NewAutomationPage() {
             <Label htmlFor="autoName" className="mb-2 block">Automation Name</Label>
             <Input id="autoName" placeholder="e.g. Scary Stories for YouTube" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
+
+          {/* Video Style */}
+          <div>
+            <Label className="mb-2 block">Video Style</Label>
+            <div className="grid grid-cols-2 gap-3 max-w-sm">
+              <button
+                type="button"
+                onClick={() => { setVideoStyle("faceless"); setSelectedCharacterId(""); }}
+                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-all ${
+                  videoStyle === "faceless"
+                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <EyeOff className={`h-5 w-5 ${videoStyle === "faceless" ? "text-primary" : "text-muted-foreground"}`} />
+                <div className="text-center">
+                  <div className="font-medium text-xs">Faceless</div>
+                  <div className="text-[10px] text-muted-foreground">Narration + imagery</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVideoStyle("star")}
+                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-all ${
+                  videoStyle === "star"
+                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <Star className={`h-5 w-5 ${videoStyle === "star" ? "text-primary" : "text-muted-foreground"}`} />
+                <div className="text-center">
+                  <div className="font-medium text-xs">Star Mode</div>
+                  <div className="text-[10px] text-muted-foreground">Consistent character</div>
+                </div>
+              </button>
+            </div>
+            {videoStyle === "star" && (
+              <div className="mt-3 rounded-lg border bg-muted/20 p-3 max-w-sm space-y-2">
+                {characters.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {characters.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedCharacterId(c.id)}
+                        className={`w-full flex items-center gap-2 rounded-lg border p-2 text-left transition-all text-xs ${
+                          selectedCharacterId === c.id
+                            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                            : "hover:border-primary/40"
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-md overflow-hidden bg-muted/40 shrink-0 flex items-center justify-center">
+                          {c.previewUrl ? (
+                            <img src={c.previewUrl} alt={c.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <Star className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium">{c.name}</div>
+                          <div className="text-[10px] text-muted-foreground truncate">{c.fullPrompt}</div>
+                        </div>
+                        <Badge variant="secondary" className="text-[9px] capitalize shrink-0">{c.type}</Badge>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No characters yet.</p>
+                )}
+                <Button variant="outline" size="xs" asChild>
+                  <Link href="/dashboard/characters/new">
+                    <Plus className="mr-1 h-3 w-3" /> New Character
+                  </Link>
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <Separator />
 
           <div>
             <h2 className="text-xl font-semibold mb-4">Niche</h2>

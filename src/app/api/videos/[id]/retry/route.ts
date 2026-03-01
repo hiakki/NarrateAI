@@ -29,7 +29,8 @@ export async function POST(
             user: {
               select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true },
             },
-            automation: { select: { name: true } },
+            automation: { select: { name: true, characterId: true } },
+            character: { select: { fullPrompt: true } },
           },
         },
       },
@@ -110,6 +111,7 @@ export async function POST(
       llmProvider: resolved.llm,
       ttsProvider: resolved.tts,
       imageProvider: resolved.image,
+      characterPrompt: video.series.character?.fullPrompt ?? undefined,
     });
 
     return NextResponse.json({ data: { videoId: video.id, status: "QUEUED" } });

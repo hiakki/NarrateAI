@@ -147,13 +147,16 @@ function scoreScript(script: GeneratedScript, targetScenes: number): number {
 
 export async function generateScript(
   input: ScriptInput,
-  provider?: string
+  provider?: string,
+  characterPrompt?: string,
 ): Promise<GeneratedScript> {
   const preferredProvider = provider ?? PLATFORM_DEFAULTS.llm;
   const llm = getLlmProvider(preferredProvider);
+  const inputWithChar = characterPrompt ? { ...input, characterPrompt } : input;
+
   if (!TWO_PASS_ENABLED) {
-    const script = await llm.generateScript(input);
-    return ensureWordCount(script, input, llm);
+    const script = await llm.generateScript(inputWithChar);
+    return ensureWordCount(script, inputWithChar, llm);
   }
 
   const targetScenes = getSceneCount(input.duration);
@@ -171,7 +174,7 @@ export async function generateScript(
       attempts += 1;
       try {
         const candidateLlm = llmId === preferredProvider ? llm : getLlmProvider(llmId);
-        const script = await candidateLlm.generateScript({ ...input, topic });
+        const script = await candidateLlm.generateScript({ ...inputWithChar, topic });
         const score = scoreScript(script, targetScenes);
         candidates.push({ script, topic, provider: llmId, score });
         log.log(`Two-pass candidate scored: provider=${llmId} topic="${topic}" score=${score}`);
@@ -187,11 +190,11 @@ export async function generateScript(
     const best = candidates[0];
     log.log(`Two-pass selected provider=${best.provider} topic="${best.topic}" score=${best.score} (from ${candidates.length} candidates, attempts=${attempts})`);
     const llmForBest = getLlmProvider(best.provider);
-    return ensureWordCount(best.script, input, llmForBest);
+    return ensureWordCount(best.script, inputWithChar, llmForBest);
   }
 
   log.warn("Two-pass failed for all candidates, falling back to single-pass");
-  return ensureWordCount(await llm.generateScript(input), input, llm);
+  return ensureWordCount(await llm.generateScript(inputWithChar), inputWithChar, llm);
 }
 
 async function expandScenes(

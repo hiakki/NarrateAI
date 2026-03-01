@@ -10,6 +10,7 @@ export function buildImagePrompt(
   artStyle: ArtStyle,
   sceneIndex: number,
   totalScenes: number,
+  characterPrompt?: string,
 ): ImagePromptResult {
   const cinematicCues = [
     "cinematic establishing shot, layered foreground/midground/background",
@@ -27,8 +28,12 @@ export function buildImagePrompt(
         ? "strong closing frame, visual resolution and payoff"
         : "escalating tension and visual intensity";
 
+  const charPrefix = characterPrompt
+    ? `[MAIN CHARACTER — must appear in this image: ${characterPrompt}] `
+    : "";
+
   const prompt = [
-    visualDescription,
+    charPrefix + visualDescription,
     cue,
     progressionCue,
     artStyle.promptModifier,

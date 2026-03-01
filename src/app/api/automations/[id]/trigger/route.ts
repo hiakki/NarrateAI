@@ -76,6 +76,15 @@ export async function POST(
       );
     }
 
+    let characterPrompt: string | undefined;
+    if (auto.characterId) {
+      const char = await db.character.findUnique({
+        where: { id: auto.characterId },
+        select: { fullPrompt: true },
+      });
+      if (char) characterPrompt = char.fullPrompt;
+    }
+
     const artStyle = getArtStyleById(auto.artStyle);
     const niche = getNicheById(auto.niche);
     const providers = resolveProviders(
@@ -114,6 +123,7 @@ export async function POST(
       llmProvider: providers.llm,
       ttsProvider: providers.tts,
       imageProvider: providers.image,
+      characterPrompt,
     });
 
     await db.automation.update({

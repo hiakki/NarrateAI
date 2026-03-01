@@ -111,6 +111,7 @@ model User {
 
   series         Series[]
   automations    Automation[]
+  characters     Character[]
   socialAccounts SocialAccount[]
   subscription   Subscription?
 
@@ -144,6 +145,8 @@ model Series {
   tone            String       @default("dramatic")
   status          SeriesStatus @default(ACTIVE)
 
+  characterId     String?
+
   llmProvider      LlmProvider?
   ttsProvider      TtsProvider?
   imageProvider    ImageProvider?
@@ -152,6 +155,7 @@ model Series {
   updatedAt       DateTime     @updatedAt
 
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character       Character?   @relation(fields: [characterId], references: [id], onDelete: SetNull)
   videos          Video[]
   automation      Automation?
 
@@ -169,6 +173,8 @@ model Automation {
   language        String        @default("en")
   tone            String        @default("dramatic")
   duration        Int           @default(45)
+
+  characterId     String?
 
   llmProvider     LlmProvider?
   ttsProvider     TtsProvider?
@@ -188,6 +194,7 @@ model Automation {
   updatedAt       DateTime      @updatedAt
 
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character       Character?    @relation(fields: [characterId], references: [id], onDelete: SetNull)
   series          Series?       @relation(fields: [seriesId], references: [id], onDelete: SetNull)
 
   @@index([userId])
@@ -223,6 +230,30 @@ model Video {
   @@index([seriesId])
   @@index([status])
   @@map("videos")
+}
+
+model Character {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  type        String   @default("human")
+  physical    String?
+  clothing    String?
+  accessories String?
+  features    String?
+  personality String?
+  fullPrompt  String
+  previewUrl  String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series      Series[]
+  automations Automation[]
+
+  @@index([userId])
+  @@map("characters")
 }
 
 model SocialAccount {
