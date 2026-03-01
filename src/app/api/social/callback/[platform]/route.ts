@@ -19,7 +19,8 @@ async function fetchDirectPages(token: string): Promise<FBPage[]> {
     `${GRAPH_API}/me/accounts?fields=id,name,access_token&limit=100&access_token=${token}`,
   );
   const json = await res.json();
-  log.log(`/me/accounts returned ${json.data?.length ?? 0} page(s)`, JSON.stringify(json));
+  log.log(`/me/accounts returned ${json.data?.length ?? 0} page(s)`);
+  log.debug("/me/accounts payload:", JSON.stringify(json));
   return json.data ?? [];
 }
 
@@ -29,7 +30,8 @@ async function fetchBusinessPages(token: string): Promise<FBPage[]> {
   );
   const bizJson = await bizRes.json();
   const businesses = bizJson.data ?? [];
-  log.log(`/me/businesses returned ${businesses.length} business(es):`, JSON.stringify(bizJson));
+  log.log(`/me/businesses returned ${businesses.length} business(es)`);
+  log.debug("/me/businesses payload:", JSON.stringify(bizJson));
 
   const allPages: FBPage[] = [];
 
@@ -39,7 +41,7 @@ async function fetchBusinessPages(token: string): Promise<FBPage[]> {
     );
     const pagesJson = await pagesRes.json();
     const pages: FBPage[] = pagesJson.data ?? [];
-    log.log(`Business "${biz.name}" (${biz.id}) owns ${pages.length} page(s):`, JSON.stringify(pagesJson));
+    log.log(`Business "${biz.name}" (${biz.id}) owns ${pages.length} page(s)`);
 
     if (pages.length === 0) {
       const clientRes = await fetch(
@@ -47,7 +49,7 @@ async function fetchBusinessPages(token: string): Promise<FBPage[]> {
       );
       const clientJson = await clientRes.json();
       const clientPages: FBPage[] = clientJson.data ?? [];
-      log.log(`Business "${biz.name}" client_pages: ${clientPages.length}`, JSON.stringify(clientJson));
+      log.log(`Business "${biz.name}" client_pages: ${clientPages.length}`);
       allPages.push(...clientPages);
     } else {
       allPages.push(...pages);
@@ -106,7 +108,8 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
 
   const permRes = await fetch(`${GRAPH_API}/me/permissions?access_token=${longToken}`);
   const permData = await permRes.json();
-  log.log("Granted permissions:", JSON.stringify(permData.data));
+  const perms = (permData.data ?? []).filter((p: { status: string }) => p.status === "granted").map((p: { permission: string }) => p.permission);
+  log.log(`Granted ${perms.length} permissions: ${perms.join(", ")}`);
 
   if (state === "instagram") {
     const pagesRes = await fetch(
@@ -114,7 +117,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
     );
     const pagesJson = await pagesRes.json();
     const pages = pagesJson.data;
-    log.log(`Instagram: /me/accounts returned ${pages?.length ?? 0} page(s):`, JSON.stringify(pagesJson));
+    log.log(`Instagram: /me/accounts returned ${pages?.length ?? 0} page(s)`);
 
     for (const page of pages ?? []) {
       if (!page.instagram_business_account?.id) continue;
@@ -283,7 +286,7 @@ export async function GET(
     const error = url.searchParams.get("error");
 
     if (error) {
-      console.error(`OAuth error for ${platform}:`, error);
+      log.error(`OAuth error for ${platform}: ${error}`);
       return NextResponse.redirect(
         `${APP_URL()}/dashboard/channels?error=${encodeURIComponent(error)}`,
       );
@@ -312,7 +315,7 @@ export async function GET(
       `${APP_URL()}/dashboard/channels?connected=${platform === "meta" ? state : platform}`,
     );
   } catch (error) {
-    console.error("Social callback error:", error);
+    log.error("Social callback error:", error instanceof Error ? error.message : error);
     return NextResponse.redirect(
       `${APP_URL()}/dashboard/channels?error=connection_failed`,
     );

@@ -9,9 +9,10 @@ export interface VideoJobData {
   seriesId: string;
   userId: string;
   userName: string;
-  title: string;
-  scriptText: string;
-  scenes: { text: string; visualDescription: string }[];
+  automationName?: string;
+  title?: string;
+  scriptText?: string;
+  scenes?: { text: string; visualDescription: string }[];
   artStyle: string;
   artStylePrompt: string;
   negativePrompt: string;

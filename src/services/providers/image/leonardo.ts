@@ -83,7 +83,7 @@ export class LeonardoImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.log(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
+          log.debug(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
         }
 
         if (buffer) break;
@@ -97,7 +97,7 @@ export class LeonardoImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.debug(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

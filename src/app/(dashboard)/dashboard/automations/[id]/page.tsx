@@ -299,19 +299,27 @@ export default function AutomationDetailPage() {
     } catch { /* ignore */ }
   }
 
+  const [triggerMsg, setTriggerMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   async function handleTrigger() {
     setTriggering(true);
+    setTriggerMsg(null);
     try {
       const res = await fetch(`/api/automations/${id}/trigger`, { method: "POST" });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(json.error || "Trigger failed");
+        setTriggerMsg({ ok: false, text: json.error || `HTTP ${res.status}` });
+        setTimeout(() => setTriggerMsg(null), 8000);
         return;
       }
-      fetchAutomation();
-      router.push(`/dashboard/videos/${json.data.videoId}`);
-    } catch {
-      alert("Trigger failed");
+      setTriggerMsg({ ok: true, text: "Video queued successfully" });
+      setTimeout(() => setTriggerMsg(null), 5000);
+      fetchData();
+      if (json.data?.videoId) router.push(`/dashboard/videos/${json.data.videoId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setTriggerMsg({ ok: false, text: msg });
+      setTimeout(() => setTriggerMsg(null), 8000);
     } finally {
       setTriggering(false);
     }
@@ -319,16 +327,22 @@ export default function AutomationDetailPage() {
 
   async function handleRetryVideo(videoId: string) {
     setRetryingVideoId(videoId);
+    setTriggerMsg(null);
     try {
       const res = await fetch(`/api/videos/${videoId}/retry`, { method: "POST" });
       if (!res.ok) {
-        const json = await res.json();
-        alert(json.error || "Retry failed");
+        const json = await res.json().catch(() => ({}));
+        setTriggerMsg({ ok: false, text: json.error || `Retry failed (HTTP ${res.status})` });
+        setTimeout(() => setTriggerMsg(null), 8000);
         return;
       }
-      fetchAutomation();
-    } catch {
-      alert("Retry failed");
+      setTriggerMsg({ ok: true, text: "Retry queued" });
+      setTimeout(() => setTriggerMsg(null), 5000);
+      fetchData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setTriggerMsg({ ok: false, text: `Retry failed: ${msg}` });
+      setTimeout(() => setTriggerMsg(null), 8000);
     } finally {
       setRetryingVideoId(null);
     }
@@ -433,6 +447,20 @@ export default function AutomationDetailPage() {
           </AlertDialog>
         </div>
       </div>
+
+      {triggerMsg && (
+        <div className={`mb-4 rounded-lg border p-3 text-sm flex items-center gap-2 ${
+          triggerMsg.ok
+            ? "border-green-200 bg-green-50 text-green-800"
+            : "border-red-200 bg-red-50 text-red-800"
+        }`}>
+          {triggerMsg.ok
+            ? <CheckCircle2 className="h-4 w-4 shrink-0" />
+            : <AlertCircle className="h-4 w-4 shrink-0" />
+          }
+          <span>{triggerMsg.text}</span>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 mb-8">
         {/* Content Configuration */}

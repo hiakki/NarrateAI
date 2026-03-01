@@ -12,9 +12,10 @@ import { postVideoToSocials } from "../src/services/social-poster";
 import { createLogger } from "../src/lib/logger";
 import {
   buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath,
-  scenesAbsDir, scriptAbsPath, voiceoverAbsPath, contextAbsPath,
+  scenesAbsDir, voiceoverAbsPath, contextAbsPath, scriptAbsPath,
 } from "../src/lib/video-paths";
 import { buildPrompt, getSceneCount } from "../src/services/providers/llm/prompt";
+import { generateScript } from "../src/services/script-generator";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
@@ -68,24 +69,55 @@ const worker = new Worker<VideoJobData>(
   "video-generation",
   async (job) => {
     const {
-      videoId, userId, userName, title, scriptText, scenes, artStylePrompt, negativePrompt,
+      videoId, userId, userName, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
       tone, niche, artStyle, reviewMode,
     } = job.data;
 
-    if (!ttsProvider || !imageProvider || !scenes?.length) {
-      throw new Error(`Invalid job data: missing tts=${ttsProvider}, image=${imageProvider}, scenes=${scenes?.length ?? 0}`);
+    let title = job.data.title;
+    let scriptText = job.data.scriptText;
+    let scenes = job.data.scenes;
+
+    if (!ttsProvider || !imageProvider) {
+      throw new Error(`Invalid job data: missing tts=${ttsProvider}, image=${imageProvider}`);
     }
 
     const checkpoint = await loadCheckpoint(videoId);
     const completed = new Set(checkpoint.completedStages ?? []);
 
-    const relDir = checkpoint.relDir ?? buildVideoRelDir(userId, userName, title, videoId);
+    // ── Generate script if not provided (trigger route delegates this to the worker) ──
+    if (!scenes?.length && !completed.has("SCRIPT")) {
+      await updateStage(videoId, "SCRIPT");
+      log.log(`SCRIPT generating for ${videoId} (LLM=${llmProvider})…`);
+      const script = await generateScript(
+        { niche: niche ?? "", tone: tone ?? "dramatic", artStyle: artStyle ?? "", duration: job.data.duration, language: language ?? "en" },
+        llmProvider,
+      );
+      title = script.title;
+      scriptText = script.fullScript;
+      scenes = script.scenes;
+      await db.video.update({
+        where: { id: videoId },
+        data: { title, scriptText, scenesJson: scenes as never },
+      });
+    }
+
+    if (!scenes?.length) {
+      throw new Error(`No scenes available for ${videoId} after script generation`);
+    }
+    if (!scriptText) scriptText = scenes.map((s) => s.text).join(" ");
+    if (!title) title = "Untitled";
+
+    const isResume = !!checkpoint.relDir;
+    const relDir = checkpoint.relDir ?? buildVideoRelDir(userId, userName, title, videoId, automationName);
     const absDir = videoAbsDir(relDir);
     const scDir = scenesAbsDir(relDir);
     await fs.mkdir(scDir, { recursive: true });
 
+    await fs.unlink(scriptAbsPath(relDir)).catch(() => {});
+
     log.log(`START ${videoId} | LLM=${llmProvider} TTS=${ttsProvider} IMG=${imageProvider} | scenes=${scenes.length} resumed=[${[...completed].join(",")}]`);
+    log.log(`${isResume ? "RESUME" : "CREATED"} dir: public/${relDir}/`);
 
     let audioPath = checkpoint.audioPath;
     let durationMs = checkpoint.durationMs;
@@ -105,12 +137,10 @@ const worker = new Worker<VideoJobData>(
     ctx.push(`Niche=${niche}  Tone=${tone}  Art=${artStyle}  Duration=${job.data.duration}s  Language=${language ?? "en"}\n`);
 
     try {
-      // ── Script ──
+      // ── Script (log to context.txt) ──
       if (!completed.has("SCRIPT")) {
         await updateStage(videoId, "SCRIPT");
         await db.video.update({ where: { id: videoId }, data: { scriptText, title } });
-
-        await fs.writeFile(scriptAbsPath(relDir), scriptText, "utf-8");
 
         const sceneCount = getSceneCount(job.data.duration);
         const llmPrompt = buildPrompt({
@@ -120,7 +150,8 @@ const worker = new Worker<VideoJobData>(
         }, sceneCount);
 
         ctxSection("1 · SCRIPT GENERATION (LLM)",
-          "── PROMPT SENT TO AI ──\n" + llmPrompt,
+          "── SCRIPT (full narration text) ──\n" + scriptText,
+          "\n── PROMPT SENT TO AI ──\n" + llmPrompt,
           "\n── AI RESPONSE ──\nTitle: " + title,
           "Scenes: " + scenes.length,
           ...scenes.map((s, i) =>

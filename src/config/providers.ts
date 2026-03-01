@@ -16,6 +16,16 @@ function getGeminiDisplayName(): string {
   return `Gemini (${model})`;
 }
 
+function getLocalLlmName(): string {
+  const model = (process.env.LOCAL_LLM_MODEL ?? "").trim();
+  if (model) return `Local LLM (${model})`;
+  const url = (process.env.LOCAL_LLM_URL ?? "").trim();
+  if (url) {
+    try { return `Local LLM (${new URL(url).hostname})`; } catch { /* ignore */ }
+  }
+  return "Local LLM";
+}
+
 export const LLM_PROVIDERS: Record<string, ProviderInfo> = {
   GEMINI_FLASH: {
     id: "GEMINI_FLASH",
@@ -48,6 +58,14 @@ export const LLM_PROVIDERS: Record<string, ProviderInfo> = {
     costEstimate: "~$0.002/script",
     qualityLabel: "Great",
     envVar: "DASHSCOPE_API_KEY",
+  },
+  LOCAL_LLM: {
+    id: "LOCAL_LLM",
+    name: getLocalLlmName(),
+    description: "Your own LLM — Ollama, vLLM, llama.cpp, or any OpenAI-compatible endpoint",
+    costEstimate: "Free",
+    qualityLabel: "Good",
+    envVar: "LOCAL_LLM_URL",
   },
 };
 

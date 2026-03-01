@@ -63,6 +63,7 @@ enum LlmProvider {
   OPENAI_GPT4O_MINI
   DEEPSEEK_V3
   QWEN
+  LOCAL_LLM
 }
 
 enum TtsProvider {

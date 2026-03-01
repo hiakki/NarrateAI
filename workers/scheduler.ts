@@ -3,7 +3,7 @@ import cron from "node-cron";
 import { PrismaClient } from "@prisma/client";
 import { enqueueVideoGeneration } from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
-import { generateScript } from "../src/services/script-generator";
+
 import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
 import { resolveProviders } from "../src/services/providers/resolve";
@@ -190,38 +190,9 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   );
 
   try {
-    log(
-      `Generating script for "${auto.name}" (LLM: ${providers.llm})`,
-    );
-
-    const script = await generateScript(
-      {
-        niche: auto.niche,
-        tone: auto.tone,
-        artStyle: auto.artStyle,
-        duration: auto.duration,
-        language: auto.language,
-      },
-      providers.llm,
-    );
-
-    const recheck = await db.video.findFirst({
-      where: {
-        seriesId: auto.seriesId,
-        status: { in: ["QUEUED", "GENERATING"] },
-      },
-    });
-    if (recheck) {
-      log(`Automation "${auto.name}" — another video appeared while script was generating (${recheck.id}), discarding script`);
-      return;
-    }
-
     const video = await db.video.create({
       data: {
         seriesId: auto.seriesId,
-        title: script.title,
-        scriptText: script.fullScript,
-        scenesJson: script.scenes as never,
         targetDuration: auto.duration,
         status: "QUEUED",
       },
@@ -232,15 +203,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       seriesId: auto.seriesId,
       userId: auto.user.id,
       userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
-      title: script.title,
-      scriptText: video.scriptText!,
-      scenes: script.scenes,
+      automationName: auto.name,
       artStyle: auto.artStyle,
-      artStylePrompt:
-        artStyle?.promptModifier ?? "cinematic, high quality",
-      negativePrompt:
-        artStyle?.negativePrompt ??
-        "low quality, blurry, watermark, text",
+      artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
+      negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
       tone: auto.tone,
       niche: auto.niche,
       voiceId: auto.voiceId ?? "default",
@@ -252,9 +218,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       imageProvider: providers.image,
     });
 
-    log(`Enqueued video ${video.id} for automation "${auto.name}"`);
+    log(`Queued video ${video.id} for "${auto.name}" (script gen in worker)`);
   } catch (e) {
-    err(`Failed to auto-generate for "${auto.name}":`, e);
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+    err(`Failed to auto-generate for "${auto.name}": ${msg}`);
   }
 }
 
@@ -456,6 +423,7 @@ async function recoverStuckVideos() {
           seriesId: video.seriesId,
           userId: usr.id,
           userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
+          automationName: video.series.automation?.name,
           title: video.title ?? "Untitled",
           scriptText: video.scriptText ?? "",
           scenes,

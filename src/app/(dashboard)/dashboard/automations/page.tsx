@@ -255,17 +255,33 @@ export default function AutomationsPage() {
     } catch { /* ignore */ }
   }
 
+  const [triggerResult, setTriggerResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   async function handleTrigger(id: string) {
     setTriggeringId(id);
+    setTriggerResult(null);
+    const url = `/api/automations/${id}/trigger`;
     try {
-      const res = await fetch(`/api/automations/${id}/trigger`, { method: "POST" });
-      if (res.ok) fetchAutomations();
-      else {
-        const json = await res.json();
-        alert(json.error || "Trigger failed");
+      const res = await fetch(url, { method: "POST" });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        setTriggerResult({ ok: true, msg: `Queued: ${json.data?.title ?? id}` });
+        setTimeout(() => setTriggerResult(null), 5000);
+        fetchAutomations();
+        return;
       }
-    } catch { alert("Trigger failed"); }
-    finally { setTriggeringId(null); }
+      const text = await res.text();
+      let msg = `HTTP ${res.status}`;
+      try { msg = JSON.parse(text).error ?? msg; } catch { msg = text.slice(0, 200) || msg; }
+      setTriggerResult({ ok: false, msg });
+      setTimeout(() => setTriggerResult(null), 8000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setTriggerResult({ ok: false, msg });
+      setTimeout(() => setTriggerResult(null), 8000);
+    } finally {
+      setTriggeringId(null);
+    }
   }
 
   async function handleRetryVideo(videoId: string) {
@@ -927,6 +943,20 @@ export default function AutomationsPage() {
               <span>All {deleteAllState.total} automations deleted</span>
             </div>
           )}
+        </div>
+      )}
+
+      {triggerResult && (
+        <div className={`mb-4 rounded-lg border p-3 text-sm flex items-center gap-2 ${
+          triggerResult.ok
+            ? "border-green-200 bg-green-50 text-green-800"
+            : "border-red-200 bg-red-50 text-red-800"
+        }`}>
+          {triggerResult.ok
+            ? <CheckCircle2 className="h-4 w-4 shrink-0" />
+            : <AlertCircle className="h-4 w-4 shrink-0" />
+          }
+          <span>{triggerResult.ok ? "Triggered successfully" : "Trigger failed"}: {triggerResult.msg}</span>
         </div>
       )}
 

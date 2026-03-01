@@ -106,7 +106,7 @@ export function getVoiceById(id: string): Voice | undefined {
 export function getVoicesForProvider(ttsProvider: string, language?: string): Voice[] {
   const voices = VOICES_BY_PROVIDER[ttsProvider];
   if (!voices) {
-    console.warn(`[Voices] No voices configured for "${ttsProvider}", falling back to GEMINI_TTS`);
+    // no voices for this provider, fall back silently
     return VOICES_BY_PROVIDER.GEMINI_TTS;
   }
   if (!language) return voices;
@@ -134,7 +134,7 @@ export function resolveVoiceForProvider(ttsProvider: string, voiceId: string, la
   if (originalVoice) {
     const genderMatch = providerVoices.find((v) => v.gender === originalVoice.gender);
     if (genderMatch) {
-      console.log(`[Voices] Mapped "${voiceId}" -> "${genderMatch.id}" (${genderMatch.name}) for ${ttsProvider} (gender match)`);
+      // mapped to gender-matching voice
       return genderMatch.id;
     }
   }
@@ -144,6 +144,6 @@ export function resolveVoiceForProvider(ttsProvider: string, voiceId: string, la
   }
 
   const fallback = providerVoices[0].id;
-  console.log(`[Voices] Mapped "${voiceId}" -> "${fallback}" for ${ttsProvider} (default fallback)`);
+  // default fallback voice
   return fallback;
 }

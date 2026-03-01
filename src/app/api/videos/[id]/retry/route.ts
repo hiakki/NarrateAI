@@ -8,6 +8,9 @@ import { getDefaultVoiceId } from "@/config/voices";
 import { generateScript } from "@/services/script-generator";
 import { enqueueVideoGeneration } from "@/services/queue";
 import { resolveProviders } from "@/services/providers/resolve";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("API:Retry");
 
 export async function POST(
   req: NextRequest,
@@ -26,6 +29,7 @@ export async function POST(
             user: {
               select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true },
             },
+            automation: { select: { name: true } },
           },
         },
       },
@@ -54,11 +58,11 @@ export async function POST(
     // Prefer persisted scenes from DB (preserves original LLM visualDescriptions)
     if (video.scenesJson && Array.isArray(video.scenesJson) && (video.scenesJson as unknown[]).length > 0) {
       scenes = video.scenesJson as { text: string; visualDescription: string }[];
-      console.log(`[Retry] Restored ${scenes.length} scenes from DB for ${id}`);
+      log.log(`Restored ${scenes.length} scenes from DB for ${id}`);
     }
 
     if (scenes.length === 0) {
-      console.log(`[Retry] No persisted scenes, regenerating script for ${id}`);
+      log.log(`No persisted scenes, regenerating script for ${id}`);
       const script = await generateScript({
         niche: niche?.name ?? video.series.niche,
         tone: video.series.tone ?? "dramatic",
@@ -90,6 +94,7 @@ export async function POST(
       seriesId: video.seriesId,
       userId: session.user.id,
       userName: session.user.name ?? session.user.email?.split("@")[0] ?? "user",
+      automationName: video.series.automation?.name,
       title,
       scriptText,
       scenes,
@@ -109,7 +114,7 @@ export async function POST(
 
     return NextResponse.json({ data: { videoId: video.id, status: "QUEUED" } });
   } catch (error) {
-    console.error("Retry error:", error);
+    log.error("Retry error:", error instanceof Error ? error.message : error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to retry" }, { status: 500 });
   }
 }

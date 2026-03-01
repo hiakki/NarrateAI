@@ -45,7 +45,7 @@ export class FishAudioTtsProvider implements TtsProviderInterface {
     const durationMs = await getAudioDuration(audioPath, "mp3");
     const sceneTimings = estimateSceneTimings(scenes, durationMs);
 
-    log.log(`Audio saved: ${audioPath} (${durationMs}ms, ${(audioBuffer.length / 1024).toFixed(0)}KB)`);
+    log.debug(`Audio saved: ${audioPath} (${durationMs}ms, ${(audioBuffer.length / 1024).toFixed(0)}KB)`);
 
     return { audioPath, durationMs, sceneTimings };
   }

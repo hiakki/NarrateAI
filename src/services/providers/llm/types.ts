@@ -22,4 +22,5 @@ export interface GeneratedScript {
 
 export interface LlmProviderInterface {
   generateScript(input: ScriptInput): Promise<GeneratedScript>;
+  expandText?(text: string, targetWords: number): Promise<string>;
 }

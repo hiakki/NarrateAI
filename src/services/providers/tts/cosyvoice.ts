@@ -48,7 +48,7 @@ export class CosyVoiceTtsProvider implements TtsProviderInterface {
       throw new Error(`CosyVoice: no task_id returned: ${JSON.stringify(createData).slice(0, 200)}`);
     }
 
-    log.log(`Task created: ${taskId}`);
+    log.debug(`Task created: ${taskId}`);
 
     let audioUrl: string | null = null;
     for (let i = 0; i < 60; i++) {
@@ -91,7 +91,7 @@ export class CosyVoiceTtsProvider implements TtsProviderInterface {
     const durationMs = await getAudioDuration(audioPath, "mp3");
     const sceneTimings = estimateSceneTimings(scenes, durationMs);
 
-    log.log(`Audio saved: ${audioPath} (${durationMs}ms, ${(audioBuffer.length / 1024).toFixed(0)}KB)`);
+    log.debug(`Audio saved: ${audioPath} (${durationMs}ms, ${(audioBuffer.length / 1024).toFixed(0)}KB)`);
 
     return { audioPath, durationMs, sceneTimings };
   }

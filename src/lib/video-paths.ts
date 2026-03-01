@@ -1,10 +1,10 @@
 import path from "path";
 
-function slugify(s: string, maxLen = 40): string {
+function safeName(s: string, maxLen = 80): string {
   return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
     .slice(0, maxLen);
 }
 
@@ -13,10 +13,12 @@ export function buildVideoRelDir(
   username: string,
   videoTitle: string,
   videoId: string,
+  automationName?: string,
 ): string {
-  const userSlug = `${userId}_${slugify(username || "user")}`;
-  const videoSlug = `${slugify(videoTitle || "untitled")}_${videoId}`;
-  return path.join("videos", userSlug, videoSlug);
+  const userDir = `${safeName(username || "user")}-${userId}`;
+  const autoDir = safeName(automationName || "manual");
+  const videoDir = `${safeName(videoTitle || "untitled")}-${videoId}`;
+  return path.join("videos", userDir, autoDir, videoDir);
 }
 
 export function videoRelUrl(relDir: string): string {
@@ -52,10 +54,9 @@ export function contextAbsPath(relDir: string): string {
 }
 
 export function relDirFromVideoUrl(videoUrl: string): string | null {
-  const match = videoUrl.match(/^\/?videos\/(.+)\/video\.mp4$/);
-  if (match) return path.join("videos", match[1]);
-  const legacy = videoUrl.match(/^\/?videos\/([^/]+)\.mp4$/);
-  if (legacy) return null;
+  // Handles both new (videos/user/auto/video-id/video.mp4) and old (videos/user/video-id/video.mp4) layouts
+  const match = videoUrl.match(/^\/?(.*?)\/video\.mp4$/);
+  if (match && match[1]) return match[1];
   return null;
 }
 

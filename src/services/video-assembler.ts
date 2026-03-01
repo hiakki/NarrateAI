@@ -229,7 +229,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     const fadeOut = i === imagePaths.length - 1 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
     const fadeOutStart = Math.max(0, dur - fadeOut);
 
-    log.log(`Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
+    log.debug(`Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
 
     filterParts.push(
       `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS`

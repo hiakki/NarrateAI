@@ -65,7 +65,7 @@ export function expandScenesToImageSlots(
   for (let i = 0; i < numScenes; i++) {
     distribution.push(`S${i + 1}×${base + (i < remainder ? 1 : 0)}`);
   }
-  log.log(
+  log.debug(
     `${numScenes} scenes → ${slots.length} images [${distribution.join(", ")}] for ${Math.round(audioDurationMs / 1000)}s audio (~${Math.round(audioDurationMs / 1000 / slots.length)}s per image)`,
   );
 

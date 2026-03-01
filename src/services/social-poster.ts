@@ -166,7 +166,10 @@ async function finalizePlatform(
 
     const hasAnySuccess = filtered.some((e) => e.success === true);
 
-    log.log(`Finalizing ${entry.platform} for ${videoId}: ${JSON.stringify(entry)} | saving ${filtered.length} entries`);
+    const summary = entry.success
+      ? `success postId=${(entry as { postId?: string | null }).postId ?? "?"}`
+      : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
+    log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
 
     await db.video.update({
       where: { id: videoId },
@@ -175,12 +178,6 @@ async function finalizePlatform(
         ...(hasAnySuccess ? { status: "POSTED" } : {}),
       },
     });
-
-    const verify = await db.video.findUnique({
-      where: { id: videoId },
-      select: { postedPlatforms: true },
-    });
-    log.log(`Verified ${videoId} postedPlatforms: ${JSON.stringify(verify?.postedPlatforms)}`);
   } catch (e) {
     log.error(`Failed to finalize ${entry.platform} for ${videoId}:`, e);
   }

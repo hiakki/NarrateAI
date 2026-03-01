@@ -6,6 +6,7 @@ import { GeminiLlmProvider } from "./llm/gemini";
 import { OpenAILlmProvider } from "./llm/openai";
 import { DeepSeekLlmProvider } from "./llm/deepseek";
 import { QwenLlmProvider } from "./llm/qwen";
+import { LocalLlmProvider } from "./llm/local";
 
 import { GeminiTtsProvider } from "./tts/gemini";
 import { ElevenLabsTtsProvider } from "./tts/elevenlabs";
@@ -30,6 +31,7 @@ const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   OPENAI_GPT4O_MINI: () => new OpenAILlmProvider(),
   DEEPSEEK_V3: () => new DeepSeekLlmProvider(),
   QWEN: () => new QwenLlmProvider(),
+  LOCAL_LLM: () => new LocalLlmProvider(),
 };
 
 const TTS_MAP: Record<string, () => TtsProviderInterface> = {

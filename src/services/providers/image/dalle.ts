@@ -46,11 +46,11 @@ export class DalleImageProvider implements ImageProviderInterface {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.log(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
+          log.debug(`Failed attempt ${attempt + 1}: ${msg.slice(0, 150)}`);
         }
 
         if (buffer) break;
-        log.log(`Retry ${attempt + 1}/3 for scene ${i}`);
+        log.debug(`Retry ${attempt + 1}/3 for scene ${i}`);
         if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
       }
 
@@ -61,7 +61,7 @@ export class DalleImageProvider implements ImageProviderInterface {
       await fs.writeFile(imagePath, buffer);
       imagePaths.push(imagePath);
       await onProgress?.(i, imagePath);
-      log.log(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
+      log.debug(`Scene ${i + 1}/${scenes.length} saved (${(buffer.length / 1024).toFixed(0)}KB)`);
     }
 
     return { imagePaths, tmpDir };

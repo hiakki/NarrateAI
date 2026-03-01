@@ -27,7 +27,7 @@ export class EdgeTtsProvider implements TtsProviderInterface {
     const sceneTimings = estimateSceneTimings(scenes, durationMs);
 
     const stat = await fs.stat(audioPath);
-    log.log(
+    log.debug(
       `Audio saved: ${audioPath} (${durationMs}ms, ${(stat.size / 1024).toFixed(0)}KB)`
     );
 

@@ -52,13 +52,13 @@ export async function getAudioDuration(filePath: string, format: "wav" | "mp3" =
       const fileSizeBytes = Math.max(0, stat.size - 44);
       const bytesPerSecond = 48000;
       const estimatedMs = Math.round(Math.max(10, fileSizeBytes / bytesPerSecond) * 1000);
-      log.log(`WAV estimate from file size: ${Math.round(estimatedMs / 1000)}s`);
+      log.debug(`WAV estimate from file size: ${Math.round(estimatedMs / 1000)}s`);
       return estimatedMs;
     } else {
       const bitrate = 128000;
       const estimatedMs = Math.round((stat.size * 8 * 1000) / bitrate);
       const result = Math.max(5000, estimatedMs);
-      log.log(`MP3 estimate from file size: ${Math.round(result / 1000)}s`);
+      log.debug(`MP3 estimate from file size: ${Math.round(result / 1000)}s`);
       return result;
     }
   } catch {

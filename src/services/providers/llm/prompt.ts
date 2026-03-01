@@ -17,6 +17,15 @@ export function buildPrompt(input: ScriptInput, sceneCount: number): string {
 
   const enhancer = getPromptEnhancer(input.niche, input.tone);
 
+  // TTS speaks at ~2 w/s. Platform limit is 90s for Reels/Shorts.
+  const PLATFORM_MAX_SECS = 88; // 2s safety margin
+  const minTotalWords = Math.max(1, Math.floor(input.duration * 0.9 * 2.0));
+  const targetTotalWords = Math.round(input.duration * 2.5);
+  const maxTotalWords = Math.floor(PLATFORM_MAX_SECS * 2.0);
+  const minWordsPerScene = Math.ceil(minTotalWords / sceneCount);
+  const targetWordsPerScene = Math.ceil(targetTotalWords / sceneCount);
+  const maxWordsPerScene = Math.floor(maxTotalWords / sceneCount);
+
   const languageRule = isNonEnglish
     ? `- IMPORTANT: Write ALL narration text ("text" field) in ${langName}. Use natural, conversational ${langName} — not transliteration.
 - The "visualDescription" field MUST remain in English (for image generation).
@@ -48,12 +57,18 @@ ${visualGuideBlock}
 
 ═══ NARRATION RULES ═══
 - The "text" field is narration spoken by AI voiceover — write it to be HEARD, not read
-- Target approximately ${input.duration} seconds of narration across all ${sceneCount} scenes
+- LENGTH (NON-NEGOTIABLE — script REJECTED if outside range):
+  * Target: ${targetTotalWords} words of narration total (across all ${sceneCount} scenes).
+  * MINIMUM: ${minTotalWords} words — shorter = video too short = REJECTED.
+  * MAXIMUM: ${maxTotalWords} words — longer = video exceeds 90-second platform limit for Reels/Shorts = REJECTED.
+  * Acceptable range: ${minTotalWords}–${maxTotalWords} words. Aim for exactly ${targetTotalWords}.
+  * Per scene: ${minWordsPerScene}–${maxWordsPerScene} words each — 3-5 full sentences, not one.
+  * Common mistake: writing a single 8-12 word sentence per scene. That produces a 20-second video instead of ${input.duration}s.
 - Use short, punchy sentences. Every word must earn its place.
 - Scene 1 MUST open with a strong hook in the first 2 seconds (surprise, conflict, shocking fact, or emotional trigger).
 - Build emotional intensity across scenes — never repeat the same energy level
-- Tell a COMPLETE story with a beginning, rising tension, climax, and resolution — do NOT leave the story unfinished
-- Keep each scene narration in a tight 1-2 lines so pacing stays fast for reels/shorts.
+- COMPLETE STORY (CRITICAL): The story must feel finished, not cut off. Structure: (1) Hook/setup, (2) Rising tension or conflict, (3) Climax, (4) Clear resolution or payoff. The final scene MUST deliver closure — answer the hook, resolve the conflict, or give a satisfying takeaway. Never end on a cliffhanger or mid-thought; the viewer should feel the story is complete.
+- Keep pacing tight for reels/shorts but ensure EACH scene has enough dialogue to fill ~${(input.duration / sceneCount).toFixed(0)} seconds when spoken.
 ${languageRule}
 
 ═══ VISUAL DESCRIPTION RULES (CRITICAL — READ CAREFULLY) ═══
@@ -102,11 +117,13 @@ Intensity curve guidance:
 - Scene 1: Hook (high curiosity/shock)
 - Scenes 2-${Math.max(2, sceneCount - 2)}: Build tension and stakes with progressively stronger visual/action beats
 - Scene ${Math.max(2, sceneCount - 1)}: Peak intensity / climax frame
-- Scene ${sceneCount}: Resolution frame with payoff (still emotionally strong, but narratively conclusive)
+- Scene ${sceneCount}: Resolution — closure, payoff, or clear takeaway. The viewer must feel the story is DONE, not that it was cut short. No cliffhangers.
 
 FINAL CHECK — Ask yourself for EACH scene:
 1. Does the image show EXACTLY what the narration describes? (If text says "he ran", does the image show running?)
 2. Does the image feel ALIVE — with motion, energy, and a captured-in-the-moment quality?
 3. Would a viewer IMMEDIATELY understand what is happening in the story just from the image?
-If any answer is NO, rewrite that visualDescription until all three are YES.`;
+4. WORD COUNT CHECK: Count every word in "text" across ALL scenes. Must be between ${minTotalWords}–${maxTotalWords} words (target ${targetTotalWords}). Too few → expand scenes. Too many → trim sentences.
+5. Does the story feel COMPLETE? Does the last scene give closure (resolution, answer to the hook, or clear takeaway)? Would a viewer feel satisfied, not cut off? If the ending feels abrupt or like a cliffhanger, rewrite the final scene(s).
+If any answer is NO, rewrite until all five are YES.`;
 }

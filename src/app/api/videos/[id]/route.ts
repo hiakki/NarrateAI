@@ -20,7 +20,10 @@ async function countSceneImages(videoUrl: string | null, videoId: string): Promi
   try {
     const files = await fs.readdir(dir);
     const scenes = files.filter(f => f.startsWith("scene-")).sort();
-    const baseUrl = videoUrl.replace(/\/video\.mp4$/, "");
+    const isNew = /\/video\.mp4$/.test(videoUrl);
+    const baseUrl = isNew
+      ? videoUrl.replace(/\/video\.mp4$/, "")
+      : `/videos/${videoId}`;
     return {
       count: scenes.length,
       urls: scenes.map(f => `${baseUrl}/scenes/${f}`),

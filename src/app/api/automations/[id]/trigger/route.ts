@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { enqueueVideoGeneration } from "@/services/queue";
-import { generateScript } from "@/services/script-generator";
 import { getArtStyleById } from "@/config/art-styles";
 import { getNicheById } from "@/config/niches";
 import { resolveProviders } from "@/services/providers/resolve";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("API:Trigger");
 
 export async function POST(
   _req: NextRequest,
@@ -85,23 +87,10 @@ export async function POST(
       auto.user,
     );
 
-    const script = await generateScript(
-      {
-        niche: auto.niche,
-        tone: auto.tone,
-        artStyle: auto.artStyle,
-        duration: auto.duration,
-        language: auto.language,
-      },
-      providers.llm,
-    );
-
+    // Create video record immediately — script generation happens in the worker
     const video = await db.video.create({
       data: {
         seriesId: auto.seriesId,
-        title: script.title,
-        scriptText: script.fullScript,
-        scenesJson: script.scenes as never,
         targetDuration: auto.duration,
         status: "QUEUED",
       },
@@ -112,9 +101,7 @@ export async function POST(
       seriesId: auto.seriesId,
       userId: auto.user.id,
       userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
-      title: script.title,
-      scriptText: video.scriptText!,
-      scenes: script.scenes,
+      automationName: auto.name,
       artStyle: auto.artStyle,
       artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
       negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
@@ -134,11 +121,14 @@ export async function POST(
       data: { lastRunAt: new Date() },
     });
 
+    log.log(`Triggered "${auto.name}" → video ${video.id} queued`);
+
     return NextResponse.json({
-      data: { videoId: video.id, title: script.title },
+      data: { videoId: video.id, title: auto.name },
     });
   } catch (error) {
-    console.error("Trigger automation error:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error(`Trigger failed: ${msg.slice(0, 200)}`);
     return NextResponse.json(
       { error: "Failed to trigger automation" },
       { status: 500 },

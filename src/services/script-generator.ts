@@ -9,10 +9,43 @@ export type { ScriptInput, Scene, GeneratedScript } from "./providers/llm/types"
 import type { ScriptInput, GeneratedScript } from "./providers/llm/types";
 
 const log = createLogger("ScriptGen");
-const TWO_PASS_ENABLED = (process.env.SCRIPT_TWO_PASS_ENABLED ?? "true").toLowerCase() !== "false";
+const TWO_PASS_ENABLED = (process.env.SCRIPT_TWO_PASS_ENABLED ?? "false").toLowerCase() === "true";
 const TWO_PASS_CANDIDATES = Math.max(2, parseInt(process.env.SCRIPT_TWO_PASS_CANDIDATES ?? "3", 10));
 const TWO_PASS_MAX_ATTEMPTS = Math.max(2, parseInt(process.env.SCRIPT_TWO_PASS_MAX_ATTEMPTS ?? "6", 10));
 const MULTI_LLM_ENSEMBLE = (process.env.SCRIPT_MULTI_LLM_ENSEMBLE ?? "true").toLowerCase() !== "false";
+
+const TTS_WORDS_PER_SEC = 2.0;
+const PLATFORM_MAX_SECS = 88; // Reels/Shorts = 90s, keep 2s safety margin
+
+function getMinWords(duration: number): number {
+  return Math.max(1, Math.floor(duration * 0.9 * TTS_WORDS_PER_SEC));
+}
+
+function getMaxWords(): number {
+  return Math.floor(PLATFORM_MAX_SECS * TTS_WORDS_PER_SEC);
+}
+
+function countWords(text: string): number {
+  return text
+    .replace(/[—–]/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+type WordCheck =
+  | { ok: true }
+  | { ok: false; reason: "short"; count: number; min: number }
+  | { ok: false; reason: "long"; count: number; max: number };
+
+function checkWordCount(script: GeneratedScript, duration: number): WordCheck {
+  const count = countWords(script.fullScript);
+  const min = getMinWords(duration);
+  const max = getMaxWords();
+  if (count < min) return { ok: false, reason: "short", count, min };
+  if (count > max) return { ok: false, reason: "long", count, max };
+  return { ok: true };
+}
 
 function buildTopicCandidates(input: ScriptInput): string[] {
   const niche = getNicheById(input.niche);
@@ -119,7 +152,8 @@ export async function generateScript(
   const preferredProvider = provider ?? PLATFORM_DEFAULTS.llm;
   const llm = getLlmProvider(preferredProvider);
   if (!TWO_PASS_ENABLED) {
-    return llm.generateScript(input);
+    const script = await llm.generateScript(input);
+    return ensureWordCount(script, input, llm);
   }
 
   const targetScenes = getSceneCount(input.duration);
@@ -142,7 +176,8 @@ export async function generateScript(
         candidates.push({ script, topic, provider: llmId, score });
         log.log(`Two-pass candidate scored: provider=${llmId} topic="${topic}" score=${score}`);
       } catch (err) {
-        log.warn(`Two-pass candidate failed: provider=${llmId} topic="${topic}" err=${err instanceof Error ? err.message : String(err)}`);
+        const errMsg = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+        log.warn(`Two-pass candidate failed: provider=${llmId} err=${errMsg}`);
       }
     }
   }
@@ -151,9 +186,110 @@ export async function generateScript(
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
     log.log(`Two-pass selected provider=${best.provider} topic="${best.topic}" score=${best.score} (from ${candidates.length} candidates, attempts=${attempts})`);
-    return best.script;
+    const llmForBest = getLlmProvider(best.provider);
+    return ensureWordCount(best.script, input, llmForBest);
   }
 
   log.warn("Two-pass failed for all candidates, falling back to single-pass");
-  return llm.generateScript(input);
+  return ensureWordCount(await llm.generateScript(input), input, llm);
+}
+
+async function expandScenes(
+  script: GeneratedScript,
+  totalTargetWords: number,
+  expandText: (text: string, targetWords: number) => Promise<string>,
+): Promise<GeneratedScript> {
+  const sceneCount = script.scenes.length;
+  const targetPerScene = Math.ceil(totalTargetWords / sceneCount);
+  const expandedScenes = [...script.scenes];
+
+  for (let i = 0; i < expandedScenes.length; i++) {
+    const scene = expandedScenes[i];
+    const wc = countWords(scene.text);
+    if (wc >= targetPerScene * 0.85) continue;
+
+    try {
+      const expanded = await expandText(scene.text, targetPerScene);
+      expandedScenes[i] = { ...scene, text: expanded };
+      log.log(`Scene ${i + 1} expanded: ${wc} → ${countWords(expanded)} words`);
+    } catch (err) {
+      log.warn(`Scene ${i + 1} expansion failed: ${(err as Error).message?.slice(0, 120)}`);
+    }
+  }
+
+  const fullScript = expandedScenes.map((s) => s.text).join(" ");
+  return { ...script, scenes: expandedScenes, fullScript };
+}
+
+async function ensureWordCount(
+  script: GeneratedScript,
+  input: ScriptInput,
+  llm: {
+    generateScript: (i: ScriptInput) => Promise<GeneratedScript>;
+    expandText?: (text: string, targetWords: number) => Promise<string>;
+  },
+): Promise<GeneratedScript> {
+  const min = getMinWords(input.duration);
+  const max = getMaxWords();
+  const target = Math.round(input.duration * 2.5);
+
+  const deviation = (wc: number) => {
+    if (wc >= min && wc <= max) return 0;
+    return wc < min ? min - wc : wc - max;
+  };
+
+  let best = script;
+  let bestDev = deviation(countWords(script.fullScript));
+
+  if (bestDev === 0) {
+    log.log(`Script length OK: ${countWords(best.fullScript)} words (range ${min}–${max}, target ${target} for ${input.duration}s)`);
+    return script;
+  }
+
+  const MAX_RETRIES = 2;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const wc = countWords(best.fullScript);
+    const reason = wc < min ? "short" : "long";
+    const correction = reason === "short"
+      ? `REJECTED (attempt ${attempt}): only ${wc} words (minimum ${min}). Write AT LEAST ${target} words. Each scene needs 3-5 full sentences of vivid narration.`
+      : `REJECTED (attempt ${attempt}): ${wc} words exceeds ${max}-word max (90s platform limit). Write EXACTLY ${target} words. Trim each scene to 3-4 sentences.`;
+
+    log.warn(`Script too ${reason}: ${wc} words. Retry ${attempt}/${MAX_RETRIES}.`);
+
+    try {
+      const retryTopic = `${input.topic ?? ""}\n\n[LENGTH CORRECTION: ${correction}]`.trim();
+      const retried = await llm.generateScript({ ...input, topic: retryTopic });
+      const retryDev = deviation(countWords(retried.fullScript));
+      if (retryDev < bestDev) { best = retried; bestDev = retryDev; }
+      if (bestDev === 0) {
+        log.log(`Retry ${attempt} succeeded: ${countWords(best.fullScript)} words`);
+        return best;
+      }
+    } catch (err) {
+      log.warn(`Retry ${attempt} failed: ${(err as Error).message?.slice(0, 120)}`);
+    }
+  }
+
+  if (countWords(best.fullScript) < min && llm.expandText) {
+    log.log(`Retries exhausted (${countWords(best.fullScript)}/${min} words). Trying scene-by-scene expansion…`);
+    try {
+      const expandFn = (t: string, w: number) => llm.expandText!(t, w);
+      const expanded = await expandScenes(best, target, expandFn);
+      const expandedDev = deviation(countWords(expanded.fullScript));
+      if (expandedDev < bestDev) {
+        best = expanded;
+        bestDev = expandedDev;
+      }
+      if (bestDev === 0) {
+        log.log(`Scene expansion succeeded: ${countWords(best.fullScript)} words`);
+        return best;
+      }
+      log.warn(`Scene expansion improved script: ${countWords(best.fullScript)} words (target ${min}–${max})`);
+    } catch (err) {
+      log.warn(`Scene expansion failed: ${(err as Error).message?.slice(0, 120)}`);
+    }
+  }
+
+  log.warn(`Best effort: ${countWords(best.fullScript)} words (target ${min}–${max})`);
+  return best;
 }
