@@ -362,7 +362,7 @@ do_restore() {
   echo "  Next steps:"
   echo "    1. Review .env and update API keys if needed"
   echo "    2. Run: pnpm install"
-  echo "    3. Run: pnpm dev:all   (or use scripts/deploy.sh)"
+  echo "    3. Run: pnpm dev:all   (or use scripts/setup_prerequisites.sh)"
   echo ""
 }
 
