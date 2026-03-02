@@ -224,11 +224,11 @@ export default function SettingsPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Role</span>
-              <span className="capitalize">{(session?.user as Record<string, string>)?.role?.toLowerCase()}</span>
+              <span className="capitalize">{(session?.user as unknown as Record<string, string>)?.role?.toLowerCase()}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Plan</span>
-              <span className="capitalize">{(session?.user as Record<string, string>)?.plan?.toLowerCase()}</span>
+              <span className="capitalize">{(session?.user as unknown as Record<string, string>)?.plan?.toLowerCase()}</span>
             </div>
           </CardContent>
         </Card>

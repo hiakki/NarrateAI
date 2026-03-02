@@ -57,7 +57,7 @@ export async function POST(
     await db.video.update({
       where: { id },
       data: {
-        postedPlatforms: newPosted,
+        postedPlatforms: newPosted as never,
         status: newPosted.length > 0 ? "POSTED" : "READY",
       },
     });

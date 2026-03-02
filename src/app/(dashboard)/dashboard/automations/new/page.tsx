@@ -289,7 +289,7 @@ export default function NewAutomationPage() {
     return Object.fromEntries(keys.map((k) => {
       const avg = scorePlatforms.reduce((sum, p) => sum + activeNicheScore.perPlatform[p].components[k], 0) / scorePlatforms.length;
       return [k, clamp(avg)];
-    })) as Record<keyof typeof SCORE_WEIGHTS, number>;
+    })) as unknown as Record<keyof typeof SCORE_WEIGHTS, number>;
   }, [activeNicheScore, scorePlatforms]);
 
   const fetchProviders = useCallback(async () => {

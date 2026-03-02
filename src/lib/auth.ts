@@ -126,7 +126,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.id = token.id as string;
         session.user.role = token.role as UserRole;
         session.user.plan = token.plan as UserPlan;
-        session.user.emailVerified = (token.emailVerified as boolean) ?? false;
+        (session.user as unknown as Record<string, unknown>).emailVerified = (token.emailVerified as boolean) ?? false;
       }
       return session;
     },

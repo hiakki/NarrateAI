@@ -143,7 +143,7 @@ async function claimPlatform(videoId: string, platform: string): Promise<boolean
 
   await db.video.update({
     where: { id: videoId },
-    data: { postedPlatforms: allEntries },
+    data: { postedPlatforms: allEntries as never },
   });
 
   log.log(`Claimed ${platform} for ${videoId} (uploading)`);
@@ -174,7 +174,7 @@ async function finalizePlatform(
     await db.video.update({
       where: { id: videoId },
       data: {
-        postedPlatforms: filtered,
+        postedPlatforms: filtered as never,
         ...(hasAnySuccess ? { status: "POSTED" } : {}),
       },
     });
@@ -251,7 +251,7 @@ export async function postVideoToSocials(
         select: { postedPlatforms: true },
       });
       if (prevVideo) {
-        const entries = (prevVideo.postedPlatforms ?? []) as PlatformEntry[];
+        const entries = (prevVideo.postedPlatforms ?? []) as unknown as PlatformEntry[];
         const ytEntry = entries.find((e) => e.platform === "YOUTUBE" && e.success === true);
         if (ytEntry?.url) {
           previousYtUrl = ytEntry.url;
@@ -291,7 +291,7 @@ export async function postVideoToSocials(
     const gapMs = Math.max(0, PLATFORM_POST_GAP_MINUTES) * 60 * 1000;
     if (gapMs > 0) {
       const latestSuccessAt = await getLatestPlatformSuccessTime(
-        video.series.user.id,
+        video!.series.user.id,
         platform,
         videoId,
       );
@@ -384,22 +384,22 @@ export async function postVideoToSocials(
         });
 
         if (result.postId) {
+          const postId = result.postId;
           void (async () => {
             try {
-              // Do not block platform posting completion; comments run best-effort in parallel.
               await sleep(3000);
               switch (platform) {
                 case "INSTAGRAM":
-                  await postInstagramComment(result.postId, accessToken, firstComment.ig);
+                  await postInstagramComment(postId, accessToken, firstComment.ig);
                   break;
                 case "FACEBOOK":
-                  await postFacebookComment(result.postId, accessToken, firstComment.fb);
+                  await postFacebookComment(postId, accessToken, firstComment.fb);
                   break;
                 case "YOUTUBE":
                   await postYouTubeComment(
                     accessToken,
                     refreshToken,
-                    result.postId,
+                    postId,
                     firstComment.yt,
                     account.platformUserId,
                     video!.series.user.id,

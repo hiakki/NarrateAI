@@ -97,7 +97,7 @@ export async function POST(
     if (video.series.userId !== session.user.id && session.user.role === "USER")
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    const currentPosted = (video.postedPlatforms ?? []) as PlatformEntry[];
+    const currentPosted = (video.postedPlatforms ?? []) as unknown as PlatformEntry[];
     const trimmedUrl = url.trim();
 
     const existingIdx = currentPosted.findIndex(
@@ -123,7 +123,7 @@ export async function POST(
     await db.video.update({
       where: { id },
       data: {
-        postedPlatforms: newPosted,
+        postedPlatforms: newPosted as never,
         status: "POSTED",
       },
     });

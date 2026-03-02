@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,14 @@ const PLATFORM_CONFIG = {
 } as const;
 
 export default function ChannelsPage() {
+  return (
+    <Suspense>
+      <ChannelsContent />
+    </Suspense>
+  );
+}
+
+function ChannelsContent() {
   const searchParams = useSearchParams();
   const connected = searchParams.get("connected");
   const error = searchParams.get("error");

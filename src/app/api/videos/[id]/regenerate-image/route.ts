@@ -41,7 +41,7 @@ export async function POST(
 
     const user = await db.user.findUnique({
       where: { id: session.user.id },
-      select: { defaultImageProvider: true },
+      select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true },
     });
 
     const { resolveProviders } = await import("@/services/providers/resolve");
