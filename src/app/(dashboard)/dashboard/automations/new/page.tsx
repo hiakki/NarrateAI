@@ -244,7 +244,7 @@ export default function NewAutomationPage() {
           time: clamp(time),
         },
       }];
-    })) as Record<PlatformKey, { overall: number; components: Record<string, number> }>;
+    })) as unknown as Record<PlatformKey, { overall: number; components: Record<string, number> }>;
 
     const overall = clamp(PLATFORMS.reduce((sum, p) => sum + perPlatform[p].overall, 0) / PLATFORMS.length);
     return { overall, perPlatform };
