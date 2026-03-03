@@ -7,65 +7,106 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("LLM:Local");
 
 export class LocalLlmProvider implements LlmProviderInterface {
-  async generateScript(input: ScriptInput): Promise<GeneratedScript> {
-    const baseURL = (process.env.LOCAL_LLM_URL ?? "").trim();
-    if (!baseURL) throw new Error("LOCAL_LLM_URL is not configured");
-
-    const model = (process.env.LOCAL_LLM_MODEL ?? "").trim() || "default";
+  private get baseURL() {
+    const url = (process.env.LOCAL_LLM_URL ?? "").trim();
+    if (!url) throw new Error("LOCAL_LLM_URL is not configured");
+    return url;
+  }
+  private get model() {
+    return (process.env.LOCAL_LLM_MODEL ?? "").trim() || "default";
+  }
+  private get headers() {
     const apiKey = process.env.LOCAL_LLM_API_KEY || "not-needed";
-
-    const sceneCount = getSceneCount(input.duration);
-    const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
-
-    const endpoint = `${baseURL}/chat/completions`;
-    log.log(`── REQUEST ── model=${model} niche=${input.niche} duration=${input.duration}s scenes=${sceneCount}`);
-    log.log(`   Endpoint : ${endpoint}`);
-    log.log(`   Prompt (${prompt.length} chars):\n${prompt}`);
-
-    const systemMsg = "You are a scriptwriter. You MUST respond with valid JSON only. No markdown fences, no explanation — just the raw JSON object.";
-    const body = {
-      model,
-      messages: [
-        { role: "system", content: systemMsg },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: 4096,
-      temperature: 0.9,
-      stream: false,
+    return {
+      "Content-Type": "application/json",
+      ...(apiKey !== "not-needed" ? { Authorization: `Bearer ${apiKey}` } : {}),
     };
+  }
 
-    log.log(`   Body size: ${JSON.stringify(body).length} bytes, max_tokens=4096, temp=0.9`);
-
+  private async streamChat(
+    messages: { role: string; content: string }[],
+    maxTokens: number,
+    temperature: number,
+  ): Promise<{ content: string; finishReason: string }> {
+    const endpoint = `${this.baseURL}/chat/completions`;
     const res = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey !== "not-needed" ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
+      headers: this.headers,
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        max_tokens: maxTokens,
+        temperature,
+        stream: true,
+      }),
     });
 
     if (!res.ok) {
-      const contentType = res.headers.get("content-type") ?? "";
+      const ct = res.headers.get("content-type") ?? "";
       let detail: string;
-      if (contentType.includes("json")) {
+      if (ct.includes("json")) {
         const errJson = await res.json().catch(() => null);
         detail = errJson?.error?.message ?? JSON.stringify(errJson).slice(0, 300);
       } else {
         const snippet = (await res.text()).slice(0, 300);
-        const isHtml = snippet.includes("<html") || snippet.includes("<!DOCTYPE");
-        detail = isHtml
-          ? `Got HTML error page (likely Cloudflare/proxy error, is your local LLM running?)`
+        detail = snippet.includes("<html") || snippet.includes("<!DOCTYPE")
+          ? "Got HTML error page (likely Cloudflare/proxy error, is your local LLM running?)"
           : snippet;
       }
       log.error(`── RESPONSE ERROR ── HTTP ${res.status}: ${detail}`);
       throw new Error(`Local LLM ${res.status}: ${detail}`);
     }
 
-    const json = await res.json();
-    const text = json.choices?.[0]?.message?.content ?? "{}";
-    const finishReason = json.choices?.[0]?.finish_reason ?? "unknown";
-    log.log(`── RESPONSE ── ${res.status} OK, ${text.length} chars, finish=${finishReason}`);
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response body from local LLM");
+
+    const decoder = new TextDecoder();
+    let content = "";
+    let finishReason = "unknown";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) content += delta;
+          const fr = parsed.choices?.[0]?.finish_reason;
+          if (fr) finishReason = fr;
+        } catch { /* partial JSON chunk, skip */ }
+      }
+    }
+
+    return { content, finishReason };
+  }
+
+  async generateScript(input: ScriptInput): Promise<GeneratedScript> {
+    const sceneCount = getSceneCount(input.duration);
+    const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
+
+    log.log(`── REQUEST ── model=${this.model} niche=${input.niche} duration=${input.duration}s scenes=${sceneCount}`);
+    log.log(`   Endpoint : ${this.baseURL}/chat/completions (streaming)`);
+    log.log(`   Prompt (${prompt.length} chars):\n${prompt}`);
+
+    const { content: text, finishReason } = await this.streamChat(
+      [
+        { role: "system", content: "You are a scriptwriter. You MUST respond with valid JSON only. No markdown fences, no explanation — just the raw JSON object." },
+        { role: "user", content: prompt },
+      ],
+      4096,
+      0.9,
+    );
+
+    log.log(`── RESPONSE ── ${text.length} chars, finish=${finishReason}`);
     log.log(`   Output:\n${text}`);
 
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
@@ -77,7 +118,6 @@ export class LocalLlmProvider implements LlmProviderInterface {
     }
 
     const fullScript = scenes.map((s) => s.text).join(" ");
-
     log.log(`Script OK: "${(parsed.title as string) || "Untitled"}" — ${scenes.length} scenes, ${fullScript.length} chars`);
 
     return {
@@ -90,26 +130,19 @@ export class LocalLlmProvider implements LlmProviderInterface {
   }
 
   async expandText(text: string, targetWords: number): Promise<string> {
-    const baseURL = (process.env.LOCAL_LLM_URL ?? "").trim();
-    if (!baseURL) throw new Error("LOCAL_LLM_URL is not configured");
-
-    const model = (process.env.LOCAL_LLM_MODEL ?? "").trim() || "default";
-    const apiKey = process.env.LOCAL_LLM_API_KEY || "not-needed";
     const currentWords = text.split(/\s+/).filter(Boolean).length;
-
     log.log(`── EXPAND ── ${currentWords} → ${targetWords} words`);
 
-    const body = {
-      model,
-      messages: [
+    const { content: expanded } = await this.streamChat(
+      [
         {
-          role: "system" as const,
+          role: "system",
           content:
             "You are a narration writer. You expand short narration into longer, richer narration. " +
             "Respond with ONLY the expanded narration text. No JSON, no quotes, no explanations.",
         },
         {
-          role: "user" as const,
+          role: "user",
           content:
             `Expand this narration from ${currentWords} words to approximately ${targetWords} words.\n` +
             `Add vivid sensory details, dramatic pacing, and descriptive language. ` +
@@ -118,33 +151,17 @@ export class LocalLlmProvider implements LlmProviderInterface {
             `Expanded (${targetWords} words):`,
         },
       ],
-      max_tokens: 1024,
-      temperature: 0.7,
-      stream: false,
-    };
+      1024,
+      0.7,
+    );
 
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey !== "not-needed" ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) throw new Error(`Expand failed: HTTP ${res.status}`);
-
-    const json = await res.json();
-    let expanded = (json.choices?.[0]?.message?.content ?? "").trim();
-
-    // Strip markdown fences, surrounding quotes, or "Expanded:" prefixes
-    expanded = expanded
+    let cleaned = expanded.trim()
       .replace(/^```[\s\S]*?\n/, "").replace(/\n?```\s*$/, "")
       .replace(/^["']|["']$/g, "")
       .replace(/^Expanded.*?:\s*/i, "")
       .trim();
 
-    const expandedWords = expanded.split(/\s+/).filter(Boolean).length;
+    const expandedWords = cleaned.split(/\s+/).filter(Boolean).length;
     log.log(`── EXPAND RESULT ── ${expandedWords} words (target ${targetWords})`);
 
     if (expandedWords < currentWords) {
@@ -152,6 +169,6 @@ export class LocalLlmProvider implements LlmProviderInterface {
       return text;
     }
 
-    return expanded;
+    return cleaned;
   }
 }
