@@ -1085,18 +1085,21 @@ export default function AutomationDetailPage() {
                   </div>
                   {(video.status === "READY" || video.status === "POSTED") && (() => {
                     const insights = video.insights && typeof video.insights === "object" ? video.insights : null;
+                    const platformKeys = ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
                     let views = 0, interactions = 0;
                     if (insights) {
-                      for (const p of Object.values(insights)) {
-                        if (p && typeof p === "object") {
-                          views += Number(p.views) || 0;
-                          interactions += (Number(p.likes) || 0) + (Number(p.comments) || 0) + (Number(p.reactions) || 0);
+                      for (const key of platformKeys) {
+                        const p = (insights as Record<string, unknown>)[key];
+                        if (p && typeof p === "object" && !Array.isArray(p)) {
+                          const o = p as { views?: number; likes?: number; comments?: number; reactions?: number };
+                          views += Number(o.views) || 0;
+                          interactions += (Number(o.likes) || 0) + (Number(o.comments) || 0) + (Number(o.reactions) || 0);
                         }
                       }
                     }
                     const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
                     return (
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground pt-1 border-t border-border/60">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground pt-1 border-t border-border/60">
                         <BarChart2 className="h-3 w-3 shrink-0" />
                         <span className="flex items-center gap-1"><Eye className="h-3 w-3" /> {fmt(views)} views</span>
                         <span className="flex items-center gap-1"><Heart className="h-3 w-3" /> {fmt(interactions)} interactions</span>

@@ -100,6 +100,7 @@ function ChannelsContent() {
   const searchParams = useSearchParams();
   const connected = searchParams.get("connected");
   const error = searchParams.get("error");
+  const youtubeError = searchParams.get("youtube_error");
 
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,6 +165,16 @@ function ChannelsContent() {
           <span className="text-sm text-green-700">
             Successfully connected {connected}!
           </span>
+        </div>
+      )}
+
+      {youtubeError === "channel_required" && (
+        <div className="mb-6 rounded-md bg-amber-50 border border-amber-200 p-4">
+          <p className="text-sm font-medium text-amber-800">YouTube needs a channel</p>
+          <p className="mt-1 text-sm text-amber-700">
+            This Google account is not set up as a YouTube channel yet. Sign in at{" "}
+            <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer" className="underline">youtube.com</a> with the same account, create a channel if prompted, then disconnect and reconnect YouTube here to load your channel name and insights.
+          </p>
         </div>
       )}
 

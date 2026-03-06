@@ -13,13 +13,15 @@ function sumInsights(insights: VideoInsightsMap | null): {
 } {
   let views = 0, likes = 0, comments = 0, reactions = 0;
   if (!insights || typeof insights !== "object") return { views, likes, comments, reactions };
-  for (const platform of Object.keys(insights)) {
-    const p = insights[platform];
-    if (p && typeof p === "object") {
-      views += Number(p.views) || 0;
-      likes += Number(p.likes) || 0;
-      comments += Number(p.comments) || 0;
-      reactions += Number(p.reactions) || 0;
+  const platformKeys = ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+  for (const platform of platformKeys) {
+    const p = (insights as Record<string, unknown>)[platform];
+    if (p && typeof p === "object" && !Array.isArray(p)) {
+      const o = p as { views?: number; likes?: number; comments?: number; reactions?: number };
+      views += Number(o.views) || 0;
+      likes += Number(o.likes) || 0;
+      comments += Number(o.comments) || 0;
+      reactions += Number(o.reactions) || 0;
     }
   }
   return { views, likes, comments, reactions };
@@ -36,28 +38,6 @@ export async function GET(req: NextRequest) {
     const automationId = searchParams.get("automationId") ?? undefined;
 
     const userId = session.user.id;
-
-    // Account-level metrics: show "gained" (current - baseline) from these videos, not raw channel count
-    const accounts = await db.socialAccount.findMany({
-      where: { userId },
-      select: { platform: true, metrics: true, metricsBaseline: true, metricsRefreshedAt: true },
-    });
-    const accountMetrics: Record<string, { gainedSubscribers?: number; gainedFollowers?: number; refreshedAt?: string }> = {};
-    for (const a of accounts) {
-      const m = (a.metrics ?? {}) as { subscribers?: number; followers?: number };
-      const base = (a.metricsBaseline ?? {}) as { subscribers?: number; followers?: number };
-      const gainedSubs = typeof m.subscribers === "number" && typeof base.subscribers === "number"
-        ? Math.max(0, m.subscribers - base.subscribers)
-        : undefined;
-      const gainedFol = typeof m.followers === "number" && typeof base.followers === "number"
-        ? Math.max(0, m.followers - base.followers)
-        : undefined;
-      accountMetrics[a.platform] = {
-        gainedSubscribers: gainedSubs,
-        gainedFollowers: gainedFol,
-        refreshedAt: a.metricsRefreshedAt?.toISOString(),
-      };
-    }
 
     if (automationId) {
       const automation = await db.automation.findFirst({
@@ -79,7 +59,6 @@ export async function GET(req: NextRequest) {
             lastRefreshedAt: null,
             automationId,
             summary: { totalViews: 0, totalLikes: 0, totalComments: 0, totalReactions: 0, totalInteractions: 0, videoCount: 0 },
-            accountMetrics,
           },
         });
       }
@@ -108,7 +87,6 @@ export async function GET(req: NextRequest) {
             totalInteractions: totalLikes + totalComments + totalReactions,
             videoCount: videos.length,
           },
-          accountMetrics,
         },
       });
     }
@@ -176,7 +154,6 @@ export async function GET(req: NextRequest) {
           videoCount: videos.length,
         },
         byAutomation,
-        accountMetrics,
       },
     });
   } catch (error) {

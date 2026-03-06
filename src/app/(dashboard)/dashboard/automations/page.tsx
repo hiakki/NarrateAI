@@ -213,7 +213,6 @@ export default function AutomationsPage() {
     lastRefreshedAt: string | null;
     summary?: InsightsSummary;
     byAutomation: Record<string, InsightsSummary>;
-    accountMetrics: Record<string, { gainedSubscribers?: number; gainedFollowers?: number; refreshedAt?: string }>;
   };
   const [insightsData, setInsightsData] = useState<InsightsData | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(true);
@@ -1250,11 +1249,6 @@ export default function AutomationsPage() {
                     {/* Collective insights report for this automation — always show so user can refresh */}
                     {!insightsLoading && (() => {
                       const agg = insightsData?.byAutomation?.[auto.id];
-                      const am = insightsData?.accountMetrics ?? {};
-                      const ytGained = am.YOUTUBE?.gainedSubscribers ?? 0;
-                      const igGained = am.INSTAGRAM?.gainedFollowers ?? 0;
-                      const fbGained = am.FACEBOOK?.gainedFollowers ?? 0;
-                      const hasGained = ytGained > 0 || igGained > 0 || fbGained > 0;
                       const views = agg?.totalViews ?? 0;
                       const interactions = agg?.totalInteractions ?? 0;
                       const lastRef = agg?.lastRefreshedAt ?? insightsData?.lastRefreshedAt;
@@ -1294,13 +1288,6 @@ export default function AutomationsPage() {
                               {formatNumber(interactions)} interactions
                             </span>
                           </div>
-                          {hasGained && (
-                            <div className="text-xs text-muted-foreground/80 flex flex-wrap gap-x-2 gap-y-0">
-                              {ytGained > 0 && <span>YT: +{formatNumber(ytGained)} subs gained</span>}
-                              {igGained > 0 && <span>IG: +{formatNumber(igGained)} gained</span>}
-                              {fbGained > 0 && <span>FB: +{formatNumber(fbGained)} gained</span>}
-                            </div>
-                          )}
                         </div>
                       );
                     })()}

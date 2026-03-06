@@ -5,19 +5,12 @@
 
 import { PrismaClient } from "@prisma/client";
 import { decrypt } from "@/lib/social/encrypt";
-import {
-  getYouTubeVideoStatistics,
-  getYouTubeChannelSubscribers,
-} from "@/lib/social/youtube";
+import { getYouTubeVideoStatistics } from "@/lib/social/youtube";
 import {
   getInstagramMediaIdFromShortcode,
   getInstagramMediaMetrics,
-  getInstagramProfileFollowers,
 } from "@/lib/social/instagram";
-import {
-  getFacebookVideoInsights,
-  getFacebookPageFollowers,
-} from "@/lib/social/facebook";
+import { getFacebookVideoInsights } from "@/lib/social/facebook";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("Insights");
@@ -76,7 +69,7 @@ export function parsePostedPlatforms(raw: unknown): Map<string, string> {
 }
 
 /**
- * Refresh insights for the given user: all posted videos and account metrics.
+ * Refresh insights for the given user: all posted videos.
  * Optionally limit to specific videoIds or automationId (that automation's series videos).
  */
 export async function refreshInsightsForUser(
@@ -120,7 +113,6 @@ export async function refreshInsightsForUser(
       pageId: true,
       accessTokenEnc: true,
       refreshTokenEnc: true,
-      metricsBaseline: true,
     },
   });
 
@@ -140,10 +132,9 @@ export async function refreshInsightsForUser(
     }
   }
 
-  // Fetch YouTube video stats and channel subscribers
+  // Fetch YouTube video stats
   const ytAccount = accountByPlatform.get("YOUTUBE");
   const ytStatsByPostId: Record<string, { views: number; likes: number; comments: number }> = {};
-  let ytSubscribers = 0;
   if (ytAccount && (ytList.length > 0 || true)) {
     try {
       const accessToken = decrypt(ytAccount.accessTokenEnc);
@@ -157,13 +148,6 @@ export async function refreshInsightsForUser(
         userId,
       );
       Object.assign(ytStatsByPostId, stats);
-      ytSubscribers = await getYouTubeChannelSubscribers(
-        accessToken,
-        refreshToken,
-        ytAccount.platformUserId,
-        ytAccount.platformUserId,
-        userId,
-      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`YouTube: ${msg}`);
@@ -171,10 +155,9 @@ export async function refreshInsightsForUser(
     }
   }
 
-  // Fetch Instagram media metrics and profile followers (resolve shortcodes from URLs to media IDs)
+  // Fetch Instagram media metrics (resolve shortcodes from URLs to media IDs)
   const igAccount = accountByPlatform.get("INSTAGRAM");
   const igStatsByPostId: Record<string, { likes: number; comments: number; views: number }> = {};
-  let igFollowers = 0;
   if (igAccount && (igList.length > 0 || true)) {
     try {
       const accessToken = decrypt(igAccount.accessTokenEnc);
@@ -197,7 +180,6 @@ export async function refreshInsightsForUser(
           if (stats[mediaId]) igStatsByPostId[postId] = stats[mediaId];
         }
       }
-      igFollowers = await getInstagramProfileFollowers(accessToken, igAccount.platformUserId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Instagram: ${msg}`);
@@ -205,19 +187,16 @@ export async function refreshInsightsForUser(
     }
   }
 
-  // Fetch Facebook video insights and page followers
+  // Fetch Facebook video insights
   const fbAccount = accountByPlatform.get("FACEBOOK");
   const fbStatsByPostId: Record<string, { views: number; reactions: number; comments: number }> = {};
-  let fbFollowers = 0;
   if (fbAccount && (fbList.length > 0 || true)) {
     try {
       const accessToken = decrypt(fbAccount.accessTokenEnc);
-      const pageId = fbAccount.pageId ?? fbAccount.platformUserId;
       for (const { postId } of fbList) {
         const ins = await getFacebookVideoInsights(accessToken, postId);
         fbStatsByPostId[postId] = ins;
       }
-      fbFollowers = await getFacebookPageFollowers(accessToken, pageId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Facebook: ${msg}`);
@@ -251,33 +230,6 @@ export async function refreshInsightsForUser(
       where: { id: v.id },
       data: { insights: next as never, insightsRefreshedAt: refreshedAt },
     });
-  }
-
-  // Update account metrics (subscribers/followers); set baseline on first run so "gained" is tracked
-  const updateAccountMetrics = async (
-    account: { id: string; metricsBaseline: unknown },
-    metrics: { subscribers?: number; followers?: number },
-  ) => {
-    const baseline = account.metricsBaseline as { subscribers?: number; followers?: number } | null;
-    const hasBaseline = baseline && (typeof baseline.subscribers === "number" || typeof baseline.followers === "number");
-    const newBaseline = hasBaseline ? undefined : (metrics as never);
-    await db.socialAccount.update({
-      where: { id: account.id },
-      data: {
-        metrics: metrics as never,
-        metricsRefreshedAt: refreshedAt,
-        ...(newBaseline !== undefined && { metricsBaseline: newBaseline }),
-      },
-    });
-  };
-  if (ytAccount && (ytList.length > 0 || ytSubscribers >= 0)) {
-    await updateAccountMetrics(ytAccount, { subscribers: ytSubscribers });
-  }
-  if (igAccount) {
-    await updateAccountMetrics(igAccount, { followers: igFollowers });
-  }
-  if (fbAccount) {
-    await updateAccountMetrics(fbAccount, { followers: fbFollowers });
   }
 
   log.log(`Insights refreshed for user ${userId}: ${videos.length} videos`);

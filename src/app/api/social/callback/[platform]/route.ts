@@ -203,7 +203,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
   }
 }
 
-async function handleYouTubeCallback(code: string, userId: string) {
+async function handleYouTubeCallback(code: string, userId: string): Promise<{ channelRequired?: boolean } | void> {
   const clientId =
     process.env.YOUTUBE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID!;
   const clientSecret =
@@ -224,31 +224,27 @@ async function handleYouTubeCallback(code: string, userId: string) {
   if (!tokenRes.ok) throw new Error("Failed to exchange YouTube code");
   const tokens = await tokenRes.json();
 
-  const channelRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true`,
-    { headers: { Authorization: `Bearer ${tokens.access_token}` } },
-  );
+  const apiKey = process.env.GOOGLE_API_KEY ?? process.env.YOUTUBE_API_KEY ?? "";
+  const channelsUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ""}`;
+  const channelRes = await fetch(channelsUrl, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  });
 
   const channelData = await channelRes.json();
   const channel = channelData.items?.[0];
+  const errorReason = channelData.error?.errors?.[0]?.reason;
 
-  let displayName: string | null = channel?.snippet?.title ?? null;
-  let channelId: string = channel?.id ?? "unknown";
-
-  if (!channel && (!channelRes.ok || channelData.error)) {
-    log.warn("YouTube channels.list failed, using userinfo for display name:", channelRes.status, channelData.error?.message ?? "");
-    const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-    if (userRes.ok) {
-      const user = (await userRes.json()) as { name?: string; email?: string };
-      displayName = user.name ?? user.email ?? "YouTube channel";
-    } else {
-      displayName = "YouTube channel";
-    }
-  } else if (!displayName) {
-    displayName = "YouTube channel";
+  if (!channelRes.ok || channelData.error) {
+    log.warn(
+      "YouTube channels.list failed:",
+      channelRes.status,
+      channelData.error?.message ?? "",
+      errorReason ? `(reason: ${errorReason})` : "",
+    );
   }
+
+  const displayName: string | null = channel?.snippet?.title ?? null;
+  const channelId: string = channel?.id ?? "unknown";
 
   const tokenExpiry = tokens.expires_in
     ? new Date(Date.now() + tokens.expires_in * 1000)
@@ -269,8 +265,9 @@ async function handleYouTubeCallback(code: string, userId: string) {
           tokenExpiresAt: tokenExpiry,
         },
       });
-      return;
+      return errorReason === "youtubeSignupRequired" ? { channelRequired: true } : undefined;
     }
+    return errorReason === "youtubeSignupRequired" ? { channelRequired: true } : undefined;
   }
 
   await db.socialAccount.upsert({
@@ -302,6 +299,8 @@ async function handleYouTubeCallback(code: string, userId: string) {
       tokenExpiresAt: tokenExpiry,
     },
   });
+
+  return channelId === "unknown" && errorReason === "youtubeSignupRequired" ? { channelRequired: true } : undefined;
 }
 
 export async function GET(
@@ -333,22 +332,25 @@ export async function GET(
       );
     }
 
+    let youtubeError: string | undefined;
     switch (platform) {
       case "meta":
         await handleMetaCallback(code, state, session.user.id);
         break;
-      case "youtube":
-        await handleYouTubeCallback(code, session.user.id);
+      case "youtube": {
+        const result = await handleYouTubeCallback(code, session.user.id);
+        if (result?.channelRequired) youtubeError = "channel_required";
         break;
+      }
       default:
         return NextResponse.redirect(
           `${APP_URL()}/dashboard/channels?error=unknown_platform`,
         );
     }
 
-    return NextResponse.redirect(
-      `${APP_URL()}/dashboard/channels?connected=${platform === "meta" ? state : platform}`,
-    );
+    const base = `${APP_URL()}/dashboard/channels?connected=${platform === "meta" ? state : platform}`;
+    const redirectUrl = youtubeError ? `${base}&youtube_error=${youtubeError}` : base;
+    return NextResponse.redirect(redirectUrl);
   } catch (error) {
     log.error("Social callback error:", error instanceof Error ? error.message : error);
     return NextResponse.redirect(
