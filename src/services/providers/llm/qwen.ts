@@ -15,7 +15,7 @@ export class QwenLlmProvider implements LlmProviderInterface {
     const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
 
     log.log(`Generating script: niche=${input.niche}, tone=${input.tone}, duration=${input.duration}s, scenes=${sceneCount}`);
-    log.debug(`LLM prompt (${prompt.length} chars):\n${prompt}`);
+    log.log(`Input prompt sent to LLM; full prompt and response logged in video context file.`);
 
     const client = new OpenAI({
       apiKey,
@@ -26,11 +26,11 @@ export class QwenLlmProvider implements LlmProviderInterface {
       model: "qwen-plus",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
-      temperature: 0.9,
+      temperature: 0.95,
     });
 
     const text = response.choices[0]?.message?.content ?? "{}";
-    log.debug(`Raw response: ${text.length} chars`);
+    log.log(`LLM output received; full output saved and logged in video context file.`);
 
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
     const scenes = (parsed.scenes as { text: string; visualDescription: string }[]) || [];

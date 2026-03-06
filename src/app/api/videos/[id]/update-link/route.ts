@@ -7,12 +7,35 @@ const PLATFORM_URL_PATTERNS: Record<string, RegExp[]> = {
     /^https?:\/\/(www\.)?(youtube\.com\/(shorts\/|watch\?v=)|youtu\.be\/)/i,
   ],
   INSTAGRAM: [
-    /^https?:\/\/(www\.)?instagram\.com\/(reel|p)\//i,
+    /^https?:\/\/(www\.)?instagram\.com\/(reels?|p)\//i,
   ],
   FACEBOOK: [
     /^https?:\/\/(www\.|m\.)?(facebook\.com|fb\.watch)\/(reel|share\/r|watch|.*\/videos)\//i,
   ],
+  SHARECHAT: [
+    /^https?:\/\/(www\.)?sharechat\.com\//i,
+  ],
+  MOJ: [
+    /^https?:\/\/(www\.)?mojapp\.in\//i,
+  ],
 };
+
+function extractPostIdFromUrl(platform: string, url: string): string | null {
+  const u = url.trim();
+  if (platform === "YOUTUBE") {
+    const m = u.match(/shorts\/([a-zA-Z0-9_-]+)/) ?? u.match(/[?&]v=([a-zA-Z0-9_-]+)/) ?? u.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : null;
+  }
+  if (platform === "FACEBOOK") {
+    const m = u.match(/facebook\.com\/reel\/(\d+)/i) ?? u.match(/fb\.watch\/(\d+)/i) ?? u.match(/reel\/(\d+)/i) ?? u.match(/\/videos?\/(\d+)/i);
+    return m ? m[1] : null;
+  }
+  if (platform === "INSTAGRAM") {
+    const m = u.match(/instagram\.com\/reels?\/([^/?]+)/i) ?? u.match(/instagram\.com\/p\/([^/?]+)/i);
+    return m ? m[1].replace(/\/$/, "") : null;
+  }
+  return null;
+}
 
 interface PlatformEntry {
   platform: string;
@@ -41,6 +64,8 @@ function validatePlatformUrl(platform: string, url: string): { valid: boolean; r
       YOUTUBE: "youtube.com/shorts/... or youtu.be/...",
       INSTAGRAM: "instagram.com/reel/... or instagram.com/p/...",
       FACEBOOK: "facebook.com/reel/... or fb.watch/...",
+      SHARECHAT: "sharechat.com/...",
+      MOJ: "mojapp.in/...",
     };
     return {
       valid: false,
@@ -71,7 +96,7 @@ export async function POST(
       );
     }
 
-    const validPlatforms = ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+    const validPlatforms = ["YOUTUBE", "INSTAGRAM", "FACEBOOK", "SHARECHAT", "MOJ"];
     if (!validPlatforms.includes(platform)) {
       return NextResponse.json(
         { error: `Invalid platform. Must be one of: ${validPlatforms.join(", ")}` },
@@ -104,20 +129,25 @@ export async function POST(
       (e) => (typeof e === "string" ? e : e.platform) === platform,
     );
 
+    const extractedPostId = extractPostIdFromUrl(platform, trimmedUrl);
+    const newEntry: PlatformEntry = {
+      platform,
+      success: true,
+      url: trimmedUrl,
+      manualUrl: true,
+      ...(extractedPostId && { postId: extractedPostId }),
+    };
     let newPosted: PlatformEntry[];
     if (existingIdx >= 0) {
       newPosted = [...currentPosted];
       const existing = newPosted[existingIdx];
       if (typeof existing === "string") {
-        newPosted[existingIdx] = { platform, success: true, url: trimmedUrl, manualUrl: true };
+        newPosted[existingIdx] = newEntry;
       } else {
-        newPosted[existingIdx] = { ...existing, url: trimmedUrl, success: true, manualUrl: true };
+        newPosted[existingIdx] = { ...existing, ...newEntry };
       }
     } else {
-      newPosted = [
-        ...currentPosted,
-        { platform, success: true, url: trimmedUrl, manualUrl: true },
-      ];
+      newPosted = [...currentPosted, newEntry];
     }
 
     await db.video.update({

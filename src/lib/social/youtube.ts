@@ -192,6 +192,87 @@ export async function uploadYouTubeShort(
   }
 }
 
+/** Video statistics for insights (views, likes, comments). */
+export async function getYouTubeVideoStatistics(
+  accessToken: string,
+  refreshToken: string | null,
+  videoIds: string[],
+  platformUserId?: string,
+  userId?: string,
+): Promise<Record<string, { views: number; likes: number; comments: number }>> {
+  const result: Record<string, { views: number; likes: number; comments: number }> = {};
+  if (videoIds.length === 0) return result;
+
+  try {
+    const token = await getFreshAccessToken(
+      accessToken,
+      refreshToken,
+      platformUserId,
+      userId,
+    );
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: token,
+      refresh_token: refreshToken ?? undefined,
+    });
+    const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+
+    const ids = videoIds.filter(Boolean).slice(0, 50);
+    const res = await youtube.videos.list({
+      part: ["statistics"],
+      id: ids,
+    });
+
+    for (const item of res.data.items ?? []) {
+      const id = item.id ?? "";
+      const stats = item.statistics;
+      if (!id || !stats) continue;
+      result[id] = {
+        views: parseInt(stats.viewCount ?? "0", 10) || 0,
+        likes: parseInt(stats.likeCount ?? "0", 10) || 0,
+        comments: parseInt(stats.commentCount ?? "0", 10) || 0,
+      };
+    }
+    return result;
+  } catch (err) {
+    log.warn("getYouTubeVideoStatistics failed:", err instanceof Error ? err.message : err);
+    return result;
+  }
+}
+
+/** Channel subscriber count for insights. */
+export async function getYouTubeChannelSubscribers(
+  accessToken: string,
+  refreshToken: string | null,
+  channelId: string,
+  platformUserId?: string,
+  userId?: string,
+): Promise<number> {
+  try {
+    const token = await getFreshAccessToken(
+      accessToken,
+      refreshToken,
+      platformUserId,
+      userId,
+    );
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: token,
+      refresh_token: refreshToken ?? undefined,
+    });
+    const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+    const res = await youtube.channels.list({
+      part: ["statistics"],
+      id: [channelId],
+    });
+    const subCount = res.data.items?.[0]?.statistics?.subscriberCount;
+    return parseInt(subCount ?? "0", 10) || 0;
+  } catch (err) {
+    log.warn("getYouTubeChannelSubscribers failed:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 /** Post a first comment on a published YouTube video/short. */
 export async function postYouTubeComment(
   accessToken: string,

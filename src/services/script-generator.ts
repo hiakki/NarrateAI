@@ -47,6 +47,24 @@ function checkWordCount(script: GeneratedScript, duration: number): WordCheck {
   return { ok: true };
 }
 
+/** Numeric seed from varietySeed string so each run gets different topic order. */
+function seedFromVarietySeed(varietySeed: string | undefined): number {
+  if (!varietySeed) return Date.now();
+  let h = 0;
+  for (let i = 0; i < varietySeed.length; i++) h = (h * 31 + varietySeed.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** Shuffle array using a simple seeded shuffle so each run gets different topic order. */
+function shuffleWithSeed<T>(arr: T[], seed: number): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor((seed + i * 31) % (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 function buildTopicCandidates(input: ScriptInput): string[] {
   const niche = getNicheById(input.niche);
   const hooks = [
@@ -55,35 +73,53 @@ function buildTopicCandidates(input: ScriptInput): string[] {
     "the dark side of",
     "the twist nobody saw coming in",
     "the most shocking case of",
+    "the one thing nobody mentions about",
+    "why everyone gets this wrong about",
+    "the hidden story behind",
+  ];
+  const angles = [
+    " — focus on the aftermath",
+    " — the lesser-known version",
+    " — from a surprising angle",
+    " — what really happened next",
+    "",
+    "",
+    "",
   ];
   const base = input.topic?.trim();
 
   if (base) {
+    const seed = seedFromVarietySeed(input.varietySeed);
+    const shuffledHooks = shuffleWithSeed([hooks[0], hooks[1], hooks[3], hooks[4]], seed);
     return [
       base,
-      `${base} - ${hooks[0]}`,
-      `${base} - ${hooks[3]}`,
-    ];
+      `${base} - ${shuffledHooks[0]}`,
+      `${base}${angles[seed % angles.length]}`,
+    ].slice(0, TWO_PASS_CANDIDATES);
   }
 
-  const samples = niche?.sampleTopics?.slice(0, 5) ?? [];
-  if (samples.length === 0) {
-    return [
-      `${hooks[0]} ${input.niche.replace(/-/g, " ")}`,
-      `${hooks[1]} ${input.niche.replace(/-/g, " ")}`,
-      `${hooks[3]} ${input.niche.replace(/-/g, " ")}`,
-    ];
-  }
+  const rawSamples = niche?.sampleTopics ?? [];
+  const samples = rawSamples.length > 0 ? rawSamples : [input.niche.replace(/-/g, " ")];
+  const seed = seedFromVarietySeed(input.varietySeed);
+  const shuffledSamples = shuffleWithSeed([...samples], seed);
+  const shuffledHooks = shuffleWithSeed([...hooks], seed + 1);
 
   const out: string[] = [];
-  for (let i = 0; i < samples.length && out.length < TWO_PASS_CANDIDATES; i++) {
-    const h = hooks[i % hooks.length];
-    out.push(`${h} ${samples[i]}`);
+  for (let i = 0; i < shuffledSamples.length && out.length < TWO_PASS_CANDIDATES; i++) {
+    const angle = angles[(seed + i) % angles.length];
+    out.push(`${shuffledHooks[i % shuffledHooks.length]} ${shuffledSamples[i]}${angle}`);
   }
-  while (out.length < TWO_PASS_CANDIDATES) {
-    const i = out.length % samples.length;
-    const h = hooks[out.length % hooks.length];
-    out.push(`${h} ${samples[i]}`);
+  while (out.length < TWO_PASS_CANDIDATES && shuffledSamples.length > 0) {
+    const i = out.length % shuffledSamples.length;
+    const h = shuffledHooks[out.length % shuffledHooks.length];
+    const angle = angles[(seed + out.length) % angles.length];
+    out.push(`${h} ${shuffledSamples[i]}${angle}`);
+  }
+  if (out.length === 0) {
+    out.push(
+      `${shuffledHooks[0]} ${input.niche.replace(/-/g, " ")}`,
+      `${shuffledHooks[1]} ${input.niche.replace(/-/g, " ")}`,
+    );
   }
   return out.slice(0, TWO_PASS_CANDIDATES);
 }
@@ -155,8 +191,13 @@ export async function generateScript(
   const inputWithChar = characterPrompt ? { ...input, characterPrompt } : input;
 
   if (!TWO_PASS_ENABLED) {
-    const script = await llm.generateScript(inputWithChar);
-    return ensureWordCount(script, inputWithChar, llm);
+    // Always pass an explicit topic so each run gets a different story (shuffle is seed-based).
+    const topicCandidates = buildTopicCandidates(input);
+    const topicForRun = topicCandidates[0];
+    const inputWithTopic = topicForRun ? { ...inputWithChar, topic: topicForRun } : inputWithChar;
+    if (topicForRun) log.log(`Single-pass topic for this run: "${topicForRun}"`);
+    const script = await llm.generateScript(inputWithTopic);
+    return ensureWordCount(script, inputWithTopic, llm);
   }
 
   const targetScenes = getSceneCount(input.duration);

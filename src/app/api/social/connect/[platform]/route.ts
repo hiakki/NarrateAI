@@ -34,7 +34,6 @@ function buildYouTubeOAuthUrl(): string {
     scope: [
       "https://www.googleapis.com/auth/youtube.upload",
       "https://www.googleapis.com/auth/youtube.readonly",
-      "https://www.googleapis.com/auth/youtube.force-ssl",
     ].join(" "),
     response_type: "code",
     access_type: "offline",
@@ -64,6 +63,7 @@ export async function GET(
           "instagram_basic",
           "instagram_content_publish",
           "instagram_manage_comments",
+          "instagram_manage_insights",
           "pages_show_list",
           "pages_read_engagement",
         ]);
@@ -75,6 +75,7 @@ export async function GET(
           "pages_manage_posts",
           "pages_manage_engagement",
           "pages_read_engagement",
+          "read_insights",
           "business_management",
         ]);
         break;
@@ -82,6 +83,15 @@ export async function GET(
       case "youtube":
         redirectUrl = buildYouTubeOAuthUrl();
         break;
+
+      case "sharechat":
+      case "moj":
+        return NextResponse.json(
+          {
+            error: `${platform === "sharechat" ? "ShareChat" : "Moj"} does not offer a public developer API yet. Contact the platform for partner/creator API access.`,
+          },
+          { status: 501 },
+        );
 
       default:
         return NextResponse.json(

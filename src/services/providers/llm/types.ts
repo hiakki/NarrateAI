@@ -6,6 +6,10 @@ export interface ScriptInput {
   topic?: string;
   language?: string;
   characterPrompt?: string;
+  /** Recent video titles/premises to avoid repeating (e.g. from same automation). */
+  avoidThemes?: string[];
+  /** Optional seed (e.g. timestamp) to encourage unique output per run. */
+  varietySeed?: string;
 }
 
 export interface Scene {

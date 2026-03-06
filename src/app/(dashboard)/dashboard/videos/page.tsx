@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Plus, Film, Trash2, Loader2, X,
-  Instagram, Youtube, Facebook, CloudOff, Star, EyeOff,
+  Instagram, Youtube, Facebook, CloudOff, Star, EyeOff, Share2, Smartphone,
+  BarChart2, Eye, Heart,
 } from "lucide-react";
 
 interface PostedEntry {
@@ -32,6 +33,8 @@ interface SeriesItem {
     status: string;
     generationStage: string | null;
     postedPlatforms: (string | PostedEntry)[];
+    insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> | null;
+    insightsRefreshedAt?: string | null;
   }[];
 }
 
@@ -238,21 +241,45 @@ export default function VideosPage() {
                       const hasYT = platforms.includes("YOUTUBE");
                       const hasIG = platforms.includes("INSTAGRAM");
                       const hasFB = platforms.includes("FACEBOOK");
-                      const hasAny = hasYT || hasIG || hasFB;
+                      const hasSC = platforms.includes("SHARECHAT");
+                      const hasMoj = platforms.includes("MOJ");
+                      const hasAny = hasYT || hasIG || hasFB || hasSC || hasMoj;
+                      const insights = latestVideo.insights && typeof latestVideo.insights === "object" ? latestVideo.insights : null;
+                      let views = 0, interactions = 0;
+                      if (insights) {
+                        for (const p of Object.values(insights)) {
+                          if (p && typeof p === "object") {
+                            views += Number(p.views) || 0;
+                            interactions += (Number(p.likes) || 0) + (Number(p.comments) || 0) + (Number(p.reactions) || 0);
+                          }
+                        }
+                      }
+                      const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
                       return (
-                        <div className="mt-2 flex items-center gap-1.5">
-                          {hasAny ? (
-                            <>
-                              {hasYT && <Youtube className="h-3.5 w-3.5 text-red-600" />}
-                              {hasIG && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
-                              {hasFB && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
-                              <span className="text-[10px] text-muted-foreground ml-0.5">Published</span>
-                            </>
-                          ) : (
-                            <>
-                              <CloudOff className="h-3.5 w-3.5 text-muted-foreground/50" />
-                              <span className="text-[10px] text-muted-foreground/50">Not published</span>
-                            </>
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {hasAny ? (
+                              <>
+                                {hasYT && <Youtube className="h-3.5 w-3.5 text-red-600" />}
+                                {hasIG && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
+                                {hasFB && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                                {hasSC && <Share2 className="h-3.5 w-3.5 text-orange-600" />}
+                                {hasMoj && <Smartphone className="h-3.5 w-3.5 text-amber-600" />}
+                                <span className="text-xs text-muted-foreground">Published</span>
+                              </>
+                            ) : (
+                              <>
+                                <CloudOff className="h-3.5 w-3.5 text-muted-foreground/50" />
+                                <span className="text-xs text-muted-foreground/50">Not published</span>
+                              </>
+                            )}
+                          </div>
+                          {hasAny && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <BarChart2 className="h-3 w-3" />
+                              <span className="flex items-center gap-0.5"><Eye className="h-3 w-3" /> {fmt(views)} views</span>
+                              <span className="flex items-center gap-0.5"><Heart className="h-3 w-3" /> {fmt(interactions)} interactions</span>
+                            </div>
                           )}
                         </div>
                       );

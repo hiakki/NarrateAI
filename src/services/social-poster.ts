@@ -3,6 +3,8 @@ import { decrypt } from "@/lib/social/encrypt";
 import { postInstagramReel, postInstagramComment } from "@/lib/social/instagram";
 import { postFacebookReel, postFacebookComment } from "@/lib/social/facebook";
 import { uploadYouTubeShort, postYouTubeComment } from "@/lib/social/youtube";
+import { uploadShareChatVideo } from "@/lib/social/sharechat";
+import { uploadMojVideo } from "@/lib/social/moj";
 import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption, generateFirstComment } from "@/lib/social/seo";
 import { createLogger } from "@/lib/logger";
 import path from "path";
@@ -186,6 +188,8 @@ async function finalizePlatform(
 const PLATFORM_URLS: Record<string, (id: string) => string> = {
   YOUTUBE: (pid) => `https://youtube.com/shorts/${pid}`,
   FACEBOOK: (pid) => `https://www.facebook.com/reel/${pid}`,
+  SHARECHAT: (pid) => `https://sharechat.com/video/${pid}`,
+  MOJ: (pid) => `https://mojapp.in/video/${pid}`,
 };
 
 export async function postVideoToSocials(
@@ -280,6 +284,17 @@ export async function postVideoToSocials(
       (a) => a.platform === platform,
     );
 
+    // ShareChat/Moj: no public API yet; stub returns a clear message even with no account
+    if ((platform === "SHARECHAT" || platform === "MOJ") && accounts.length === 0) {
+      const stubResult = platform === "SHARECHAT"
+        ? await uploadShareChatVideo("", videoPath, title, igCaption)
+        : await uploadMojVideo("", videoPath, title, igCaption);
+      await finalizePlatform(videoId, {
+        platform, success: false, error: stubResult.error ?? "Upload not available",
+      });
+      return { platform, success: false, error: stubResult.error };
+    }
+
     if (accounts.length === 0) {
       await finalizePlatform(videoId, {
         platform, success: false, error: "No connected account",
@@ -349,6 +364,24 @@ export async function postVideoToSocials(
                 account.platformUserId,
                 video!.series.user.id,
                 ytSeo.categoryId,
+              );
+              break;
+
+            case "SHARECHAT":
+              lastResult = await uploadShareChatVideo(
+                accessToken,
+                videoPath,
+                title,
+                igCaption,
+              );
+              break;
+
+            case "MOJ":
+              lastResult = await uploadMojVideo(
+                accessToken,
+                videoPath,
+                title,
+                igCaption,
               );
               break;
 

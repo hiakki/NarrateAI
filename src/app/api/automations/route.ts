@@ -46,6 +46,8 @@ export async function GET() {
                 title: true,
                 status: true,
                 postedPlatforms: true,
+                insights: true,
+                insightsRefreshedAt: true,
                 createdAt: true,
                 updatedAt: true,
               },
@@ -85,7 +87,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const input = createSchema.parse(body);
 
-    const validPlatforms = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK"]);
+    const validPlatforms = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"]);
     const filteredPlatforms = input.targetPlatforms.filter((p) =>
       validPlatforms.has(p),
     );

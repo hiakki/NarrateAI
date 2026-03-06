@@ -33,7 +33,7 @@ export async function POST(
     try {
       const body = await req.json();
       if (Array.isArray(body.platforms) && body.platforms.length > 0) {
-        const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK"]);
+        const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"]);
         platforms = body.platforms.filter((p: string) => valid.has(p));
       }
     } catch {

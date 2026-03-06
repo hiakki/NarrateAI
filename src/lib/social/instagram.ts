@@ -258,6 +258,97 @@ export async function postInstagramComment(
   }
 }
 
+const GRAPH_API_IG = GRAPH_API;
+
+/** Resolve Instagram shortcode (from URL e.g. DVQO3ahiL-L) to numeric media ID. Lists user media and matches permalink. */
+export async function getInstagramMediaIdFromShortcode(
+  accessToken: string,
+  igUserId: string,
+  shortcode: string,
+): Promise<string | null> {
+  const norm = shortcode.replace(/\/$/, "").toLowerCase();
+  let url: string | null = `${GRAPH_API_IG}/${igUserId}/media?fields=id,permalink&limit=50&access_token=${encodeURIComponent(accessToken)}`;
+  for (let page = 0; page < 3 && url; page++) {
+    try {
+      const res: Response = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const list: { id: string; permalink?: string }[] = data.data ?? [];
+      for (const m of list) {
+        const link = (m.permalink ?? "").toLowerCase();
+        if (link.includes(`/reels/${norm}`) || link.includes(`/p/${norm}`) || link.endsWith(`/${norm}`) || link.endsWith(`/${norm}/`))
+          return m.id;
+      }
+      url = data.paging?.next ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Media metrics (likes, comments, views) for insights. Views come from Insights API (required for Reels). */
+export async function getInstagramMediaMetrics(
+  accessToken: string,
+  mediaIds: string[],
+): Promise<Record<string, { likes: number; comments: number; views: number }>> {
+  const result: Record<string, { likes: number; comments: number; views: number }> = {};
+  for (const id of mediaIds.slice(0, 25)) {
+    try {
+      const res = await fetch(
+        `${GRAPH_API_IG}/${id}?fields=like_count,comments_count&access_token=${encodeURIComponent(accessToken)}`,
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      let likes = typeof data.like_count === "number" ? data.like_count : parseInt(data.like_count ?? "0", 10) || 0;
+      let comments = typeof data.comments_count === "number" ? data.comments_count : parseInt(data.comments_count ?? "0", 10) || 0;
+      let views = 0;
+      try {
+        const insightsRes = await fetch(
+          `${GRAPH_API_IG}/${id}/insights?metric=views&period=lifetime&access_token=${encodeURIComponent(accessToken)}`,
+        );
+        if (insightsRes.ok) {
+          const insightsData = (await insightsRes.json()) as {
+            data?: { total_value?: { value?: number }; values?: { value?: number }[]; value?: number }[];
+          };
+          const first = insightsData?.data?.[0];
+          if (first) {
+            const val =
+              first.total_value?.value ??
+              (Array.isArray(first.values) && first.values.length > 0 ? first.values[first.values.length - 1]?.value ?? first.values[0]?.value : undefined) ??
+              (first as { value?: number }).value;
+            if (typeof val === "number") views = val;
+            else if (val != null) views = parseInt(String(val), 10) || 0;
+          }
+        }
+      } catch {
+        // views unavailable (e.g. media too new, or no insights permission)
+      }
+      result[id] = { likes, comments, views };
+    } catch {
+      // skip
+    }
+  }
+  return result;
+}
+
+/** Profile follower count for insights. */
+export async function getInstagramProfileFollowers(
+  accessToken: string,
+  igUserId: string,
+): Promise<number> {
+  try {
+    const res = await fetch(
+      `${GRAPH_API_IG}/${igUserId}?fields=followers_count&access_token=${encodeURIComponent(accessToken)}`,
+    );
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return typeof data.followers_count === "number" ? data.followers_count : parseInt(data.followers_count ?? "0", 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function uploadWithRetry(
   uploadUrl: string,
   accessToken: string,

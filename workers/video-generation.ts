@@ -43,17 +43,31 @@ interface Checkpoint {
 }
 
 async function updateStage(videoId: string, stage: string) {
-  await db.video.update({
-    where: { id: videoId },
-    data: { generationStage: stage as never, status: "GENERATING" },
-  });
+  try {
+    await db.video.update({
+      where: { id: videoId },
+      data: { generationStage: stage as never, status: "GENERATING" },
+    });
+  } catch (e: unknown) {
+    if (e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2025") {
+      throw new Error(`Video ${videoId} no longer exists (deleted during job)`);
+    }
+    throw e;
+  }
 }
 
 async function saveCheckpoint(videoId: string, checkpoint: Checkpoint) {
-  await db.video.update({
-    where: { id: videoId },
-    data: { checkpointData: checkpoint as never },
-  });
+  try {
+    await db.video.update({
+      where: { id: videoId },
+      data: { checkpointData: checkpoint as never },
+    });
+  } catch (e: unknown) {
+    if (e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2025") {
+      throw new Error(`Video ${videoId} no longer exists (deleted during job)`);
+    }
+    throw e;
+  }
 }
 
 async function loadCheckpoint(videoId: string): Promise<Checkpoint> {
@@ -74,6 +88,11 @@ const worker = new Worker<VideoJobData>(
       tone, niche, artStyle, reviewMode, characterPrompt,
     } = job.data;
 
+    const videoExists = await db.video.findUnique({ where: { id: videoId }, select: { id: true } });
+    if (!videoExists) {
+      throw new Error(`Video ${videoId} no longer exists (deleted before job ran). Job abandoned.`);
+    }
+
     let title = job.data.title;
     let scriptText = job.data.scriptText;
     let scenes = job.data.scenes;
@@ -89,8 +108,30 @@ const worker = new Worker<VideoJobData>(
     if (!scenes?.length && !completed.has("SCRIPT")) {
       await updateStage(videoId, "SCRIPT");
       log.log(`SCRIPT generating for ${videoId} (LLM=${llmProvider})…`);
+
+      const seriesId = job.data.seriesId;
+      const recentWithTitles = seriesId
+        ? await db.video.findMany({
+            where: { seriesId, id: { not: videoId }, title: { not: null } },
+            orderBy: { createdAt: "desc" },
+            take: 6,
+            select: { title: true },
+          })
+        : [];
+      const avoidThemes = recentWithTitles.map((v) => v.title).filter(Boolean) as string[];
+      const varietySeed = `${Date.now()}-${videoId.slice(-6)}`;
+
+      const scriptInput = {
+        niche: niche ?? "",
+        tone: tone ?? "dramatic",
+        artStyle: artStyle ?? "",
+        duration: job.data.duration,
+        language: language ?? "en",
+        avoidThemes: avoidThemes.length > 0 ? avoidThemes : undefined,
+        varietySeed,
+      };
       const script = await generateScript(
-        { niche: niche ?? "", tone: tone ?? "dramatic", artStyle: artStyle ?? "", duration: job.data.duration, language: language ?? "en" },
+        scriptInput,
         llmProvider,
         characterPrompt,
       );
@@ -165,7 +206,7 @@ const worker = new Worker<VideoJobData>(
 
         completed.add("SCRIPT");
         await saveCheckpoint(videoId, { ...checkpoint, completedStages: [...completed], relDir });
-        log.log(`SCRIPT done "${title}" (${scriptText.length} chars)`);
+        log.log(`SCRIPT done "${title}" (${scriptText.length} chars). Full input prompt and LLM output logged in public/${relDir}/context.txt`);
       }
 
       // ── TTS ──

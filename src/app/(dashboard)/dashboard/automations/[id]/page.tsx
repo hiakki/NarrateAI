@@ -18,7 +18,7 @@ import {
 import {
   ArrowLeft, Loader2, Clock, Trash2, Instagram, Youtube, Facebook,
   CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown, Zap, Sparkles, Globe, Plus, XCircle,
-  Star, EyeOff,
+  Star, EyeOff, Share2, Smartphone, BarChart2, Eye, Heart,
 } from "lucide-react";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
@@ -34,6 +34,8 @@ interface Video {
   generationStage: string | null;
   duration: number | null;
   postedPlatforms: (string | PostedEntry)[];
+  insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> | null;
+  insightsRefreshedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,7 +66,7 @@ interface AutomationDetail {
 
 interface SocialAccount {
   id: string;
-  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK";
+  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK" | "SHARECHAT" | "MOJ";
   username: string | null;
   pageName: string | null;
 }
@@ -92,6 +94,8 @@ const PLATFORM_CONFIG = {
   INSTAGRAM: { icon: Instagram, color: "text-pink-600", label: "Instagram Reels" },
   YOUTUBE: { icon: Youtube, color: "text-red-600", label: "YouTube Shorts" },
   FACEBOOK: { icon: Facebook, color: "text-blue-600", label: "Facebook Reels" },
+  SHARECHAT: { icon: Share2, color: "text-orange-600", label: "ShareChat" },
+  MOJ: { icon: Smartphone, color: "text-amber-600", label: "Moj" },
 } as const;
 
 const FREQ_LABEL: Record<string, string> = {
@@ -960,7 +964,7 @@ export default function AutomationDetailPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {(["INSTAGRAM", "YOUTUBE", "FACEBOOK"] as const).map((platform) => {
+                {(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"] as const).map((platform) => {
                   const cfg = PLATFORM_CONFIG[platform];
                   const Icon = cfg.icon;
                   const connected = accounts.filter((a) => a.platform === platform);
@@ -1023,58 +1027,82 @@ export default function AutomationDetailPage() {
             const Icon = config.icon;
             return (
               <Card key={video.id} className="transition-colors hover:border-primary/50">
-                <CardContent className="flex items-start justify-between gap-4 p-4">
-                  <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
-                    <h3 className="font-medium">{video.title || "Untitled Video"}</h3>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {new Date(video.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-4">
+                    <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
+                      <h3 className="font-medium">{video.title || "Untitled Video"}</h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(video.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                        {(video.status === "READY" || video.status === "POSTED") && (() => {
+                          const ms = new Date(video.updatedAt).getTime() - new Date(video.createdAt).getTime();
+                          if (ms <= 0) return null;
+                          const secs = Math.round(ms / 1000);
+                          const m = Math.floor(secs / 60);
+                          const s = secs % 60;
+                          return <span className="ml-1 text-muted-foreground/70">· built in {m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
+                        })()}
+                        {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
+                      </p>
+                    </Link>
+                    <div className="flex items-center gap-2 shrink-0">
                       {(video.status === "READY" || video.status === "POSTED") && (() => {
-                        const ms = new Date(video.updatedAt).getTime() - new Date(video.createdAt).getTime();
-                        if (ms <= 0) return null;
-                        const secs = Math.round(ms / 1000);
-                        const m = Math.floor(secs / 60);
-                        const s = secs % 60;
-                        return <span className="ml-1 text-muted-foreground/70">· built in {m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
+                        const raw = video.postedPlatforms ?? [];
+                        const plats = raw.map((p) => typeof p === "string" ? p : p.platform);
+                        if (!plats.length) return null;
+                        return (
+                          <div className="flex items-center gap-1">
+                            {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
+                            {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
+                            {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                            {plats.includes("SHARECHAT") && <Share2 className="h-3.5 w-3.5 text-orange-600" />}
+                            {plats.includes("MOJ") && <Smartphone className="h-3.5 w-3.5 text-amber-600" />}
+                          </div>
+                        );
                       })()}
-                      {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
-                    </p>
-                  </Link>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {(video.status === "READY" || video.status === "POSTED") && (() => {
-                      const raw = video.postedPlatforms ?? [];
-                      const plats = raw.map((p) => typeof p === "string" ? p : p.platform);
-                      if (!plats.length) return null;
-                      return (
-                        <div className="flex items-center gap-1">
-                          {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
-                          {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
-                          {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
-                        </div>
-                      );
-                    })()}
-                    <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
-                      <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
-                      {config.label}
-                      {video.status === "GENERATING" && video.generationStage && (
-                        <span className="lowercase">({video.generationStage})</span>
+                      <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
+                        <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
+                        {config.label}
+                        {video.status === "GENERATING" && video.generationStage && (
+                          <span className="lowercase">({video.generationStage})</span>
+                        )}
+                      </div>
+                      {video.status === "FAILED" && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className="border-red-300 text-red-600 hover:bg-red-50"
+                          disabled={retryingVideoId === video.id}
+                          onClick={(e) => { e.preventDefault(); handleRetryVideo(video.id); }}
+                        >
+                          {retryingVideoId === video.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <><Zap className="mr-1 h-3 w-3" /> Retry</>
+                          )}
+                        </Button>
                       )}
                     </div>
-                    {video.status === "FAILED" && (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        className="border-red-300 text-red-600 hover:bg-red-50"
-                        disabled={retryingVideoId === video.id}
-                        onClick={(e) => { e.preventDefault(); handleRetryVideo(video.id); }}
-                      >
-                        {retryingVideoId === video.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <><Zap className="mr-1 h-3 w-3" /> Retry</>
-                        )}
-                      </Button>
-                    )}
                   </div>
+                  {(video.status === "READY" || video.status === "POSTED") && (() => {
+                    const insights = video.insights && typeof video.insights === "object" ? video.insights : null;
+                    let views = 0, interactions = 0;
+                    if (insights) {
+                      for (const p of Object.values(insights)) {
+                        if (p && typeof p === "object") {
+                          views += Number(p.views) || 0;
+                          interactions += (Number(p.likes) || 0) + (Number(p.comments) || 0) + (Number(p.reactions) || 0);
+                        }
+                      }
+                    }
+                    const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
+                    return (
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground pt-1 border-t border-border/60">
+                        <BarChart2 className="h-3 w-3 shrink-0" />
+                        <span className="flex items-center gap-1"><Eye className="h-3 w-3" /> {fmt(views)} views</span>
+                        <span className="flex items-center gap-1"><Heart className="h-3 w-3" /> {fmt(interactions)} interactions</span>
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             );

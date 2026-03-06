@@ -3,6 +3,7 @@ import cron from "node-cron";
 import { PrismaClient } from "@prisma/client";
 import { enqueueVideoGeneration } from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
+import { refreshInsightsForUser } from "../src/services/insights";
 
 import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
@@ -483,10 +484,38 @@ async function tick() {
   }
 }
 
+/** Refresh video insights (views, likes, etc.) once per 24h per user. */
+async function refreshInsightsDaily() {
+  try {
+    const usersWithPosted = await db.video.findMany({
+      where: { status: "POSTED" },
+      select: { series: { select: { userId: true } } },
+      distinct: ["seriesId"],
+    });
+    const userIds = [...new Set(usersWithPosted.map((v) => v.series?.userId).filter(Boolean))] as string[];
+    for (const userId of userIds) {
+      try {
+        const result = await refreshInsightsForUser(userId);
+        log(`Insights refreshed for user ${userId}: ${result.videoCount} videos${result.errors.length ? `; ${result.errors.length} error(s)` : ""}`);
+      } catch (e) {
+        err(`Insights refresh failed for user ${userId}:`, e);
+      }
+    }
+  } catch (e) {
+    err("refreshInsightsDaily error:", e);
+  }
+}
+
 cron.schedule("*/5 * * * *", () => {
   log("Running schedule check...");
   tick();
 });
 
-log("Started. Checking schedules every 5 minutes.");
+// Run insights refresh once per day at 02:00 (server TZ)
+cron.schedule("0 2 * * *", () => {
+  log("Running daily insights refresh...");
+  refreshInsightsDaily();
+});
+
+log("Started. Checking schedules every 5 minutes; insights refresh daily at 02:00.");
 tick();

@@ -24,6 +24,8 @@ import {
   Instagram,
   Youtube,
   Facebook,
+  Share2,
+  Smartphone,
   Send,
   RefreshCw,
   Check,
@@ -33,6 +35,9 @@ import {
   Link2,
   Pencil,
   X,
+  BarChart2,
+  Eye,
+  Heart,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -226,6 +231,8 @@ export default function VideoDetailPage() {
   const [linkInput, setLinkInput] = useState("");
   const [linkError, setLinkError] = useState("");
   const [savingLink, setSavingLink] = useState(false);
+  const [insightsRefreshing, setInsightsRefreshing] = useState(false);
+  const [accountGrowth, setAccountGrowth] = useState<Record<string, { gainedSubscribers?: number; gainedFollowers?: number }>>({});
 
   async function handleSaveLink(platform: string) {
     const url = linkInput.trim();
@@ -254,7 +261,7 @@ export default function VideoDetailPage() {
   }
 
   async function handleResetPosted(platforms?: string[]) {
-    const keys = platforms ?? ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+    const keys = platforms ?? ["YOUTUBE", "INSTAGRAM", "FACEBOOK", "SHARECHAT", "MOJ"];
     clearFailure(...keys);
     setResettingPlatforms((prev) => {
       const next = new Set(prev);
@@ -519,6 +526,19 @@ export default function VideoDetailPage() {
       setReviewInited(true);
     }
   }, [video?.status, video?.sceneImages?.length, reviewInited]);
+
+  useEffect(() => {
+    if (video?.status !== "READY" && video?.status !== "POSTED") return;
+    let cancelled = false;
+    fetch("/api/insights")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled || !json?.data?.accountMetrics) return;
+        setAccountGrowth(json.data.accountMetrics);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [video?.status, video?.id]);
 
   if (isLoading) {
     return (
@@ -945,6 +965,8 @@ export default function VideoDetailPage() {
               { key: "YOUTUBE", label: "YouTube Shorts", icon: Youtube, color: "text-red-600" },
               { key: "INSTAGRAM", label: "Instagram Reels", icon: Instagram, color: "text-pink-600" },
               { key: "FACEBOOK", label: "Facebook Reels", icon: Facebook, color: "text-blue-600" },
+              { key: "SHARECHAT", label: "ShareChat", icon: Share2, color: "text-orange-600" },
+              { key: "MOJ", label: "Moj", icon: Smartphone, color: "text-amber-600" },
             ] as const;
 
             type ServerEntry = { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; error?: string };
@@ -1029,6 +1051,11 @@ export default function VideoDetailPage() {
                     const failError = clientFailError || serverFailError;
                     const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted;
                     const isEditingThisLink = editingLink === key;
+                    const platformInsights = (video as { insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> }).insights?.[key];
+                    const pViews = platformInsights?.views ?? 0;
+                    const pInteractions = (platformInsights?.likes ?? 0) + (platformInsights?.comments ?? 0) + (platformInsights?.reactions ?? 0);
+                    const hasPlatformInsights = pViews > 0 || pInteractions > 0;
+                    const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
 
                     let rowBg = "";
                     if (isPosted) rowBg = "bg-green-50 border-green-200";
@@ -1042,33 +1069,47 @@ export default function VideoDetailPage() {
                           <div className="flex-1 min-w-0">
                             <span className="text-sm font-medium">{label}</span>
                             {isPosted && postUrl && !isEditingThisLink && (
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <a
-                                  href={postUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-green-700 underline underline-offset-2 hover:text-green-900 truncate"
-                                >
-                                  {postUrl}
-                                </a>
-                                <button
-                                  type="button"
-                                  onClick={() => { setEditingLink(key); setLinkInput(postUrl); setLinkError(""); }}
-                                  className="text-green-600 hover:text-green-800 shrink-0"
-                                  title="Edit link"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </button>
+                              <div className="mt-0.5 space-y-1">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <a
+                                    href={postUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-green-700 underline underline-offset-2 hover:text-green-900 truncate"
+                                  >
+                                    {postUrl}
+                                  </a>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setEditingLink(key); setLinkInput(postUrl); setLinkError(""); }}
+                                    className="text-green-600 hover:text-green-800 shrink-0 p-0.5"
+                                    title="Edit link"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                </div>
+                                {hasPlatformInsights && (
+                                  <div className="text-[11px] text-muted-foreground/90 font-medium tabular-nums">
+                                    {fmt(pViews)} views · {fmt(pInteractions)} interactions
+                                  </div>
+                                )}
                               </div>
                             )}
                             {isPosted && !postUrl && !isEditingThisLink && (
-                              <button
-                                type="button"
-                                onClick={() => { setEditingLink(key); setLinkInput(""); setLinkError(""); }}
-                                className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-900 mt-0.5"
-                              >
-                                <Link2 className="h-3 w-3" /> Add link
-                              </button>
+                              <div className="mt-0.5 space-y-1">
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditingLink(key); setLinkInput(""); setLinkError(""); }}
+                                  className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-900"
+                                >
+                                  <Link2 className="h-3 w-3" /> Add link
+                                </button>
+                                {hasPlatformInsights && (
+                                  <div className="text-[11px] text-muted-foreground/90 font-medium tabular-nums">
+                                    {fmt(pViews)} views · {fmt(pInteractions)} interactions
+                                  </div>
+                                )}
+                              </div>
                             )}
                             {(isUploading || isPublishing) && !isPosted && (
                               <p className="text-xs text-blue-600 mt-0.5">Uploading to {label}...</p>
@@ -1180,6 +1221,104 @@ export default function VideoDetailPage() {
                       </div>
                     );
                   })}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* Video insights — this video totals + account growth (all platforms) */}
+          {isReady && (() => {
+            const insights = (video as { insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> }).insights;
+            const refreshedAt = (video as { insightsRefreshedAt?: string | null }).insightsRefreshedAt;
+            const formatNum = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
+            const timeAgoInsights = (dateStr: string) => {
+              const d = new Date(dateStr).getTime();
+              const mins = Math.floor((Date.now() - d) / 60000);
+              if (mins < 1) return "just now";
+              if (mins < 60) return `${mins}m ago`;
+              if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+              return `${Math.floor(mins / 1440)}d ago`;
+            };
+            let totalViews = 0, totalInteractions = 0;
+            if (insights && typeof insights === "object") {
+              for (const p of Object.values(insights)) {
+                if (p && typeof p === "object") {
+                  totalViews += Number(p.views) || 0;
+                  totalInteractions += (Number(p.likes) || 0) + (Number(p.comments) || 0) + (Number(p.reactions) || 0);
+                }
+              }
+            }
+            const ytGained = accountGrowth.YOUTUBE?.gainedSubscribers ?? 0;
+            const igGained = accountGrowth.INSTAGRAM?.gainedFollowers ?? 0;
+            const fbGained = accountGrowth.FACEBOOK?.gainedFollowers ?? 0;
+            const hasGrowth = ytGained > 0 || igGained > 0 || fbGained > 0;
+            const hasAny = totalViews > 0 || totalInteractions > 0 || hasGrowth;
+            return (
+              <Card className="mt-4">
+                <CardContent className="p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                      <BarChart2 className="h-4 w-4 text-muted-foreground" />
+                      Insights
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      {refreshedAt && (
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          Last refreshed {timeAgoInsights(refreshedAt)}
+                        </span>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs shrink-0"
+                        disabled={insightsRefreshing}
+                        onClick={async () => {
+                          setInsightsRefreshing(true);
+                          try {
+                            const res = await fetch("/api/insights/refresh", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ videoIds: [video.id] }),
+                            });
+                            if (res.ok) {
+                              await queryClient.invalidateQueries({ queryKey: ["video", video.id] });
+                              const ins = await fetch("/api/insights").then((r) => r.json());
+                              if (ins?.data?.accountMetrics) setAccountGrowth(ins.data.accountMetrics);
+                            }
+                          } finally {
+                            setInsightsRefreshing(false);
+                          }
+                        }}
+                      >
+                        {insightsRefreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                        Refresh
+                      </Button>
+                    </div>
+                  </div>
+                  {hasAny ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Total views</p>
+                        <p className="text-lg font-semibold tabular-nums mt-0.5">{formatNum(totalViews)}</p>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Total interactions</p>
+                        <p className="text-lg font-semibold tabular-nums mt-0.5">{formatNum(totalInteractions)}</p>
+                      </div>
+                      {hasGrowth && (
+                        <div className="rounded-lg border bg-muted/30 px-3 py-2.5 sm:col-span-2">
+                          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Account growth (all videos)</p>
+                          <p className="text-sm font-medium tabular-nums mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                            {ytGained > 0 && <span className="text-red-700">YT +{formatNum(ytGained)} subs</span>}
+                            {igGained > 0 && <span className="text-pink-700">IG +{formatNum(igGained)}</span>}
+                            {fbGained > 0 && <span className="text-blue-700">FB +{formatNum(fbGained)}</span>}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No insights yet. Click Refresh to fetch from platforms.</p>
+                  )}
                 </CardContent>
               </Card>
             );

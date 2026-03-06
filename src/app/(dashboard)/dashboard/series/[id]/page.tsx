@@ -4,7 +4,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2, Youtube, Instagram, Facebook } from "lucide-react";
+import { ArrowLeft, Plus, Play, Clock, AlertCircle, CheckCircle2, Loader2, Youtube, Instagram, Facebook, Share2, Smartphone } from "lucide-react";
 import { DeleteButton } from "@/components/delete-button";
 import { ResetPostedButton } from "@/components/reset-posted-button";
 
@@ -125,6 +125,8 @@ export default async function SeriesDetailPage({
                           {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
                           {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
                           {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                          {plats.includes("SHARECHAT") && <Share2 className="h-3.5 w-3.5 text-orange-600" />}
+                          {plats.includes("MOJ") && <Smartphone className="h-3.5 w-3.5 text-amber-600" />}
                         </div>
                       );
                     })()}

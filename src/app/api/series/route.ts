@@ -21,7 +21,7 @@ export async function GET() {
         videos: {
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { status: true, generationStage: true, postedPlatforms: true },
+          select: { status: true, generationStage: true, postedPlatforms: true, insights: true, insightsRefreshedAt: true },
         },
       },
       orderBy: { createdAt: "desc" },

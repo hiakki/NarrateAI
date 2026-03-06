@@ -64,13 +64,22 @@ export async function POST(
 
     if (scenes.length === 0) {
       log.log(`No persisted scenes, regenerating script for ${id}`);
+      const recentTitles = await db.video.findMany({
+        where: { seriesId: video.seriesId, id: { not: id }, title: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: 6,
+        select: { title: true },
+      });
+      const avoidThemes = recentTitles.map((v) => v.title).filter(Boolean) as string[];
       const script = await generateScript({
-        niche: niche?.name ?? video.series.niche,
+        niche: video.series.niche,
         tone: video.series.tone ?? "dramatic",
         artStyle: video.series.artStyle,
         duration: video.targetDuration ?? video.duration ?? 45,
         language: video.series.language ?? "en",
-      }, resolved.llm);
+        avoidThemes: avoidThemes.length > 0 ? avoidThemes : undefined,
+        varietySeed: `${Date.now()}-${id.slice(-6)}`,
+      }, resolved.llm, video.series.character?.fullPrompt ?? undefined);
       scriptText = script.fullScript;
       title = script.title;
       scenes = script.scenes;

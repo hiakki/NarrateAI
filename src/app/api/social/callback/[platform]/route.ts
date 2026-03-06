@@ -232,16 +232,53 @@ async function handleYouTubeCallback(code: string, userId: string) {
   const channelData = await channelRes.json();
   const channel = channelData.items?.[0];
 
+  let displayName: string | null = channel?.snippet?.title ?? null;
+  let channelId: string = channel?.id ?? "unknown";
+
+  if (!channel && (!channelRes.ok || channelData.error)) {
+    log.warn("YouTube channels.list failed, using userinfo for display name:", channelRes.status, channelData.error?.message ?? "");
+    const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    if (userRes.ok) {
+      const user = (await userRes.json()) as { name?: string; email?: string };
+      displayName = user.name ?? user.email ?? "YouTube channel";
+    } else {
+      displayName = "YouTube channel";
+    }
+  } else if (!displayName) {
+    displayName = "YouTube channel";
+  }
+
   const tokenExpiry = tokens.expires_in
     ? new Date(Date.now() + tokens.expires_in * 1000)
     : null;
+
+  if (channelId === "unknown") {
+    const existing = await db.socialAccount.findFirst({
+      where: { userId, platform: "YOUTUBE" },
+      select: { id: true, platformUserId: true },
+    });
+    if (existing) {
+      await db.socialAccount.update({
+        where: { id: existing.id },
+        data: {
+          accessTokenEnc: encrypt(tokens.access_token),
+          refreshTokenEnc: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
+          username: displayName,
+          tokenExpiresAt: tokenExpiry,
+        },
+      });
+      return;
+    }
+  }
 
   await db.socialAccount.upsert({
     where: {
       userId_platform_platformUserId: {
         userId,
         platform: "YOUTUBE",
-        platformUserId: channel?.id ?? "unknown",
+        platformUserId: channelId,
       },
     },
     update: {
@@ -249,21 +286,19 @@ async function handleYouTubeCallback(code: string, userId: string) {
       refreshTokenEnc: tokens.refresh_token
         ? encrypt(tokens.refresh_token)
         : undefined,
-      username: channel?.snippet?.title,
+      username: displayName,
       tokenExpiresAt: tokenExpiry,
     },
     create: {
       userId,
       platform: "YOUTUBE",
-      platformUserId: channel?.id ?? "unknown",
+      platformUserId: channelId,
       accessTokenEnc: encrypt(tokens.access_token),
       refreshTokenEnc: tokens.refresh_token
         ? encrypt(tokens.refresh_token)
         : null,
-      username: channel?.snippet?.title,
-      profileUrl: channel
-        ? `https://youtube.com/channel/${channel.id}`
-        : null,
+      username: displayName,
+      profileUrl: channelId !== "unknown" ? `https://youtube.com/channel/${channelId}` : null,
       tokenExpiresAt: tokenExpiry,
     },
   });

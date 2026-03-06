@@ -152,6 +152,73 @@ export async function postFacebookReel(
   }
 }
 
+function parseInsightValue(insightsData: unknown): number {
+  const d = insightsData as { data?: { total_value?: { value?: number }; values?: { value?: number }[]; value?: number }[] };
+  const first = d?.data?.[0];
+  if (!first) return 0;
+  // Meta docs: total_value.value, or values[].value (InsightsValue)
+  let val: number | undefined =
+    first.total_value?.value ??
+    (Array.isArray(first.values) && first.values.length > 0 ? first.values[first.values.length - 1]?.value ?? first.values[0]?.value : undefined) ??
+    (first as { value?: number }).value;
+  if (typeof val === "number") return val;
+  if (val != null) return parseInt(String(val), 10) || 0;
+  return 0;
+}
+
+/** Video insights (views, reactions, comments) for a single reel. Views from video_insights (total_video_views or fb_reels_total_plays for Reels). */
+export async function getFacebookVideoInsights(
+  pageAccessToken: string,
+  videoId: string,
+): Promise<{ views: number; reactions: number; comments: number }> {
+  try {
+    let views = 0;
+    for (const metric of ["total_video_views", "fb_reels_total_plays"]) {
+      const insightsRes = await fetch(
+        `${GRAPH_API}/${videoId}/video_insights?metric=${metric}&period=lifetime&access_token=${encodeURIComponent(pageAccessToken)}`,
+      );
+      if (insightsRes.ok) {
+        const insightsData = await insightsRes.json();
+        views = parseInsightValue(insightsData as never);
+        if (views > 0) break;
+      }
+    }
+
+    // Video/Reel node: use comments + likes (reactions field does not exist on all Video objects)
+    const res = await fetch(
+      `${GRAPH_API}/${videoId}?fields=comments.summary(total_count),likes.summary(total_count)&access_token=${encodeURIComponent(pageAccessToken)}`,
+    );
+    if (!res.ok) return { views, reactions: 0, comments: 0 };
+    const data = await res.json();
+    const comments = typeof data.comments?.summary?.total_count === "number"
+      ? data.comments.summary.total_count
+      : parseInt(String(data.comments?.summary?.total_count ?? 0), 10) || 0;
+    const reactions = typeof data.likes?.summary?.total_count === "number"
+      ? data.likes.summary.total_count
+      : parseInt(String(data.likes?.summary?.total_count ?? 0), 10) || 0;
+    return { views, reactions, comments };
+  } catch {
+    return { views: 0, reactions: 0, comments: 0 };
+  }
+}
+
+/** Page follower count for insights. */
+export async function getFacebookPageFollowers(
+  pageAccessToken: string,
+  pageId: string,
+): Promise<number> {
+  try {
+    const res = await fetch(
+      `${GRAPH_API}/${pageId}?fields=followers_count&access_token=${encodeURIComponent(pageAccessToken)}`,
+    );
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return typeof data.followers_count === "number" ? data.followers_count : parseInt(String(data.followers_count ?? 0), 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** Post a first comment on a published Facebook video/reel. */
 export async function postFacebookComment(
   videoId: string,

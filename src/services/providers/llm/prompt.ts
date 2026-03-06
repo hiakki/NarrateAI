@@ -2,6 +2,32 @@ import type { ScriptInput } from "./types";
 import { getLanguageName } from "@/config/languages";
 import { getPromptEnhancer } from "@/config/prompt-enhancers";
 
+const NARRATIVE_VARIETY_RULES = [
+  "Open with a shocking statistic, specific number, or little-known fact — not a generic question.",
+  "Start in the middle of the action (in medias res); reveal context only as the story unfolds.",
+  "Open with a direct address to the viewer ('You wake up...', 'Imagine...') and keep that tension.",
+  "Use a countdown or timeline structure (e.g. 'In 24 hours...', 'By day 3...') to drive the story.",
+  "Open with a myth, legend, or historical parallel that connects to the main premise.",
+  "Begin with a contradiction or paradox that the story will resolve or deepen.",
+  "Open with a vivid sensory detail or single image, then expand into the full story.",
+  "Start with a bold claim or 'what if' that sounds impossible, then prove it step by step.",
+  "Open with a short dialogue or quote, then reveal who said it and why it matters.",
+  "Begin with the consequence or ending first, then show how we got there.",
+];
+
+function hashSeed(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function getNarrativeVarietyConstraint(varietySeed: string | undefined): string {
+  if (!varietySeed) return "";
+  const index = hashSeed(varietySeed) % NARRATIVE_VARIETY_RULES.length;
+  const rule = NARRATIVE_VARIETY_RULES[index];
+  return `\n═══ THIS SCRIPT ONLY (narrative constraint — follow exactly) ═══\n- ${rule}\n`;
+}
+
 export function getSceneCount(duration: number): number {
   if (duration <= 30) return 4;
   if (duration <= 45) return 5;
@@ -66,7 +92,18 @@ ART STYLE: ${input.artStyle}
 MOOD: ${enhancer.moodKeywords}
 LANGUAGE: ${langName}
 ${input.topic ? `TOPIC: ${input.topic}` : "Choose a trending, highly engaging topic for this niche."}
+${input.avoidThemes?.length
+    ? `\nAVOID THESE THEMES/PREMISES (do NOT repeat or closely mimic): ${input.avoidThemes.join(" | ")}`
+    : ""}
 ${characterBlock}
+═══ UNIQUENESS (CRITICAL — EVERY VIDEO MUST BE DIFFERENT) ═══
+- Create a UNIQUE story. Do NOT reuse the same premise, twist, or concept. Pick a FRESH angle, an unexpected interpretation, or a rarely-told aspect.
+- Avoid overused tropes and clichés for this niche (e.g. for science/what-if: not "gravity stopped", "sun disappeared" every time — vary with lesser-known scenarios, different consequences, or a surprising take).
+- If no specific topic was given, actively choose something DISTINCT from typical viral repeats. Surprise the viewer with a premise they haven't seen before.
+- Each script must feel like a different episode: different hook, different conflict, different payoff. Never output the "default" or most obvious idea for the niche.
+${input.varietySeed ? `- This run (seed: ${input.varietySeed}) must produce a story that feels different from any other — use the seed as a mental nudge to pick a non-obvious premise.` : ""}
+${getNarrativeVarietyConstraint(input.varietySeed)}
+
 STORYTELLING RULES (follow these precisely):
 ${storytellingBlock}
 

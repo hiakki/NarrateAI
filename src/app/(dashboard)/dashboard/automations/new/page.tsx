@@ -18,12 +18,12 @@ import {
   ArrowLeft, ArrowRight, Loader2, Check, ChevronDown, ChevronUp,
   Cpu, Mic, Image as ImageIcon, Instagram, Youtube, Facebook, Clock,
   LayoutGrid, CalendarClock, ClipboardCheck, Sparkles, Globe, Plus, XCircle,
-  EyeOff, Star,
+  EyeOff, Star, Share2, Smartphone,
 } from "lucide-react";
 import Link from "next/link";
 
 type Step = 1 | 2 | 3;
-type PlatformKey = "FACEBOOK" | "YOUTUBE" | "INSTAGRAM";
+type PlatformKey = "FACEBOOK" | "YOUTUBE" | "INSTAGRAM" | "SHARECHAT" | "MOJ";
 
 interface ProviderInfo {
   id: string; name: string; description: string; costEstimate: string; qualityLabel: string;
@@ -38,7 +38,7 @@ interface ProviderData {
 
 interface SocialAccount {
   id: string;
-  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK";
+  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK" | "SHARECHAT" | "MOJ";
   username: string | null;
   pageName: string | null;
 }
@@ -55,6 +55,8 @@ const PLATFORM_CONFIG = {
   INSTAGRAM: { icon: Instagram, color: "text-pink-600", label: "Instagram Reels" },
   YOUTUBE: { icon: Youtube, color: "text-red-600", label: "YouTube Shorts" },
   FACEBOOK: { icon: Facebook, color: "text-blue-600", label: "Facebook Reels" },
+  SHARECHAT: { icon: Share2, color: "text-orange-600", label: "ShareChat" },
+  MOJ: { icon: Smartphone, color: "text-amber-600", label: "Moj" },
 } as const;
 
 const FREQUENCIES = [
@@ -69,32 +71,43 @@ const COMMON_TIMEZONES = [
 ] as const;
 
 const SCORE_WEIGHTS = { topic: 30, art: 15, voice: 10, language: 15, tone: 10, time: 20 } as const;
-const PLATFORMS: PlatformKey[] = ["FACEBOOK", "YOUTUBE", "INSTAGRAM"];
+const PLATFORMS: PlatformKey[] = ["FACEBOOK", "YOUTUBE", "INSTAGRAM", "SHARECHAT", "MOJ"];
 
 const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
-  "scary-stories": { FACEBOOK: 76, YOUTUBE: 70, INSTAGRAM: 84 },
-  mythology: { FACEBOOK: 78, YOUTUBE: 74, INSTAGRAM: 72 },
-  history: { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 68 },
-  "true-crime": { FACEBOOK: 80, YOUTUBE: 75, INSTAGRAM: 82 },
-  "anime-recaps": { FACEBOOK: 62, YOUTUBE: 78, INSTAGRAM: 86 },
-  "life-hacks": { FACEBOOK: 72, YOUTUBE: 70, INSTAGRAM: 82 },
-  motivation: { FACEBOOK: 74, YOUTUBE: 72, INSTAGRAM: 80 },
-  "science-facts": { FACEBOOK: 70, YOUTUBE: 76, INSTAGRAM: 74 },
-  "conspiracy-theories": { FACEBOOK: 77, YOUTUBE: 68, INSTAGRAM: 79 },
-  "religious-epics": { FACEBOOK: 80, YOUTUBE: 68, INSTAGRAM: 66 },
-  "what-if": { FACEBOOK: 72, YOUTUBE: 82, INSTAGRAM: 78 },
-  "dark-psychology": { FACEBOOK: 80, YOUTUBE: 72, INSTAGRAM: 86 },
-  "space-cosmos": { FACEBOOK: 68, YOUTUBE: 84, INSTAGRAM: 76 },
-  "animal-kingdom": { FACEBOOK: 80, YOUTUBE: 78, INSTAGRAM: 84 },
-  survival: { FACEBOOK: 76, YOUTUBE: 80, INSTAGRAM: 78 },
-  "money-wealth": { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 86 },
-  "funny-stories": { FACEBOOK: 82, YOUTUBE: 80, INSTAGRAM: 88 },
-  "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84 },
-  satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90 },
+  "scary-stories": { FACEBOOK: 76, YOUTUBE: 70, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
+  mythology: { FACEBOOK: 78, YOUTUBE: 74, INSTAGRAM: 72, SHARECHAT: 74, MOJ: 74 },
+  history: { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 68, SHARECHAT: 70, MOJ: 70 },
+  "true-crime": { FACEBOOK: 80, YOUTUBE: 75, INSTAGRAM: 82, SHARECHAT: 80, MOJ: 80 },
+  "anime-recaps": { FACEBOOK: 62, YOUTUBE: 78, INSTAGRAM: 86, SHARECHAT: 84, MOJ: 84 },
+  "life-hacks": { FACEBOOK: 72, YOUTUBE: 70, INSTAGRAM: 82, SHARECHAT: 80, MOJ: 80 },
+  motivation: { FACEBOOK: 74, YOUTUBE: 72, INSTAGRAM: 80, SHARECHAT: 78, MOJ: 78 },
+  "science-facts": { FACEBOOK: 70, YOUTUBE: 76, INSTAGRAM: 74, SHARECHAT: 74, MOJ: 74 },
+  "conspiracy-theories": { FACEBOOK: 77, YOUTUBE: 68, INSTAGRAM: 79, SHARECHAT: 78, MOJ: 78 },
+  "religious-epics": { FACEBOOK: 80, YOUTUBE: 68, INSTAGRAM: 66, SHARECHAT: 72, MOJ: 72 },
+  "what-if": { FACEBOOK: 72, YOUTUBE: 82, INSTAGRAM: 78, SHARECHAT: 78, MOJ: 78 },
+  "dark-psychology": { FACEBOOK: 80, YOUTUBE: 72, INSTAGRAM: 86, SHARECHAT: 84, MOJ: 84 },
+  "space-cosmos": { FACEBOOK: 68, YOUTUBE: 84, INSTAGRAM: 76, SHARECHAT: 78, MOJ: 78 },
+  "animal-kingdom": { FACEBOOK: 80, YOUTUBE: 78, INSTAGRAM: 84, SHARECHAT: 84, MOJ: 84 },
+  survival: { FACEBOOK: 76, YOUTUBE: 80, INSTAGRAM: 78, SHARECHAT: 78, MOJ: 78 },
+  "money-wealth": { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 86, SHARECHAT: 84, MOJ: 84 },
+  "funny-stories": { FACEBOOK: 82, YOUTUBE: 80, INSTAGRAM: 88, SHARECHAT: 86, MOJ: 86 },
+  "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
+  satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90, SHARECHAT: 88, MOJ: 88 },
 };
 
 function clamp(n: number, lo = 0, hi = 100) {
   return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+function platformShort(p: PlatformKey): string {
+  switch (p) {
+    case "FACEBOOK": return "FB";
+    case "YOUTUBE": return "YT";
+    case "INSTAGRAM": return "IG";
+    case "SHARECHAT": return "SC";
+    case "MOJ": return "Moj";
+    default: return p;
+  }
 }
 
 function hmToMinutes(hm: string): number {
@@ -220,11 +233,11 @@ export default function NewAutomationPage() {
 
     const perPlatform = Object.fromEntries(PLATFORMS.map((platform) => {
       const topic = baseByPlatform[platform];
-      const art = platform === "INSTAGRAM" ? artBase + 2 : platform === "YOUTUBE" ? artBase - 1 : artBase;
+      const art = platform === "INSTAGRAM" || platform === "SHARECHAT" || platform === "MOJ" ? artBase + 2 : platform === "YOUTUBE" ? artBase - 1 : artBase;
       const voice = platform === "YOUTUBE" ? voiceBase + 3 : voiceBase;
-      const lang = platform === "FACEBOOK" && cfg.languageId === "hi" ? languageBase + 4 : languageBase;
+      const lang = (platform === "FACEBOOK" || platform === "SHARECHAT" || platform === "MOJ") && cfg.languageId === "hi" ? languageBase + 4 : languageBase;
       const toneScore = toneBase;
-      const time = platform === "INSTAGRAM" ? timeBase + 2 : timeBase;
+      const time = platform === "INSTAGRAM" || platform === "SHARECHAT" || platform === "MOJ" ? timeBase + 2 : timeBase;
       const overall = clamp(
         (topic * SCORE_WEIGHTS.topic
           + art * SCORE_WEIGHTS.art
@@ -541,7 +554,7 @@ export default function NewAutomationPage() {
                       <div className="space-y-2">
                         {PLATFORMS.map((p) => (
                           <div key={p} className="flex items-center justify-between rounded-md border px-2.5 py-1.5 text-xs">
-                            <span>{p === "FACEBOOK" ? "FB" : p === "YOUTUBE" ? "YT" : "IG"}</span>
+                            <span>{platformShort(p)}</span>
                             <span className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</span>
                           </div>
                         ))}
@@ -723,7 +736,7 @@ export default function NewAutomationPage() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {(["INSTAGRAM", "YOUTUBE", "FACEBOOK"] as const).map((platform) => {
+              {PLATFORMS.map((platform) => {
                 const config = PLATFORM_CONFIG[platform];
                 const Icon = config.icon;
                 if (!connectedPlatforms.has(platform)) return null;
@@ -911,7 +924,7 @@ export default function NewAutomationPage() {
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     {PLATFORMS.filter((p) => selectedPlatforms.size === 0 || selectedPlatforms.has(p)).map((p) => (
                       <div key={p} className="rounded-md border px-2 py-1 text-center">
-                        <div className="text-muted-foreground">{p === "FACEBOOK" ? "FB" : p === "YOUTUBE" ? "YT" : "IG"}</div>
+                        <div className="text-muted-foreground">{platformShort(p)}</div>
                         <div className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</div>
                       </div>
                     ))}

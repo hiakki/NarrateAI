@@ -108,7 +108,7 @@ export async function PATCH(
     if (input.characterId !== undefined)
       data.characterId = input.characterId;
     if (input.targetPlatforms !== undefined) {
-      const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK"]);
+      const valid = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"]);
       data.targetPlatforms = input.targetPlatforms.filter((p) => valid.has(p));
     }
     if (input.enabled !== undefined) data.enabled = input.enabled;

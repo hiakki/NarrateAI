@@ -15,6 +15,8 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
+  Share2,
+  Smartphone,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -30,7 +32,7 @@ import {
 
 interface SocialAccount {
   id: string;
-  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK";
+  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK" | "SHARECHAT" | "MOJ";
   username: string | null;
   pageName: string | null;
   profileUrl: string | null;
@@ -46,6 +48,7 @@ const PLATFORM_CONFIG = {
     bgColor: "bg-pink-50",
     connectUrl: "/api/social/connect/instagram",
     description: "Post short-form Reels to your Instagram professional account",
+    comingSoon: false,
   },
   YOUTUBE: {
     name: "YouTube Shorts",
@@ -54,6 +57,7 @@ const PLATFORM_CONFIG = {
     bgColor: "bg-red-50",
     connectUrl: "/api/social/connect/youtube",
     description: "Upload Shorts to your YouTube channel",
+    comingSoon: false,
   },
   FACEBOOK: {
     name: "Facebook Reels",
@@ -62,6 +66,25 @@ const PLATFORM_CONFIG = {
     bgColor: "bg-blue-50",
     connectUrl: "/api/social/connect/facebook",
     description: "Post Reels to your Facebook Page",
+    comingSoon: false,
+  },
+  SHARECHAT: {
+    name: "ShareChat",
+    icon: Share2,
+    color: "text-orange-600",
+    bgColor: "bg-orange-50",
+    connectUrl: "#",
+    description: "Indian short-video platform. Partner API required — contact ShareChat for access.",
+    comingSoon: true,
+  },
+  MOJ: {
+    name: "Moj",
+    icon: Smartphone,
+    color: "text-amber-600",
+    bgColor: "bg-amber-50",
+    connectUrl: "#",
+    description: "Indian short-video app. Partner API required — contact Moj/ShareChat for access.",
+    comingSoon: true,
   },
 } as const;
 
@@ -182,17 +205,23 @@ function ChannelsContent() {
                     <p className="text-xs text-muted-foreground mb-4 flex-1">
                       {config.description}
                     </p>
-                    <Button
-                      size="sm"
-                      variant={isConnected ? "outline" : "default"}
-                      className="w-full mt-auto"
-                      asChild
-                    >
-                      <a href={config.connectUrl}>
-                        <Plus className="mr-1 h-3 w-3" />
-                        {isConnected ? "Add Another" : "Connect"}
-                      </a>
-                    </Button>
+                    {"comingSoon" in config && config.comingSoon ? (
+                      <Button size="sm" variant="secondary" className="w-full mt-auto" disabled>
+                        Coming soon
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant={isConnected ? "outline" : "default"}
+                        className="w-full mt-auto"
+                        asChild
+                      >
+                        <a href={config.connectUrl}>
+                          <Plus className="mr-1 h-3 w-3" />
+                          {isConnected ? "Add Another" : "Connect"}
+                        </a>
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               );

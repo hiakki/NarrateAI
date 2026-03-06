@@ -50,6 +50,8 @@ enum Platform {
   INSTAGRAM
   YOUTUBE
   FACEBOOK
+  SHARECHAT
+  MOJ
 }
 
 enum SubscriptionStatus {
@@ -221,6 +223,8 @@ model Video {
   errorMessage     String?
   checkpointData   Json?
   retryCount       Int              @default(0)
+  insights         Json?
+  insightsRefreshedAt DateTime?
 
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
@@ -269,6 +273,9 @@ model SocialAccount {
   profileUrl      String?
   connectedAt     DateTime @default(now())
   tokenExpiresAt  DateTime?
+  metrics         Json?
+  metricsRefreshedAt DateTime?
+  metricsBaseline Json?
 
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

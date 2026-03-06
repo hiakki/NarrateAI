@@ -91,11 +91,12 @@ export class LocalLlmProvider implements LlmProviderInterface {
 
   async generateScript(input: ScriptInput): Promise<GeneratedScript> {
     const sceneCount = getSceneCount(input.duration);
+    // buildPrompt includes topic, avoidThemes, varietySeed, and per-run narrative constraint for unique stories
     const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
 
     log.log(`── REQUEST ── model=${this.model} niche=${input.niche} duration=${input.duration}s scenes=${sceneCount}`);
     log.log(`   Endpoint : ${this.baseURL}/chat/completions (streaming)`);
-    log.log(`   Prompt (${prompt.length} chars):\n${prompt}`);
+    log.log(`   Input prompt sent to LLM; full prompt and response logged in video context file.`);
 
     const { content: text, finishReason } = await this.streamChat(
       [
@@ -103,11 +104,11 @@ export class LocalLlmProvider implements LlmProviderInterface {
         { role: "user", content: prompt },
       ],
       4096,
-      0.9,
+      0.95,
     );
 
     log.log(`── RESPONSE ── ${text.length} chars, finish=${finishReason}`);
-    log.log(`   Output:\n${text}`);
+    log.log(`   LLM output received; full output saved and logged in video context file.`);
 
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
     const scenes = (parsed.scenes as { text: string; visualDescription: string }[]) || [];

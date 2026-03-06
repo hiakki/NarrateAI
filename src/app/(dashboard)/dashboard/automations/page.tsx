@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   Bot, Plus, Clock, Loader2, Instagram, Youtube, Facebook,
   Trash2, Film, Zap, AlertCircle, CheckCircle2, XCircle, RefreshCw, Send,
-  Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff,
+  Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff, Share2, Smartphone,
+  BarChart2, Eye, Heart,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -56,6 +57,8 @@ const PLATFORM_CFG: Record<string, { icon: typeof Instagram; color: string; labe
   INSTAGRAM: { icon: Instagram, color: "text-pink-600", label: "IG" },
   YOUTUBE: { icon: Youtube, color: "text-red-600", label: "YT" },
   FACEBOOK: { icon: Facebook, color: "text-blue-600", label: "FB" },
+  SHARECHAT: { icon: Share2, color: "text-orange-600", label: "SC" },
+  MOJ: { icon: Smartphone, color: "text-amber-600", label: "Moj" },
 };
 
 const FREQ_LABEL: Record<string, string> = {
@@ -197,6 +200,39 @@ export default function AutomationsPage() {
     failed: string[];
   } | null>(null);
 
+  type InsightsSummary = {
+    totalViews: number;
+    totalLikes: number;
+    totalComments: number;
+    totalReactions: number;
+    totalInteractions: number;
+    videoCount: number;
+    lastRefreshedAt: string | null;
+  };
+  type InsightsData = {
+    lastRefreshedAt: string | null;
+    summary?: InsightsSummary;
+    byAutomation: Record<string, InsightsSummary>;
+    accountMetrics: Record<string, { gainedSubscribers?: number; gainedFollowers?: number; refreshedAt?: string }>;
+  };
+  const [insightsData, setInsightsData] = useState<InsightsData | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(true);
+  const [insightsRefreshing, setInsightsRefreshing] = useState(false);
+  const [insightsRefreshingId, setInsightsRefreshingId] = useState<string | null>(null);
+
+  const fetchInsights = useCallback(async () => {
+    setInsightsLoading(true);
+    try {
+      const res = await fetch("/api/insights");
+      const json = await res.json();
+      if (json.data) setInsightsData(json.data);
+    } catch {
+      setInsightsData(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }, []);
+
   const fetchAutomations = useCallback(async () => {
     try {
       const res = await fetch("/api/automations");
@@ -209,6 +245,10 @@ export default function AutomationsPage() {
   useEffect(() => {
     fetchAutomations();
   }, [fetchAutomations]);
+
+  useEffect(() => {
+    if (!loading && automations.length >= 0) fetchInsights();
+  }, [loading, automations.length, fetchInsights]);
 
   // Auto-poll when any automation has an active video
   const hasActiveWork = useMemo(
@@ -615,20 +655,73 @@ export default function AutomationsPage() {
 
   const allSelected = sortedAutomations.length > 0 && selectedIds.size === sortedAutomations.length;
 
+  async function handleRefreshInsights(automationId?: string) {
+    if (automationId) setInsightsRefreshingId(automationId);
+    else setInsightsRefreshing(true);
+    try {
+      const res = await fetch("/api/insights/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(automationId ? { automationId } : {}),
+      });
+      if (res.ok) {
+        await fetchInsights();
+        await fetchAutomations();
+      } else {
+        const json = await res.json().catch(() => ({}));
+        alert(json.error || "Failed to refresh insights");
+      }
+    } catch {
+      alert("Failed to refresh insights");
+    } finally {
+      setInsightsRefreshing(false);
+      setInsightsRefreshingId(null);
+    }
+  }
+
+  function formatNumber(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return String(n);
+  }
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
           <h1 className="text-3xl font-bold">Automations</h1>
           <p className="mt-1 text-muted-foreground">
             Set up scheduled video generation and auto-posting to your channels.
           </p>
         </div>
-        <Button asChild>
-          <Link href="/dashboard/automations/new">
-            <Plus className="mr-2 h-4 w-4" /> New Automation
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          {!insightsLoading && insightsData && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <BarChart2 className="h-3.5 w-3.5" />
+              <span>
+                Insights {insightsData.lastRefreshedAt
+                  ? `· Last refreshed ${timeAgo(insightsData.lastRefreshedAt)}`
+                  : "· Not refreshed yet"}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={insightsRefreshing}
+                onClick={() => handleRefreshInsights()}
+                title="Refresh insights for all your posted videos"
+              >
+                {insightsRefreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Refresh all
+              </Button>
+            </div>
+          )}
+          <Button asChild>
+            <Link href="/dashboard/automations/new">
+              <Plus className="mr-2 h-4 w-4" /> New Automation
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Action toolbar */}
@@ -1144,6 +1237,7 @@ export default function AutomationsPage() {
                             })}
                           </div>
                         )}
+
                       </div>
                     ) : (
                       <div className="text-xs text-muted-foreground/60 italic">
@@ -1152,6 +1246,64 @@ export default function AutomationsPage() {
                           : "No videos yet"}
                       </div>
                     )}
+
+                    {/* Collective insights report for this automation — always show so user can refresh */}
+                    {!insightsLoading && (() => {
+                      const agg = insightsData?.byAutomation?.[auto.id];
+                      const am = insightsData?.accountMetrics ?? {};
+                      const ytGained = am.YOUTUBE?.gainedSubscribers ?? 0;
+                      const igGained = am.INSTAGRAM?.gainedFollowers ?? 0;
+                      const fbGained = am.FACEBOOK?.gainedFollowers ?? 0;
+                      const hasGained = ytGained > 0 || igGained > 0 || fbGained > 0;
+                      const views = agg?.totalViews ?? 0;
+                      const interactions = agg?.totalInteractions ?? 0;
+                      const lastRef = agg?.lastRefreshedAt ?? insightsData?.lastRefreshedAt;
+                      return (
+                        <div className="mt-3 pt-3 border-t border-border/60 space-y-1.5">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                              <BarChart2 className="h-3 w-3" />
+                              Insights
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-muted-foreground/80">
+                                {lastRef ? timeAgo(lastRef) : insightsData ? "Not refreshed" : "Refresh to load"}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRefreshInsights(auto.id); }}
+                                className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                title="Refresh insights from YouTube, Facebook, Instagram"
+                                disabled={!!insightsRefreshingId}
+                              >
+                                {insightsRefreshingId === auto.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs">
+                            <span className="flex items-center gap-1 text-muted-foreground">
+                              <Eye className="h-3 w-3" />
+                              {formatNumber(views)} views
+                            </span>
+                            <span className="flex items-center gap-1 text-muted-foreground">
+                              <Heart className="h-3 w-3" />
+                              {formatNumber(interactions)} interactions
+                            </span>
+                          </div>
+                          {hasGained && (
+                            <div className="text-xs text-muted-foreground/80 flex flex-wrap gap-x-2 gap-y-0">
+                              {ytGained > 0 && <span>YT: +{formatNumber(ytGained)} subs gained</span>}
+                              {igGained > 0 && <span>IG: +{formatNumber(igGained)} gained</span>}
+                              {fbGained > 0 && <span>FB: +{formatNumber(fbGained)} gained</span>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </CardContent>
                 </Link>
 

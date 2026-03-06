@@ -37,7 +37,7 @@ export class GeminiLlmProvider implements LlmProviderInterface {
     const prompt = buildPrompt(input, sceneCount, input.characterPrompt);
 
     log.log(`Generating script: niche=${input.niche}, tone=${input.tone}, duration=${input.duration}s, scenes=${sceneCount}`);
-    log.debug(`LLM prompt (${prompt.length} chars):\n${prompt}`);
+    log.log(`Input prompt sent to LLM; full prompt and response logged in video context file.`);
 
     const ai = new GoogleGenAI({ apiKey });
     const configured = (process.env.GEMINI_MODEL ?? "").trim();
@@ -57,7 +57,10 @@ export class GeminiLlmProvider implements LlmProviderInterface {
         response = await ai.models.generateContent({
           model,
           contents: prompt,
-          config: { responseMimeType: "application/json" },
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.95,
+          },
         });
         break;
       } catch (err) {
@@ -72,7 +75,7 @@ export class GeminiLlmProvider implements LlmProviderInterface {
     }
 
     const text = response.text ?? "";
-    log.debug(`Raw response: ${text.length} chars (model=${usedModel})`);
+    log.log(`LLM output received; full output saved and logged in video context file.`);
 
     const parsed = safeParseLlmJson(text) as Record<string, unknown>;
     const scenes: Scene[] = (parsed.scenes as Scene[]) || [];
