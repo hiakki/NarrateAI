@@ -10,6 +10,11 @@ import {
   getAvailableProviders,
   type ProviderInfo,
 } from "@/config/providers";
+import {
+  IMAGE_TO_VIDEO_PROVIDERS,
+  getImageToVideoProviderOptionsForSettings,
+  getAvailableImageToVideoProviders,
+} from "@/config/image-to-video-providers";
 
 function filterByAdmin(
   providers: ProviderInfo[],
@@ -32,6 +37,7 @@ export async function GET() {
           defaultLlmProvider: true,
           defaultTtsProvider: true,
           defaultImageProvider: true,
+          defaultImageToVideoProvider: true,
         },
       }),
       db.adminSettings.findUnique({ where: { id: "singleton" } }),
@@ -75,16 +81,28 @@ export async function GET() {
             : availImage,
         };
 
+    const allImageToVideo = getImageToVideoProviderOptionsForSettings();
+    const availImageToVideo = getAvailableImageToVideoProviders();
+    const availImageToVideoIds = new Set([
+      "",
+      ...availImageToVideo.map((p) => p.id),
+    ]);
+
     return NextResponse.json({
       data: {
         defaults: {
           llmProvider: user?.defaultLlmProvider ?? null,
           ttsProvider: user?.defaultTtsProvider ?? null,
           imageProvider: user?.defaultImageProvider ?? null,
+          imageToVideoProvider: user?.defaultImageToVideoProvider ?? null,
         },
         platformDefaults: PLATFORM_DEFAULTS,
         available: visibleAvail,
         all: visibleAll,
+        imageToVideo: {
+          all: allImageToVideo,
+          availableIds: [...availImageToVideoIds],
+        },
       },
     });
   } catch (error) {
@@ -99,6 +117,10 @@ export async function GET() {
 const VALID_LLM = new Set(Object.keys(LLM_PROVIDERS));
 const VALID_TTS = new Set(Object.keys(TTS_PROVIDERS));
 const VALID_IMAGE = new Set(Object.keys(IMAGE_PROVIDERS));
+const VALID_IMAGE_TO_VIDEO = new Set([
+  "",
+  ...Object.keys(IMAGE_TO_VIDEO_PROVIDERS),
+]);
 
 export async function PATCH(req: NextRequest) {
   try {
@@ -106,7 +128,7 @@ export async function PATCH(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { llmProvider, ttsProvider, imageProvider } = body;
+    const { llmProvider, ttsProvider, imageProvider, imageToVideoProvider } = body;
 
     if (llmProvider !== undefined && llmProvider !== null && !VALID_LLM.has(llmProvider)) {
       return NextResponse.json({ error: `Invalid LLM provider: ${llmProvider}` }, { status: 400 });
@@ -117,11 +139,15 @@ export async function PATCH(req: NextRequest) {
     if (imageProvider !== undefined && imageProvider !== null && !VALID_IMAGE.has(imageProvider)) {
       return NextResponse.json({ error: `Invalid Image provider: ${imageProvider}` }, { status: 400 });
     }
+    if (imageToVideoProvider !== undefined && imageToVideoProvider !== null && !VALID_IMAGE_TO_VIDEO.has(imageToVideoProvider)) {
+      return NextResponse.json({ error: `Invalid Image-to-Video provider: ${imageToVideoProvider}` }, { status: 400 });
+    }
 
     const updateData: Record<string, string | null> = {};
     if (llmProvider !== undefined) updateData.defaultLlmProvider = llmProvider;
     if (ttsProvider !== undefined) updateData.defaultTtsProvider = ttsProvider;
     if (imageProvider !== undefined) updateData.defaultImageProvider = imageProvider;
+    if (imageToVideoProvider !== undefined) updateData.defaultImageToVideoProvider = imageToVideoProvider === "" ? null : imageToVideoProvider;
 
     const updated = await db.user.update({
       where: { id: session.user.id },
@@ -130,6 +156,7 @@ export async function PATCH(req: NextRequest) {
         defaultLlmProvider: true,
         defaultTtsProvider: true,
         defaultImageProvider: true,
+        defaultImageToVideoProvider: true,
       },
     });
 
@@ -138,6 +165,7 @@ export async function PATCH(req: NextRequest) {
         llmProvider: updated.defaultLlmProvider,
         ttsProvider: updated.defaultTtsProvider,
         imageProvider: updated.defaultImageProvider,
+        imageToVideoProvider: updated.defaultImageToVideoProvider,
       },
     });
   } catch (error) {

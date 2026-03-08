@@ -7,6 +7,9 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("Assembly");
 
 export interface AssemblyInput {
+  /** Scene sources: images (Ken Burns) and/or pre-generated video clips. If omitted, all from imagePaths as images. */
+  sceneInputs?: Array<{ type: "image"; path: string } | { type: "video"; path: string }>;
+  /** Legacy: used when sceneInputs is not set (all scenes treated as images). */
   imagePaths: string[];
   audioPath: string;
   sceneTimings: { startMs: number; endMs: number }[];
@@ -176,10 +179,28 @@ function styleToAss(s: CaptionStyle): string {
 // ─── Assembly ─────────────────────────────────────────────────────
 
 export async function assembleVideo(input: AssemblyInput): Promise<string> {
-  const { imagePaths, audioPath, sceneTimings, scenes, captionScenes, captionTimings, musicPath, outputPath, tone, niche, language } = input;
+  const {
+    sceneInputs: rawSceneInputs,
+    imagePaths,
+    audioPath,
+    sceneTimings,
+    scenes,
+    captionScenes,
+    captionTimings,
+    musicPath,
+    outputPath,
+    tone,
+    niche,
+    language,
+  } = input;
 
+  const sceneInputs =
+    rawSceneInputs ??
+    imagePaths.map((p) => ({ type: "image" as const, path: p }));
   const totalDurSec = (sceneTimings.at(-1)?.endMs ?? 0) / 1000;
-  log.log(`Single-pass: ${totalDurSec.toFixed(1)}s, ${imagePaths.length} images, tone=${tone}, niche=${niche}, lang=${language ?? "en"}`);
+  log.log(
+    `Single-pass: ${totalDurSec.toFixed(1)}s, ${sceneInputs.length} scenes (${sceneInputs.filter((s) => s.type === "video").length} clips), tone=${tone}, niche=${niche}, lang=${language ?? "en"}`
+  );
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-asm-"));
   const srtPath = path.join(tmpDir, "captions.srt");
@@ -198,12 +219,17 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
 
   const args: string[] = ["-y"];
 
-  for (let i = 0; i < imagePaths.length; i++) {
+  for (let i = 0; i < sceneInputs.length; i++) {
+    const scene = sceneInputs[i];
     const dur = Math.max(1, (sceneTimings[i].endMs - sceneTimings[i].startMs) / 1000);
-    args.push("-framerate", "2", "-loop", "1", "-t", `${(dur + 2).toFixed(3)}`, "-i", imagePaths[i]);
+    if (scene.type === "image") {
+      args.push("-framerate", "2", "-loop", "1", "-t", `${(dur + 2).toFixed(3)}`, "-i", scene.path);
+    } else {
+      args.push("-i", scene.path);
+    }
   }
 
-  const audioIdx = imagePaths.length;
+  const audioIdx = sceneInputs.length;
   args.push("-i", audioPath);
 
   const includeMusic = musicPath ? await hasAudioStream(musicPath) : false;
@@ -221,27 +247,39 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   const filterParts: string[] = [];
   const concatInputs: string[] = [];
 
-  for (let i = 0; i < imagePaths.length; i++) {
+  for (let i = 0; i < sceneInputs.length; i++) {
     const dur = Math.max(1, (sceneTimings[i].endMs - sceneTimings[i].startMs) / 1000);
     const frames = Math.round(dur * FPS);
-    const kb = getKenBurnsEffect(i, imagePaths.length, isDramatic);
     const fadeIn = i === 0 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
-    const fadeOut = i === imagePaths.length - 1 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
+    const fadeOut = i === sceneInputs.length - 1 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
     const fadeOutStart = Math.max(0, dur - fadeOut);
+    const scene = sceneInputs[i];
 
-    log.debug(`Scene ${i + 1}: ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === imagePaths.length - 1 ? "resolve-out" : "varied"}`);
-
-    filterParts.push(
-      `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS`
-      + `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}`
-      + `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}`
-      + `[v${i}]`,
-    );
+    if (scene.type === "image") {
+      const kb = getKenBurnsEffect(i, sceneInputs.length, isDramatic);
+      log.debug(
+        `Scene ${i + 1}: image, ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === sceneInputs.length - 1 ? "resolve-out" : "varied"}`
+      );
+      filterParts.push(
+        `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS` +
+          `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}` +
+          `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}` +
+          `[v${i}]`
+      );
+    } else {
+      log.debug(`Scene ${i + 1}: video clip, ${dur.toFixed(2)}s`);
+      filterParts.push(
+        `[${i}:v]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2` +
+          `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}` +
+          `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}` +
+          `[v${i}]`
+      );
+    }
     concatInputs.push(`[v${i}]`);
   }
 
   filterParts.push(
-    `${concatInputs.join("")}concat=n=${imagePaths.length}:v=1:a=0[vraw]`
+    `${concatInputs.join("")}concat=n=${sceneInputs.length}:v=1:a=0[vraw]`
   );
 
   const escapedSrt = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
@@ -330,6 +368,39 @@ function hasAudioStream(inputPath: string): Promise<boolean> {
     });
     proc.on("error", () => resolve(false));
   });
+}
+
+/** Run ffmpeg to decode a tiny amount; if it fails, the file is unusable for assembly. */
+function ffmpegCanDecodeAudio(inputPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const args = [
+      "-v", "error",
+      "-i", inputPath,
+      "-t", "0.1",
+      "-f", "null",
+      "-",
+    ];
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    proc.on("close", (code) => {
+      resolve(code === 0);
+    });
+    proc.on("error", () => resolve(false));
+  });
+}
+
+/** Returns true if the file exists, has reasonable size, and ffmpeg can decode it (same as assembly will do). */
+export async function isValidAudioFile(audioPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(audioPath);
+    if (!stat.isFile() || stat.size < 1000) return false;
+    return await ffmpegCanDecodeAudio(audioPath);
+  } catch {
+    return false;
+  }
 }
 
 // ─── SRT generation ───────────────────────────────────────────────

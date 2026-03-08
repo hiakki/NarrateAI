@@ -25,6 +25,9 @@ import { ART_STYLES } from "@/config/art-styles";
 import { LANGUAGES } from "@/config/languages";
 import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
 import { getVoicesForProvider, getVoiceById, getDefaultVoiceId } from "@/config/voices";
+import { getSuggestionsToImproveScore, type NicheScoreConfig } from "@/lib/niche-score";
+import { getPromptEnhancer } from "@/config/prompt-enhancers";
+import { resolveStoryModel } from "@/config/story-models";
 
 interface PostedEntry { platform: string; postId?: string; url?: string }
 interface Video {
@@ -181,6 +184,35 @@ export default function AutomationDetailPage() {
     };
   }, [activeNiche, activeLanguage, activeTimezone]);
 
+  const nicheScoreCard = useMemo(() => {
+    if (!auto || !activeNiche) return null;
+    const times = (editing ? editPostTimes : auto.postTime.split(",").map((t: string) => t.trim())).filter(Boolean);
+    const config: NicheScoreConfig = {
+      nicheId: activeNiche,
+      artStyleId: editing ? editArtStyle : auto.artStyle,
+      languageId: activeLanguage,
+      toneId: editing ? editTone : auto.tone,
+      times: times.length > 0 ? times : ["09:00"],
+    };
+    return getSuggestionsToImproveScore(config, activeTimezone);
+  }, [auto, activeNiche, activeLanguage, activeTimezone, editing, editArtStyle, editTone, editPostTimes]);
+
+  const bestForNiche = useMemo(() => {
+    if (!activeNiche) return null;
+    const activeTone = editing ? editTone : auto?.tone ?? "dramatic";
+    const nicheDef = NICHES.find((n) => n.id === activeNiche);
+    if (!nicheDef) return null;
+    const enhancer = getPromptEnhancer(activeNiche, activeTone);
+    const { modelName } = resolveStoryModel(activeNiche, activeTone, enhancer.moodKeywords);
+    const recommendedTime = suggestedSchedule?.localSlots[0]?.localTime ?? null;
+    return {
+      storyModel: modelName,
+      recommendedArt: nicheDef.defaultArtStyle.replace(/-/g, " "),
+      recommendedTone: nicheDef.defaultTone,
+      recommendedTime,
+    };
+  }, [activeNiche, editing, editTone, auto?.tone, suggestedSchedule]);
+
   const fetchData = useCallback(async () => {
     try {
       const [autoRes, acctRes, provRes, charRes] = await Promise.all([
@@ -219,7 +251,7 @@ export default function AutomationDetailPage() {
     setEditDuration(auto.duration);
     setEditLanguage(auto.language);
     setEditVoiceId(auto.voiceId ?? "");
-    setEditLlmProvider(auto.llmProvider ?? "");
+    setEditLlmProvider(auto.llmProvider === "HF_STORY" ? "HF_STORY_QWEN_7B" : (auto.llmProvider ?? ""));
     setEditTtsProvider(auto.ttsProvider ?? "");
     setEditImageProvider(auto.imageProvider ?? "");
     setEditCharacterId(auto.characterId ?? "");
@@ -774,6 +806,68 @@ export default function AutomationDetailPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Niche Score Card & suggestions */}
+        {nicheScoreCard && (
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Star className="h-4 w-4 text-amber-500" />
+                <h3 className="font-semibold text-sm">Niche Score</h3>
+              </div>
+              <div className="rounded-md border p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground">Current potential</p>
+                <p className="text-2xl font-bold">{nicheScoreCard.currentScore}%</p>
+              </div>
+
+              {bestForNiche && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Best for this niche</p>
+                  <ul className="space-y-1.5 text-sm">
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Story model</span>
+                      <span className="font-medium">{bestForNiche.storyModel}</span>
+                    </li>
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Recommended art</span>
+                      <span className="font-medium capitalize">{bestForNiche.recommendedArt}</span>
+                    </li>
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Recommended tone</span>
+                      <span className="font-medium capitalize">{bestForNiche.recommendedTone}</span>
+                    </li>
+                    {bestForNiche.recommendedTime && (
+                      <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                        <span className="text-muted-foreground">Best post time</span>
+                        <span className="font-medium">{bestForNiche.recommendedTime}</span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Improve score</p>
+                {nicheScoreCard.suggestions.length === 0 ? (
+                  <p className="text-sm font-medium text-green-700 dark:text-green-400 py-2 px-3 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
+                    All Good
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {nicheScoreCard.suggestions.map((s, i) => (
+                      <li key={i} className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                        <span className="text-muted-foreground">{s.label}</span>
+                        <span className="font-semibold tabular-nums text-green-600 dark:text-green-400">
+                          {nicheScoreCard.currentScore}% → {s.newScore}%
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Schedule & Channels */}
         <Card>

@@ -1,3 +1,9 @@
+import {
+  getAllStoryModels,
+  storyModelToProviderId,
+} from "@/config/story-models";
+import { isHuggingFaceConfigured } from "@/lib/huggingface";
+
 export type ProviderStage = "llm" | "tts" | "image";
 
 export interface ProviderInfo {
@@ -67,6 +73,21 @@ export const LLM_PROVIDERS: Record<string, ProviderInfo> = {
     qualityLabel: "Good",
     envVar: "LOCAL_LLM_URL",
   },
+  // HF_STORY removed: only concrete HF models are shown (e.g. HF: Qwen 7B Instruct).
+  // Existing automations with llmProvider "HF_STORY" still work via factory fallback and resolve to the single model.
+  ...Object.fromEntries(
+    getAllStoryModels().map((m) => [
+      storyModelToProviderId(m.id),
+      {
+        id: storyModelToProviderId(m.id),
+        name: `HF: ${m.name}`,
+        description: `Hugging Face ${m.name}. Temp ${m.temperature}. Best for: ${m.niches.length ? m.niches.slice(0, 3).join(", ") : "all"}${m.tones.length ? ` (${m.tones.join(", ")})` : ""}.`,
+        costEstimate: "Free (rate limits apply)",
+        qualityLabel: "Good" as const,
+        envVar: "HUGGINGFACE_API_KEY",
+      },
+    ])
+  ),
 };
 
 export const TTS_PROVIDERS: Record<string, ProviderInfo> = {
@@ -109,6 +130,14 @@ export const TTS_PROVIDERS: Record<string, ProviderInfo> = {
     costEstimate: "Free",
     qualityLabel: "Great",
     envVar: "",
+  },
+  HF_TTS: {
+    id: "HF_TTS",
+    name: "Hugging Face TTS",
+    description: "Unavailable: no TTS on Inference Providers yet. Use Gemini TTS or Edge TTS.",
+    costEstimate: "—",
+    qualityLabel: "Good",
+    envVar: "HUGGINGFACE_API_KEY",
   },
 };
 
@@ -201,6 +230,14 @@ export const IMAGE_PROVIDERS: Record<string, ProviderInfo> = {
     qualityLabel: "Good",
     envVar: "POLLINATIONS_API_KEY",
   },
+  HF_IMAGE: {
+    id: "HF_IMAGE",
+    name: "Hugging Face Image",
+    description: "Free FLUX.1-schnell via Inference API. Set HF_IMAGE_MODEL to override.",
+    costEstimate: "Free (rate limits)",
+    qualityLabel: "Great",
+    envVar: "HUGGINGFACE_API_KEY",
+  },
 };
 
 const PROVIDER_MAPS: Record<ProviderStage, Record<string, ProviderInfo>> = {
@@ -217,11 +254,36 @@ export const PLATFORM_DEFAULTS = {
 
 function isEnvAvailable(envVar: string): boolean {
   if (!envVar) return true;
+  if (envVar === "HUGGINGFACE_API_KEY") return isHuggingFaceConfigured();
   return !!process.env[envVar];
+}
+
+/** Hugging Face providers use the same token from any of the 3 env vars. */
+function isHfStoryEnvAvailable(): boolean {
+  return isHuggingFaceConfigured();
+}
+
+function isLlmProviderAvailable(p: ProviderInfo): boolean {
+  if (p.id === "HF_STORY" || p.id.startsWith("HF_STORY_")) {
+    return isHfStoryEnvAvailable();
+  }
+  return isEnvAvailable(p.envVar);
+}
+
+/** HF TTS is not offered on Inference Providers (router returns 404 for all TTS models). */
+function isTtsProviderAvailable(p: ProviderInfo): boolean {
+  if (p.id === "HF_TTS") return false;
+  return isEnvAvailable(p.envVar);
 }
 
 export function getAvailableProviders(stage: ProviderStage): ProviderInfo[] {
   const map = PROVIDER_MAPS[stage];
+  if (stage === "llm") {
+    return Object.values(map).filter((p) => isLlmProviderAvailable(p));
+  }
+  if (stage === "tts") {
+    return Object.values(map).filter((p) => isTtsProviderAvailable(p));
+  }
   return Object.values(map).filter((p) => isEnvAvailable(p.envVar));
 }
 
@@ -229,6 +291,10 @@ export function isProviderAvailable(stage: ProviderStage, providerId: string): b
   const map = PROVIDER_MAPS[stage];
   const info = map[providerId];
   if (!info) return false;
+  if (stage === "llm" && (info.id === "HF_STORY" || info.id.startsWith("HF_STORY_"))) {
+    return isHfStoryEnvAvailable();
+  }
+  if (stage === "tts" && info.id === "HF_TTS") return false;
   return isEnvAvailable(info.envVar);
 }
 

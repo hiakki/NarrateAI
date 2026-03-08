@@ -4,7 +4,8 @@ import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import { getTtsProvider, getImageProvider } from "../src/services/providers/factory";
 import { resolveVoiceForProvider } from "../src/config/voices";
-import { assembleVideo } from "../src/services/video-assembler";
+import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
+import { generateClipsFromImages } from "../src/services/image-to-video";
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
@@ -85,7 +86,7 @@ const worker = new Worker<VideoJobData>(
     const {
       videoId, userId, userName, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
-      tone, niche, artStyle, reviewMode, characterPrompt,
+      tone, niche, artStyle, reviewMode, characterPrompt, imageToVideoProvider,
     } = job.data;
 
     const videoExists = await db.video.findUnique({ where: { id: videoId }, select: { id: true } });
@@ -210,7 +211,11 @@ const worker = new Worker<VideoJobData>(
       }
 
       // ── TTS ──
-      if (!completed.has("TTS") || !audioPath || !(await fileExists(audioPath))) {
+      const audioValid = audioPath && (await fileExists(audioPath)) && (await isValidAudioFile(audioPath));
+      if (!completed.has("TTS") || !audioPath || !(await fileExists(audioPath)) || !audioValid) {
+        if (audioPath && !audioValid && completed.has("TTS")) {
+          log.warn(`Voiceover file invalid or corrupted, re-running TTS: ${audioPath}`);
+        }
         await updateStage(videoId, "TTS");
         const resolvedVoice = resolveVoiceForProvider(ttsProvider, voiceId, language);
         const tts = getTtsProvider(ttsProvider);
@@ -310,6 +315,29 @@ const worker = new Worker<VideoJobData>(
         log.debug(`IMAGES skipped (checkpoint ${imagePaths!.length})`);
       }
 
+      // ── Optional: image-to-video (per-scene clips) ──
+      let sceneInputs: Array<{ type: "image"; path: string } | { type: "video"; path: string }> | undefined;
+      if (imageToVideoProvider && !reviewMode && imagePaths!.length > 0) {
+        log.log(`IMAGE-TO-VIDEO generating clips (${imageToVideoProvider}) for ${imagePaths!.length} scenes`);
+        const clipResults = await generateClipsFromImages(imagePaths!, {
+          providerId: imageToVideoProvider,
+          onProgress: (idx, p) => p && log.debug(`Scene ${idx + 1} clip done`),
+        });
+        sceneInputs = [];
+        for (let i = 0; i < imagePaths!.length; i++) {
+          const clipPath = clipResults[i];
+          if (clipPath) {
+            const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
+            await fs.copyFile(clipPath, dest);
+            sceneInputs.push({ type: "video", path: dest });
+          } else {
+            sceneInputs.push({ type: "image", path: imagePaths![i] });
+          }
+        }
+        const clipCount = sceneInputs.filter((s) => s.type === "video").length;
+        log.log(`IMAGE-TO-VIDEO done: ${clipCount}/${sceneInputs.length} clips`);
+      }
+
       // ── Assembly ──
       await updateStage(videoId, "ASSEMBLY");
       const outputPath = videoAbsPath(relDir);
@@ -321,11 +349,12 @@ const worker = new Worker<VideoJobData>(
       }
 
       ctxSection("4 · VIDEO ASSEMBLY",
-        `Images: ${imagePaths!.length}  Audio: ${(durationMs! / 1000).toFixed(1)}s  Music: ${resolvedMusicPath ? musicPath : "none"}`,
+        `Images: ${imagePaths!.length}  Audio: ${(durationMs! / 1000).toFixed(1)}s  Music: ${resolvedMusicPath ? musicPath : "none"}${sceneInputs ? "  Clips: " + sceneInputs.filter((s) => s.type === "video").length : ""}`,
         `Output: video.mp4`,
       );
 
       await assembleVideo({
+        sceneInputs,
         imagePaths: imagePaths!,
         audioPath: audioPath!,
         sceneTimings: expandedTimings,
@@ -371,7 +400,14 @@ const worker = new Worker<VideoJobData>(
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
+      // Always print exact failure to console (basic rule: user sees real errors)
+      console.error(`[Worker] FAILED ${videoId}:`, msg);
+      if (error instanceof Error && error.stack) console.error(error.stack);
+      if (error instanceof Error && "cause" in error && (error as Error & { cause?: unknown }).cause !== undefined) {
+        console.error("[Worker] Cause:", (error as Error & { cause?: unknown }).cause);
+      }
       log.error(`FAILED ${videoId}: ${msg}`);
+      if (error instanceof Error && error.stack) log.error(`Stack: ${error.stack}`);
 
       try {
         await db.video.update({
@@ -380,6 +416,7 @@ const worker = new Worker<VideoJobData>(
         });
       } catch (dbErr) {
         log.error(`CRITICAL db update failed for ${videoId}:`, dbErr);
+        console.error("[Worker] CRITICAL db update failed:", dbErr);
       }
 
       throw error;
@@ -389,6 +426,16 @@ const worker = new Worker<VideoJobData>(
 );
 
 worker.on("completed", (job) => log.log(`JOB_DONE ${job.id}`));
-worker.on("failed", (job, err) => log.error(`JOB_FAIL ${job?.id}: ${err.message}`));
+worker.on("failed", (job, err) => {
+  const msg = err?.message ?? String(err);
+  // Always print exact failure to console (basic rule: user sees real errors)
+  console.error(`[Worker] JOB_FAIL ${job?.id}:`, msg);
+  if (err instanceof Error && err.stack) console.error(err.stack);
+  if (err instanceof Error && "cause" in err && (err as Error & { cause?: unknown }).cause !== undefined) {
+    console.error("[Worker] Cause:", (err as Error & { cause?: unknown }).cause);
+  }
+  log.error(`JOB_FAIL ${job?.id}: ${msg}`);
+  if (err instanceof Error && err.stack) log.error(err.stack);
+});
 
 log.log(`${WORKER_ID} started (concurrency=${worker.opts.concurrency})`);

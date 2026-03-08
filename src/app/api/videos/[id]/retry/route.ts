@@ -27,7 +27,7 @@ export async function POST(
         series: {
           include: {
             user: {
-              select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true },
+              select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true, defaultImageToVideoProvider: true },
             },
             automation: { select: { name: true, characterId: true } },
             character: { select: { fullPrompt: true } },
@@ -120,6 +120,7 @@ export async function POST(
       llmProvider: resolved.llm,
       ttsProvider: resolved.tts,
       imageProvider: resolved.image,
+      imageToVideoProvider: video.series.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
       characterPrompt: video.series.character?.fullPrompt ?? undefined,
     });
 

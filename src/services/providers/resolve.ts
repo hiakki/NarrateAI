@@ -1,4 +1,4 @@
-import { PLATFORM_DEFAULTS } from "@/config/providers";
+import { PLATFORM_DEFAULTS, isProviderAvailable } from "@/config/providers";
 
 interface SeriesProviders {
   llmProvider: string | null;
@@ -22,15 +22,16 @@ export function resolveProviders(
   series: SeriesProviders | null,
   user: UserProviders | null
 ): ResolvedProviders {
+  const tts =
+    series?.ttsProvider ??
+    user?.defaultTtsProvider ??
+    PLATFORM_DEFAULTS.tts;
   return {
     llm:
       series?.llmProvider ??
       user?.defaultLlmProvider ??
       PLATFORM_DEFAULTS.llm,
-    tts:
-      series?.ttsProvider ??
-      user?.defaultTtsProvider ??
-      PLATFORM_DEFAULTS.tts,
+    tts: isProviderAvailable("tts", tts) ? tts : PLATFORM_DEFAULTS.tts,
     image:
       series?.imageProvider ??
       user?.defaultImageProvider ??

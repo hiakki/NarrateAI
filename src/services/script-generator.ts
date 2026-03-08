@@ -196,8 +196,17 @@ export async function generateScript(
     const topicForRun = topicCandidates[0];
     const inputWithTopic = topicForRun ? { ...inputWithChar, topic: topicForRun } : inputWithChar;
     if (topicForRun) log.log(`Single-pass topic for this run: "${topicForRun}"`);
-    const script = await llm.generateScript(inputWithTopic);
-    return ensureWordCount(script, inputWithTopic, llm);
+    try {
+      const script = await llm.generateScript(inputWithTopic);
+      return ensureWordCount(script, inputWithTopic, llm);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : "";
+      console.error(`[ScriptGen] Single-pass LLM failed (provider=${preferredProvider}):`, msg);
+      if (stack) console.error(stack);
+      log.error(`Single-pass failed: ${msg}`);
+      throw err;
+    }
   }
 
   const targetScenes = getSceneCount(input.duration);
@@ -221,6 +230,8 @@ export async function generateScript(
         log.log(`Two-pass candidate scored: provider=${llmId} topic="${topic}" score=${score}`);
       } catch (err) {
         const errMsg = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+        console.error(`[ScriptGen] Two-pass candidate failed provider=${llmId}:`, errMsg);
+        if (err instanceof Error && err.stack) console.error(err.stack);
         log.warn(`Two-pass candidate failed: provider=${llmId} err=${errMsg}`);
       }
     }

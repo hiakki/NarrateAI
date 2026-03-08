@@ -36,6 +36,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
       const url = `${API_URL}/${encoded}?width=832&height=1472&nologo=true&model=flux&seed=${seed}&key=${apiKey}`;
 
       let buffer: Buffer | null = null;
+      let lastError: string | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const response = await fetch(url, {
@@ -45,22 +46,26 @@ export class PollinationsImageProvider implements ImageProviderInterface {
 
           if (!response.ok) {
             const errText = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
+            lastError = `HTTP ${response.status}: ${errText.slice(0, 300)}`;
+            throw new Error(lastError);
           }
 
           const contentType = response.headers.get("content-type") ?? "";
           if (!contentType.startsWith("image/")) {
             const body = await response.text();
-            throw new Error(`Not an image (${contentType}): ${body.slice(0, 100)}`);
+            lastError = `Not an image (${contentType}): ${body.slice(0, 150)}`;
+            throw new Error(lastError);
           }
 
           buffer = Buffer.from(await response.arrayBuffer());
           if (buffer.length < 1024) {
-            throw new Error(`Image too small (${buffer.length} bytes)`);
+            lastError = `Image too small (${buffer.length} bytes)`;
+            throw new Error(lastError);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.debug(`Failed attempt ${attempt + 1} for scene ${i}: ${msg.slice(0, 150)}`);
+          lastError = msg;
+          log.warn(`Pollinations scene ${i} attempt ${attempt + 1}/3 failed: ${msg.slice(0, 300)}`);
           buffer = null;
         }
 
@@ -69,7 +74,14 @@ export class PollinationsImageProvider implements ImageProviderInterface {
       }
 
       if (!buffer) {
-        throw new Error(`Failed to generate Pollinations image for scene ${i} after 3 attempts`);
+        const hint = lastError
+          ? ` Last error: ${lastError.slice(0, 250)}.`
+          : "";
+        const fullMessage = `Failed to generate Pollinations image for scene ${i} after 3 attempts.${hint} Check POLLINATIONS_API_KEY and rate limits (https://enter.pollinations.ai).`;
+        if (lastError) {
+          log.warn(`Pollinations scene ${i} failed after 3 attempts. Last error: ${lastError.slice(0, 400)}`);
+        }
+        throw new Error(fullMessage);
       }
 
       await fs.writeFile(imagePath, buffer);

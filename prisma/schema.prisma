@@ -66,6 +66,13 @@ enum LlmProvider {
   DEEPSEEK_V3
   QWEN
   LOCAL_LLM
+  HF_STORY
+  HF_STORY_ZEPHYR
+  HF_STORY_MISTRAL_INSTRUCT
+  HF_STORY_PHI2
+  HF_STORY_LLAMA_TINY
+  HF_STORY_SMOLLAMA
+  HF_STORY_QWEN_7B
 }
 
 enum TtsProvider {
@@ -74,6 +81,7 @@ enum TtsProvider {
   COSYVOICE
   FISH_AUDIO
   EDGE_TTS
+  HF_TTS
 }
 
 enum ImageProvider {
@@ -88,6 +96,7 @@ enum ImageProvider {
   LEONARDO
   IDEOGRAM
   POLLINATIONS
+  HF_IMAGE
 }
 
 // ─── Models ──────────────────────────────────────────────
@@ -106,6 +115,7 @@ model User {
   defaultLlmProvider   LlmProvider?
   defaultTtsProvider   TtsProvider?
   defaultImageProvider ImageProvider?
+  defaultImageToVideoProvider String?
   lastCreatePrefs      Json?
 
   createdAt     DateTime  @default(now())
@@ -287,8 +297,8 @@ model SocialAccount {
 model AdminSettings {
   id                    String   @id @default("singleton")
   enabledLlmProviders   Json     @default("[\"GEMINI_FLASH\",\"OPENAI_GPT4O_MINI\",\"DEEPSEEK_V3\",\"QWEN\"]")
-  enabledTtsProviders   Json     @default("[\"GEMINI_TTS\",\"ELEVENLABS\",\"COSYVOICE\",\"FISH_AUDIO\",\"EDGE_TTS\"]")
-  enabledImageProviders Json     @default("[\"GEMINI_IMAGEN\",\"DALLE3\",\"FLUX\",\"KOLORS\",\"SDXL\",\"FLUX_SCHNELL\",\"TOGETHER\",\"SILICONFLOW\",\"LEONARDO\",\"IDEOGRAM\",\"POLLINATIONS\"]")
+  enabledTtsProviders   Json     @default("[\"GEMINI_TTS\",\"ELEVENLABS\",\"COSYVOICE\",\"FISH_AUDIO\",\"EDGE_TTS\",\"HF_TTS\"]")
+  enabledImageProviders Json     @default("[\"GEMINI_IMAGEN\",\"DALLE3\",\"FLUX\",\"KOLORS\",\"SDXL\",\"FLUX_SCHNELL\",\"TOGETHER\",\"SILICONFLOW\",\"LEONARDO\",\"IDEOGRAM\",\"POLLINATIONS\",\"HF_IMAGE\"]")
   updatedAt             DateTime @updatedAt
 
   @@map("admin_settings")

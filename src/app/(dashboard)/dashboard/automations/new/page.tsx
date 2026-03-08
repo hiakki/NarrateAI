@@ -12,6 +12,8 @@ import { Switch } from "@/components/ui/switch";
 import { NICHES } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
 import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
+import { getPromptEnhancer } from "@/config/prompt-enhancers";
+import { resolveStoryModel } from "@/config/story-models";
 import { LANGUAGES, isLanguageSupportedByTts } from "@/config/languages";
 import { getVoicesForProvider, getDefaultVoiceId, getVoiceById, type Voice } from "@/config/voices";
 import {
@@ -305,6 +307,13 @@ export default function NewAutomationPage() {
     })) as unknown as Record<keyof typeof SCORE_WEIGHTS, number>;
   }, [activeNicheScore, scorePlatforms]);
 
+  const suggestedStoryModelName = useMemo(() => {
+    if (!activeNicheForScore || !tone) return null;
+    const enhancer = getPromptEnhancer(activeNicheForScore, tone);
+    const resolved = resolveStoryModel(activeNicheForScore, tone, enhancer.moodKeywords);
+    return resolved.modelName;
+  }, [activeNicheForScore, tone]);
+
   const fetchProviders = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/providers");
@@ -573,6 +582,7 @@ export default function NewAutomationPage() {
 
                       <Separator />
                       <div className="space-y-1 text-xs">
+                        <p><span className="text-muted-foreground">Story model:</span> {suggestedStoryModelName ?? "—"}</p>
                         <p><span className="text-muted-foreground">Recommended art:</span> {NICHES.find((n) => n.id === activeNicheForScore)?.defaultArtStyle.replace(/-/g, " ")}</p>
                         <p><span className="text-muted-foreground">Recommended voice:</span> {recommendVoice(voices, tone)?.name ?? "Auto"}</p>
                         <p><span className="text-muted-foreground">Recommended language:</span> {language.toUpperCase()}</p>

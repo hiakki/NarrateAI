@@ -1,11 +1,11 @@
 import { PrismaClient, Platform } from "@prisma/client";
 import { decrypt } from "@/lib/social/encrypt";
-import { postInstagramReel, postInstagramComment } from "@/lib/social/instagram";
-import { postFacebookReel, postFacebookComment } from "@/lib/social/facebook";
-import { uploadYouTubeShort, postYouTubeComment } from "@/lib/social/youtube";
+import { postInstagramReel } from "@/lib/social/instagram";
+import { postFacebookReel } from "@/lib/social/facebook";
+import { uploadYouTubeShort } from "@/lib/social/youtube";
 import { uploadShareChatVideo } from "@/lib/social/sharechat";
 import { uploadMojVideo } from "@/lib/social/moj";
-import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption, generateFirstComment } from "@/lib/social/seo";
+import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
 import { createLogger } from "@/lib/logger";
 import path from "path";
 
@@ -271,7 +271,6 @@ export async function postVideoToSocials(
   const ytSeo = generateVideoSEO(title, nicheId, scriptText, includeAiTags, previousYtUrl);
   const igCaption = generateInstagramCaption(title, nicheId, scriptText, includeAiTags);
   const fbCaption = generateFacebookCaption(title, nicheId, scriptText, includeAiTags);
-  const firstComment = generateFirstComment(nicheId, scriptText);
 
   // Post to all platforms in parallel
   async function postToPlatform(platform: string): Promise<PostResult> {
@@ -415,42 +414,17 @@ export async function postVideoToSocials(
         await finalizePlatform(videoId, {
           platform, success: true, postId: result.postId ?? null, url: url ?? null,
         });
-
-        if (result.postId) {
-          const postId = result.postId;
-          void (async () => {
-            try {
-              await sleep(3000);
-              switch (platform) {
-                case "INSTAGRAM":
-                  await postInstagramComment(postId, accessToken, firstComment.ig);
-                  break;
-                case "FACEBOOK":
-                  await postFacebookComment(postId, accessToken, firstComment.fb);
-                  break;
-                case "YOUTUBE":
-                  await postYouTubeComment(
-                    accessToken,
-                    refreshToken,
-                    postId,
-                    firstComment.yt,
-                    account.platformUserId,
-                    video!.series.user.id,
-                  );
-                  break;
-              }
-            } catch (e) {
-              log.warn(`First comment failed for ${platform} (${result.postId}):`, e);
-            }
-          })();
-        }
+        return { platform, ...result };
       } else {
+        const errMsg = result.error ?? "Unknown error";
+        const displayError = platform === "FACEBOOK"
+          ? `${errMsg}\nRetry after 24 hours.`
+          : errMsg;
         await finalizePlatform(videoId, {
-          platform, success: false, error: result.error ?? "Unknown error",
+          platform, success: false, error: displayError,
         });
+        return { platform, success: false, error: displayError };
       }
-
-      return { platform, ...result };
     }
 
     return { platform, success: false, error: "No accounts processed" };

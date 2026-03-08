@@ -90,6 +90,10 @@ export const VOICES_BY_PROVIDER: Record<string, Voice[]> = {
     { id: "hi-IN-MadhurNeural", name: "Madhur", description: "Natural Hindi male narrator", gender: "male", languages: ["hi"] },
     { id: "hi-IN-SwaraNeural", name: "Swara", description: "Expressive Hindi female narrator", gender: "female", languages: ["hi"] },
   ],
+  HF_TTS: [
+    { id: "en", name: "English", description: "SpeechT5 English (HF Inference)", gender: "neutral", languages: ["en"] },
+    { id: "hi", name: "Hindi", description: "MMS-TTS Hindi (if available on HF)", gender: "neutral", languages: ["hi"] },
+  ],
 };
 
 /** Backward-compatible flat list (all Gemini voices, used as default) */

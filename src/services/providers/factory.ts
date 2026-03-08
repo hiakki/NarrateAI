@@ -7,12 +7,15 @@ import { OpenAILlmProvider } from "./llm/openai";
 import { DeepSeekLlmProvider } from "./llm/deepseek";
 import { QwenLlmProvider } from "./llm/qwen";
 import { LocalLlmProvider } from "./llm/local";
+import { HuggingFaceStoryLlmProvider } from "./llm/huggingface-story";
+import { getAllStoryModels, storyModelToProviderId } from "@/config/story-models";
 
 import { GeminiTtsProvider } from "./tts/gemini";
 import { ElevenLabsTtsProvider } from "./tts/elevenlabs";
 import { CosyVoiceTtsProvider } from "./tts/cosyvoice";
 import { FishAudioTtsProvider } from "./tts/fishaudio";
 import { EdgeTtsProvider } from "./tts/edge-tts";
+import { HuggingFaceTtsProvider } from "./tts/huggingface-tts";
 
 import { GeminiImageProvider } from "./image/gemini";
 import { DalleImageProvider } from "./image/dalle";
@@ -25,6 +28,7 @@ import { SiliconFlowImageProvider } from "./image/siliconflow";
 import { LeonardoImageProvider } from "./image/leonardo";
 import { IdeogramImageProvider } from "./image/ideogram";
 import { PollinationsImageProvider } from "./image/pollinations";
+import { HuggingFaceImageProvider } from "./image/huggingface";
 
 const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   GEMINI_FLASH: () => new GeminiLlmProvider(),
@@ -32,6 +36,13 @@ const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   DEEPSEEK_V3: () => new DeepSeekLlmProvider(),
   QWEN: () => new QwenLlmProvider(),
   LOCAL_LLM: () => new LocalLlmProvider(),
+  HF_STORY: () => new HuggingFaceStoryLlmProvider("HF_STORY"),
+  ...Object.fromEntries(
+    getAllStoryModels().map((m) => [
+      storyModelToProviderId(m.id),
+      () => new HuggingFaceStoryLlmProvider(storyModelToProviderId(m.id)),
+    ])
+  ),
 };
 
 const TTS_MAP: Record<string, () => TtsProviderInterface> = {
@@ -40,6 +51,7 @@ const TTS_MAP: Record<string, () => TtsProviderInterface> = {
   COSYVOICE: () => new CosyVoiceTtsProvider(),
   FISH_AUDIO: () => new FishAudioTtsProvider(),
   EDGE_TTS: () => new EdgeTtsProvider(),
+  HF_TTS: () => new HuggingFaceTtsProvider(),
 };
 
 const IMAGE_MAP: Record<string, () => ImageProviderInterface> = {
@@ -54,10 +66,14 @@ const IMAGE_MAP: Record<string, () => ImageProviderInterface> = {
   LEONARDO: () => new LeonardoImageProvider(),
   IDEOGRAM: () => new IdeogramImageProvider(),
   POLLINATIONS: () => new PollinationsImageProvider(),
+  HF_IMAGE: () => new HuggingFaceImageProvider(),
 };
 
 export function getLlmProvider(provider: string): LlmProviderInterface {
-  const factory = LLM_MAP[provider];
+  let factory = LLM_MAP[provider];
+  if (!factory && provider.startsWith("HF_STORY_")) {
+    factory = () => new HuggingFaceStoryLlmProvider(provider);
+  }
   if (!factory) {
     throw new Error(`Unknown LLM provider: "${provider}". Valid: ${Object.keys(LLM_MAP).join(", ")}`);
   }

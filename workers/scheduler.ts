@@ -46,6 +46,7 @@ interface AutoRow {
     defaultLlmProvider: string | null;
     defaultTtsProvider: string | null;
     defaultImageProvider: string | null;
+    defaultImageToVideoProvider: string | null;
   };
 }
 
@@ -221,6 +222,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       llmProvider: providers.llm,
       ttsProvider: providers.tts,
       imageProvider: providers.image,
+      imageToVideoProvider: auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
       characterPrompt,
     });
 
@@ -256,6 +258,7 @@ async function checkSchedules() {
             defaultLlmProvider: true,
             defaultTtsProvider: true,
             defaultImageProvider: true,
+            defaultImageToVideoProvider: true,
           },
         },
       },
@@ -366,6 +369,7 @@ async function recoverStuckVideos() {
                 defaultLlmProvider: true,
                 defaultTtsProvider: true,
                 defaultImageProvider: true,
+                defaultImageToVideoProvider: true,
               },
             },
           },
@@ -451,6 +455,7 @@ async function recoverStuckVideos() {
           llmProvider: resolved.llm,
           ttsProvider: resolved.tts,
           imageProvider: resolved.image,
+          imageToVideoProvider: usr.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
           characterPrompt: video.series.character?.fullPrompt ?? undefined,
         });
 

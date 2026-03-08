@@ -5,6 +5,17 @@ const log = createLogger("Instagram");
 const GRAPH_VERSION = "v21.0";
 const GRAPH_API = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
+/** Return the full API error body as a string so logs/UI show exactly what Meta returned (no sugarcoating). */
+function rawMetaError(body: unknown): string {
+  if (body == null) return "Unknown error";
+  try {
+    const s = typeof body === "string" ? body : JSON.stringify(body);
+    return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
+  } catch {
+    return String(body);
+  }
+}
+
 function logMetaSupportPayload(payload: Record<string, unknown>) {
   // Single-line structured payload for quick support escalation.
   log.error(`[META_SUPPORT_PAYLOAD] ${JSON.stringify(payload)}`);
@@ -39,26 +50,6 @@ interface PostResult {
   postId?: string;
   postUrl?: string;
   error?: string;
-}
-
-/** Translate raw Meta/IG API errors into actionable messages for logs & UI. */
-function classifyMetaError(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (lower.includes("api access blocked"))
-    return "Rate limited by Meta — too many posts in 24h. Wait a few hours and retry. (Original: " + raw.slice(0, 100) + ")";
-  if (lower.includes("app id") && lower.includes("does not match"))
-    return "App ID mismatch — please disconnect & reconnect Instagram in Channels. (Original: " + raw.slice(0, 100) + ")";
-  if (lower.includes("token") && (lower.includes("expired") || lower.includes("invalid")))
-    return "Access token expired. Reconnect Instagram in Channels. (Original: " + raw.slice(0, 80) + ")";
-  if (lower.includes("permission") || lower.includes("not authorized"))
-    return "Missing permissions. Reconnect Instagram with full access in Channels. (Original: " + raw.slice(0, 80) + ")";
-  if (lower.includes("spam") || lower.includes("restricted"))
-    return "Meta flagged this as spam or restricted your account. Check your Instagram account status.";
-  if (lower.includes("media posted before the minimum interval"))
-    return "Posting too fast — Instagram requires a gap between posts. Wait 5-10 minutes.";
-  if (lower.includes("copyright"))
-    return "Copyright issue — Instagram detected copyrighted content in this video.";
-  return raw;
 }
 
 /**
@@ -104,8 +95,8 @@ export async function postInstagramReel(
     });
 
     if (!createRes.ok) {
-      const err = await createRes.json();
-      const raw = err.error?.message ?? "Failed to create media container";
+      const err = await createRes.json().catch(() => ({}));
+      const raw = rawMetaError(err);
       logMetaSupportPayload({
         stage: "create_container",
         graphVersion: GRAPH_VERSION,
@@ -118,7 +109,7 @@ export async function postInstagramReel(
         error: raw,
         at: new Date().toISOString(),
       });
-      return { success: false, error: classifyMetaError(raw) };
+      return { success: false, error: raw };
     }
 
     const createData = await createRes.json();
@@ -184,8 +175,8 @@ export async function postInstagramReel(
     });
 
     if (!publishRes.ok) {
-      const err = await publishRes.json();
-      const raw = err.error?.message ?? "Failed to publish reel";
+      const err = await publishRes.json().catch(() => ({}));
+      const raw = rawMetaError(err);
       logMetaSupportPayload({
         stage: "publish_reel",
         graphVersion: GRAPH_VERSION,
@@ -199,7 +190,7 @@ export async function postInstagramReel(
         error: raw,
         at: new Date().toISOString(),
       });
-      return { success: false, error: classifyMetaError(raw) };
+      return { success: false, error: raw };
     }
 
     const { id: postId } = await publishRes.json();
@@ -223,7 +214,7 @@ export async function postInstagramReel(
     return { success: true, postId, postUrl };
   } catch (err) {
     const raw = err instanceof Error ? err.message : "Unknown error";
-    return { success: false, error: classifyMetaError(raw) };
+    return { success: false, error: raw };
   }
 }
 
@@ -243,10 +234,10 @@ export async function postInstagramComment(
       body: JSON.stringify({ message: text }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      const raw = err.error?.message ?? "Failed to post comment";
+      const err = await res.json().catch(() => ({}));
+      const raw = rawMetaError(err);
       log.warn(`IG first comment failed: ${raw}`);
-      return { success: false, error: classifyMetaError(raw) };
+      return { success: false, error: raw };
     }
     const { id } = await res.json();
     log.log(`IG first comment posted: ${id} at ${new Date().toISOString()} | text: "${text.slice(0, 80)}..."`);
@@ -372,16 +363,15 @@ async function uploadWithRetry(
       if (res.ok) {
         const data = await res.json();
         if (data.success === false) {
-          let msg = data.debug_info?.message ?? data.error?.message ?? "Upload rejected";
-          try { const inner = JSON.parse(msg); msg = inner?.error?.message ?? msg; } catch {}
           const traceId = res.headers.get("x-fb-trace-id") ?? "";
           const debugId = res.headers.get("x-fb-debug") ?? "";
-          log.error(`Upload attempt ${attempt} rejected: ${msg}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}`);
+          const raw = rawMetaError(data);
+          log.error(`Upload attempt ${attempt} rejected: ${raw}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}`);
           if (attempt === maxRetries) {
-            const errWithTrace = `${msg}${traceId ? ` (trace: ${traceId})` : ""}`;
+            const errWithTrace = traceId || debugId ? `${raw}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}` : raw;
             return {
               success: false,
-              error: classifyMetaError(errWithTrace),
+              error: errWithTrace,
               traceId: traceId || undefined,
               debugId: debugId || undefined,
             };
@@ -403,13 +393,13 @@ async function uploadWithRetry(
         + `${apiVersion ? ` | fb-api-version=${apiVersion}` : ""}`,
       );
       if (attempt === maxRetries) {
-        const parsed = (() => { try { return JSON.parse(text); } catch { return null; } })();
-        const apiMsg = parsed?.error?.message ?? parsed?.debug_info?.message;
-        const base = apiMsg ?? `Upload failed after ${maxRetries} attempts (HTTP ${res.status})`;
-        const errWithTrace = `${base}${traceId ? ` (trace: ${traceId})` : ""}`;
+        let parsed: unknown;
+        try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+        const raw = rawMetaError(parsed ?? { status: res.status, text: text.slice(0, 500) });
+        const errWithTrace = traceId || debugId ? `${raw}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}` : raw;
         return {
           success: false,
-          error: classifyMetaError(errWithTrace),
+          error: errWithTrace,
           traceId: traceId || undefined,
           debugId: debugId || undefined,
           apiVersion: apiVersion || undefined,
@@ -448,9 +438,9 @@ async function pollMediaStatus(
 
       if (status === "FINISHED") return { ready: true };
       if (status === "ERROR") {
-        const detail = data.status ?? data.error?.message ?? "unknown error";
-        log.error(`Container ${containerId} failed: ${detail}`);
-        return { ready: false, error: classifyMetaError(`Instagram processing failed: ${detail}`) };
+        const raw = rawMetaError(data);
+        log.error(`Container ${containerId} failed: ${raw}`);
+        return { ready: false, error: raw };
       }
     } catch {
       log.error(`Poll ${i + 1} network error, retrying...`);

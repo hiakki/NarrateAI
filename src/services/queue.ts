@@ -25,6 +25,8 @@ export interface VideoJobData {
   llmProvider: string;
   ttsProvider: string;
   imageProvider: string;
+  /** If set, run image-to-video per scene (e.g. SVD_REPLICATE) and use clips in assembly. */
+  imageToVideoProvider?: string;
   reviewMode?: boolean;
   characterPrompt?: string;
 }
@@ -66,9 +68,12 @@ export async function enqueueVideoGeneration(data: VideoJobData): Promise<string
       if (state === "failed" || state === "completed" || state === "unknown") {
         await existing.remove();
         log.log(`Removed stale ${state} job ${jobId} before re-enqueue`);
-      } else if (state === "active" || state === "waiting" || state === "delayed") {
-        log.warn(`Job ${jobId} already ${state} in queue, skipping duplicate enqueue`);
+      } else if (state === "active") {
+        log.warn(`Job ${jobId} already active in queue, skipping duplicate enqueue`);
         return jobId;
+      } else if (state === "waiting" || state === "delayed") {
+        await existing.remove();
+        log.log(`Removed ${state} job ${jobId} so it can be re-enqueued immediately (retry or stuck)`);
       }
     }
   } catch (e) {

@@ -59,61 +59,6 @@ const stages = [
   { key: "UPLOADING", label: "Finalize", detail: "Saving your video", icon: Upload },
 ];
 
-function humanizePublishError(raw: string): string {
-  const lower = raw.toLowerCase();
-
-  // Meta / Instagram / Facebook specific
-  if (lower.includes("rate limited by meta") || lower.includes("api access blocked"))
-    return "Rate limited by Meta — too many posts in 24 hours. Wait a few hours and retry.";
-  if (lower.includes("app id") && lower.includes("mismatch"))
-    return "App ID mismatch — please disconnect & reconnect this platform in Channels.";
-  if (lower.includes("copyright"))
-    return "Platform detected copyrighted content in this video.";
-  if (lower.includes("spam") || lower.includes("restricted"))
-    return "Platform flagged your account as spam/restricted. Check your account status directly.";
-  if (lower.includes("minimum interval") || lower.includes("posting too fast"))
-    return "Posts are too frequent. Wait 5–10 minutes between uploads.";
-
-  // YouTube specific
-  if (lower.includes("quota") && lower.includes("youtube"))
-    return "YouTube daily upload quota exceeded. Resets at midnight Pacific Time — try tomorrow.";
-  if (lower.includes("channel not found"))
-    return "YouTube channel not found. Ensure your connected account has an active channel.";
-
-  // General auth / connection
-  if (lower.includes("token") && (lower.includes("expired") || lower.includes("invalid") || lower.includes("revoked")))
-    return "Account session expired or revoked. Please reconnect your account in Channels.";
-  if (lower.includes("not connected") || lower.includes("no account"))
-    return "No account connected for this platform. Connect one in Channels.";
-  if (lower.includes("permission") || lower.includes("forbidden") || lower.includes("scope") || lower.includes("not authorized"))
-    return "Insufficient permissions. Please reconnect your account with full access in Channels.";
-
-  // Rate / quota
-  if (lower.includes("rate limit") || lower.includes("too many"))
-    return "Too many posts in a short time. Wait a few minutes and try again.";
-  if (lower.includes("quota") || lower.includes("limit exceeded"))
-    return "Platform upload quota exceeded. Try again tomorrow.";
-
-  // Content issues
-  if (lower.includes("duplicate") || lower.includes("already posted"))
-    return "This video was already posted to this platform.";
-  if (lower.includes("file") && lower.includes("size"))
-    return "Video file is too large for this platform.";
-  if (lower.includes("video") && lower.includes("not found"))
-    return "Video file is missing. Try regenerating the video first.";
-
-  // Network
-  if (lower.includes("network") || lower.includes("econnrefused") || lower.includes("timeout") || lower.includes("econnreset"))
-    return "Network error. Check your internet connection and try again.";
-
-  // If the backend already classified, it may contain "(Original: ...)" — strip it for UI
-  const origIdx = raw.indexOf("(Original:");
-  if (origIdx > 0) return raw.slice(0, origIdx).trim();
-
-  if (raw.length > 150) return raw.slice(0, 147) + "...";
-  return raw;
-}
-
 export default function VideoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -174,7 +119,7 @@ export default function VideoDetailPage() {
   function recordFailure(platform: string, error: string) {
     setFailedPublishes((prev) => {
       const next = new Map(prev);
-      next.set(platform, humanizePublishError(error));
+      next.set(platform, error);
       syncFailStorage(next);
       return next;
     });
@@ -1102,7 +1047,7 @@ export default function VideoDetailPage() {
                               <p className="text-xs text-blue-600 mt-0.5">Uploading to {label}...</p>
                             )}
                             {hasFailed && failError && (
-                              <p className="text-xs text-red-600 mt-0.5">{humanizePublishError(failError)}</p>
+                              <p className="text-xs text-red-600 mt-0.5">{failError}</p>
                             )}
                             {!connected && !isPosted && !isUploading && !hasFailed && (
                               <p className="text-xs text-muted-foreground">Not connected</p>

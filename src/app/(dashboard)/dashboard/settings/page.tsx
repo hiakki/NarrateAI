@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info } from "lucide-react";
+import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info, Video } from "lucide-react";
 
 interface ProviderInfo {
   id: string;
@@ -22,6 +22,7 @@ interface ProvidersData {
     llmProvider: string | null;
     ttsProvider: string | null;
     imageProvider: string | null;
+    imageToVideoProvider: string | null;
   };
   platformDefaults: { llm: string; tts: string; image: string };
   available: {
@@ -33,6 +34,10 @@ interface ProvidersData {
     llm: ProviderInfo[];
     tts: ProviderInfo[];
     image: ProviderInfo[];
+  };
+  imageToVideo?: {
+    all: { id: string; name: string; description: string; costEstimate: string; envVar: string }[];
+    availableIds: string[];
   };
 }
 
@@ -148,6 +153,7 @@ export default function SettingsPage() {
   const [llmProvider, setLlmProvider] = useState<string | null>(null);
   const [ttsProvider, setTtsProvider] = useState<string | null>(null);
   const [imageProvider, setImageProvider] = useState<string | null>(null);
+  const [imageToVideoProvider, setImageToVideoProvider] = useState<string | null>(null);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -158,6 +164,7 @@ export default function SettingsPage() {
         setLlmProvider(json.data.defaults.llmProvider);
         setTtsProvider(json.data.defaults.ttsProvider);
         setImageProvider(json.data.defaults.imageProvider);
+        setImageToVideoProvider(json.data.defaults.imageToVideoProvider ?? null);
       }
     } catch (err) {
       console.error("Failed to load providers:", err);
@@ -177,7 +184,12 @@ export default function SettingsPage() {
       const res = await fetch("/api/settings/providers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ llmProvider, ttsProvider, imageProvider }),
+        body: JSON.stringify({
+          llmProvider,
+          ttsProvider,
+          imageProvider,
+          imageToVideoProvider: imageToVideoProvider ?? "",
+        }),
       });
       if (!res.ok) throw new Error("Save failed");
       setSaveMessage("Preferences saved");
@@ -201,6 +213,7 @@ export default function SettingsPage() {
   const availableLlm = new Set(providers?.available.llm.map((p) => p.id) ?? []);
   const availableTts = new Set(providers?.available.tts.map((p) => p.id) ?? []);
   const availableImage = new Set(providers?.available.image.map((p) => p.id) ?? []);
+  const availableImageToVideo = new Set(providers?.imageToVideo?.availableIds ?? [""]);
 
   return (
     <div className="max-w-4xl">
@@ -278,6 +291,23 @@ export default function SettingsPage() {
               selectedId={imageProvider}
               platformDefault={providers?.platformDefaults.image ?? "GEMINI_IMAGEN"}
               onSelect={(id) => { setImageProvider(id); setDirty(true); }}
+            />
+
+            <Separator />
+
+            <ProviderSection
+              title="Image-to-Video"
+              icon={<Video className="h-4 w-4 text-primary" />}
+              description="Animate each scene image into a short video clip. Free: Off, or LTX-Video / Wan 2.2 via Hugging Face (HF). Paid: Stable Video Diffusion via Replicate."
+              allProviders={(providers?.imageToVideo?.all ?? []).map((p) => ({
+                ...p,
+                qualityLabel: "Good" as const,
+                envVar: p.envVar,
+              }))}
+              availableIds={availableImageToVideo}
+              selectedId={imageToVideoProvider}
+              platformDefault=""
+              onSelect={(id) => { setImageToVideoProvider(id || null); setDirty(true); }}
             />
 
             <div className="flex items-center justify-between pt-2">

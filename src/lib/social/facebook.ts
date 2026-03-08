@@ -4,6 +4,17 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("Facebook");
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 
+/** Return the full API error body as a string so logs/UI show exactly what FB returned (no sugarcoating). */
+function rawFbError(body: unknown): string {
+  if (body == null) return "Unknown error";
+  try {
+    const s = typeof body === "string" ? body : JSON.stringify(body);
+    return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
+  } catch {
+    return String(body);
+  }
+}
+
 interface PostResult {
   success: boolean;
   postId?: string;
@@ -13,26 +24,6 @@ interface PostResult {
 
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-/** Translate raw Facebook API errors into actionable messages for logs & UI. */
-function classifyFbError(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (lower.includes("api access blocked"))
-    return "Rate limited by Meta — too many posts in 24h. Wait a few hours and retry. (Original: " + raw.slice(0, 100) + ")";
-  if (lower.includes("token") && (lower.includes("expired") || lower.includes("invalid")))
-    return "Page access token expired. Reconnect Facebook in Channels. (Original: " + raw.slice(0, 80) + ")";
-  if (lower.includes("permission") || lower.includes("not authorized"))
-    return "Missing page permissions. Reconnect Facebook with full page access in Channels. (Original: " + raw.slice(0, 80) + ")";
-  if (lower.includes("spam") || lower.includes("restricted"))
-    return "Meta flagged this as spam or restricted your page. Check your Facebook page status.";
-  if (lower.includes("duplicate") || lower.includes("already been posted"))
-    return "Duplicate video — this reel was already posted to this page.";
-  if (lower.includes("copyright"))
-    return "Copyright issue — Facebook detected copyrighted content in this video.";
-  if (lower.includes("upload") && lower.includes("fail"))
-    return "Video upload failed on Meta servers. Try again in a few minutes.";
-  return raw;
 }
 
 /**
@@ -93,9 +84,8 @@ export async function postFacebookReel(
     });
 
     if (!startRes.ok) {
-      const err = await startRes.json();
-      const raw = err.error?.message ?? "Failed to start upload";
-      return { success: false, error: classifyFbError(raw) };
+      const err = await startRes.json().catch(() => ({}));
+      return { success: false, error: rawFbError(err) };
     }
 
     const { video_id: videoId, upload_url: uploadUrl } = await startRes.json();
@@ -114,7 +104,9 @@ export async function postFacebookReel(
 
     if (!uploadRes.ok) {
       const err = await uploadRes.text();
-      return { success: false, error: classifyFbError(`Upload failed: ${err}`) };
+      let parsed: unknown;
+      try { parsed = JSON.parse(err); } catch { parsed = err; }
+      return { success: false, error: rawFbError(parsed) };
     }
 
     const finishRes = await fetch(`${GRAPH_API}/${pageId}/video_reels`, {
@@ -130,9 +122,8 @@ export async function postFacebookReel(
     });
 
     if (!finishRes.ok) {
-      const err = await finishRes.json();
-      const raw = err.error?.message ?? "Failed to finish upload";
-      return { success: false, error: classifyFbError(raw) };
+      const err = await finishRes.json().catch(() => ({}));
+      return { success: false, error: rawFbError(err) };
     }
 
     const result = await finishRes.json();
@@ -148,7 +139,7 @@ export async function postFacebookReel(
     };
   } catch (err) {
     const raw = err instanceof Error ? err.message : "Unknown error";
-    return { success: false, error: classifyFbError(raw) };
+    return { success: false, error: raw };
   }
 }
 
@@ -235,10 +226,10 @@ export async function postFacebookComment(
       }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      const raw = err.error?.message ?? "Failed to post comment";
+      const err = await res.json().catch(() => ({}));
+      const raw = rawFbError(err);
       log.warn(`FB first comment failed on ${videoId}: ${raw}`);
-      return { success: false, error: classifyFbError(raw) };
+      return { success: false, error: raw };
     }
     const { id } = await res.json();
     log.log(`FB first comment posted: ${id} at ${new Date().toISOString()} | text: "${text.slice(0, 80)}..."`);
