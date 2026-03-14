@@ -138,15 +138,22 @@ const worker = new Worker<VideoJobData>(
       log.log(`[SCRIPT]`, `SCRIPT generating (LLM=${llmProvider})…`);
 
       const seriesId = job.data.seriesId;
-      const recentWithTitles = seriesId
+      const recentVideos = seriesId
         ? await db.video.findMany({
             where: { seriesId, id: { not: videoId }, title: { not: null } },
             orderBy: { createdAt: "desc" },
-            take: 6,
-            select: { title: true },
+            take: 8,
+            select: { title: true, scriptText: true },
           })
         : [];
-      const avoidThemes = recentWithTitles.map((v) => v.title).filter(Boolean) as string[];
+      const avoidThemes: string[] = [];
+      for (const v of recentVideos) {
+        if (v.title) avoidThemes.push(v.title);
+        if (v.scriptText) {
+          const firstLine = v.scriptText.split(/[.\n]/).filter(Boolean)[0]?.trim();
+          if (firstLine && firstLine.length > 10) avoidThemes.push(`Opening line: "${firstLine.slice(0, 80)}"`);
+        }
+      }
       const varietySeed = `${Date.now()}-${videoId.slice(-6)}`;
 
       const scriptInput = {

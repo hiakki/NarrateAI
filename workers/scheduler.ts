@@ -417,8 +417,9 @@ async function recoverStuckVideos() {
         const niche = getNicheById(video.series.niche);
         const scenes = (video.scenesJson as { text: string; visualDescription: string }[]) ?? [];
 
-        if (scenes.length === 0) {
-          warn(`Video ${video.id} has no scenes, marking as FAILED`);
+        const scriptCompleted = completedStages.includes("SCRIPT");
+        if (scenes.length === 0 && scriptCompleted) {
+          warn(`Video ${video.id} has SCRIPT completed but no scene data, marking as FAILED`);
           await db.video.update({
             where: { id: video.id },
             data: { status: "FAILED", generationStage: null, errorMessage: "Recovery failed: no scene data" },
@@ -442,9 +443,9 @@ async function recoverStuckVideos() {
           userId: usr.id,
           userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
           automationName: video.series.automation?.name,
-          title: video.title ?? "Untitled",
-          scriptText: video.scriptText ?? "",
-          scenes,
+          title: video.title || undefined,
+          scriptText: video.scriptText || undefined,
+          scenes: scenes.length > 0 ? scenes : undefined,
           artStyle: video.series.artStyle,
           artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
           negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",

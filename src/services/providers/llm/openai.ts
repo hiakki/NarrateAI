@@ -22,7 +22,7 @@ export class OpenAILlmProvider implements LlmProviderInterface {
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
-      temperature: 0.95,
+      temperature: 1.1,
     });
 
     const text = response.choices[0]?.message?.content ?? "{}";

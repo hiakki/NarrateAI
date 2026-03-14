@@ -3,16 +3,22 @@ import { getLanguageName } from "@/config/languages";
 import { getPromptEnhancer } from "@/config/prompt-enhancers";
 
 const NARRATIVE_VARIETY_RULES = [
-  "Open with a shocking statistic, specific number, or little-known fact — not a generic question.",
+  "Open with a shocking statistic, specific number, or little-known fact — not a generic question or 'you're being...' statement.",
   "Start in the middle of the action (in medias res); reveal context only as the story unfolds.",
-  "Open with a direct address to the viewer ('You wake up...', 'Imagine...') and keep that tension.",
+  "Open with a specific real-world scenario: name a place, a year, or a person — ground the story in concrete reality.",
   "Use a countdown or timeline structure (e.g. 'In 24 hours...', 'By day 3...') to drive the story.",
   "Open with a myth, legend, or historical parallel that connects to the main premise.",
   "Begin with a contradiction or paradox that the story will resolve or deepen.",
   "Open with a vivid sensory detail or single image, then expand into the full story.",
   "Start with a bold claim or 'what if' that sounds impossible, then prove it step by step.",
-  "Open with a short dialogue or quote, then reveal who said it and why it matters.",
+  "Open with a short dialogue or quote from a real person, then reveal who said it and why it matters.",
   "Begin with the consequence or ending first, then show how we got there.",
+  "Open with a question the viewer has never considered — something non-obvious that reframes the topic.",
+  "Start with a mini story about a specific person (real or composite) who experienced this — humanize the concept.",
+  "Open by describing a common everyday moment, then reveal the hidden psychology/science behind it.",
+  "Begin with 'In [year], [specific event happened]...' — anchor in a real historical moment.",
+  "Open with two contrasting images or ideas side-by-side, then explain the hidden connection.",
+  "Start with something the viewer does every day without thinking — then explain what's really happening.",
 ];
 
 function hashSeed(s: string): number {
@@ -93,12 +99,13 @@ MOOD: ${enhancer.moodKeywords}
 LANGUAGE: ${langName}
 ${input.topic ? `TOPIC: ${input.topic}` : "Choose a trending, highly engaging topic for this niche."}
 ${input.avoidThemes?.length
-    ? `\nAVOID THESE THEMES/PREMISES (do NOT repeat or closely mimic): ${input.avoidThemes.join(" | ")}`
+    ? `\nAVOID THESE THEMES/PREMISES AND OPENING LINES (do NOT repeat or closely mimic ANY of these):\n${input.avoidThemes.map(t => `  ✗ ${t}`).join("\n")}`
     : ""}
 ${characterBlock}
 ═══ UNIQUENESS (CRITICAL — EVERY VIDEO MUST BE DIFFERENT) ═══
 - Create a UNIQUE story. Do NOT reuse the same premise, twist, or concept. Pick a FRESH angle, an unexpected interpretation, or a rarely-told aspect.
-- Avoid overused tropes and clichés for this niche (e.g. for science/what-if: not "gravity stopped", "sun disappeared" every time — vary with lesser-known scenarios, different consequences, or a surprising take).
+- THE OPENING LINE IS THE MOST IMPORTANT THING TO VARY. Never start two videos the same way. If the avoid list above contains opening lines, your first sentence MUST be completely different in structure, topic, and phrasing.
+- Avoid overused tropes and clichés for this niche (e.g. for dark-psychology: NOT "you're being manipulated" every time — vary with specific studies, historical events, real scenarios, unusual angles).
 - If no specific topic was given, actively choose something DISTINCT from typical viral repeats. Surprise the viewer with a premise they haven't seen before.
 - Each script must feel like a different episode: different hook, different conflict, different payoff. Never output the "default" or most obvious idea for the niche.
 ${input.varietySeed ? `- This run (seed: ${input.varietySeed}) must produce a story that feels different from any other — use the seed as a mental nudge to pick a non-obvious premise.` : ""}

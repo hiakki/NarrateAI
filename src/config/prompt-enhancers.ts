@@ -277,9 +277,10 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
   "dark-psychology": {
     dramatic: {
       storytellingRules: [
-        "Open with a disturbing truth: 'You're being manipulated right now — and you don't even know it'",
+        "NEVER start with 'You're being manipulated' or any variation of that line — it is overused. Instead open with a specific, surprising psychological fact, a real historical experiment, a concrete scenario, or a bold claim the viewer has never heard.",
+        "Every video must explore a DIFFERENT dark-psychology topic. Rotate among: cognitive biases, social engineering, body language deception, cult recruitment tactics, negotiation dark arts, gaslighting mechanics, emotional blackmail, power dynamics in relationships, propaganda techniques, persuasion science, decision fatigue exploitation, authority manipulation, scarcity tricks, anchoring effects, the halo effect, sunk cost traps, learned helplessness, Stockholm syndrome, Machiavellianism, dark triad traits.",
         "Present each trick or tactic as a numbered reveal — viewers love countdowns of dark knowledge",
-        "Use real-world examples: 'Advertisers use this', 'Narcissists always do this'",
+        "Use real-world examples with specifics: name the study, the year, or the company — not generic 'advertisers use this'",
         "Make the viewer feel like they're getting forbidden knowledge — insider secrets",
         "End with how to PROTECT yourself — turn the dark knowledge into a shield",
         "Use second person: 'you' — put the viewer IN the scenario",

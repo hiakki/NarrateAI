@@ -59,7 +59,8 @@ export class GeminiLlmProvider implements LlmProviderInterface {
           contents: prompt,
           config: {
             responseMimeType: "application/json",
-            temperature: 0.95,
+            temperature: 1.2,
+            topP: 0.95,
           },
         });
         break;
