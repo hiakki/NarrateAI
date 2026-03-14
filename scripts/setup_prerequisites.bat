@@ -482,6 +482,7 @@ if errorlevel 1 exit /b 1
 echo.
 echo ================================================================
 echo   Setup complete. Run the app with:  pnpm dev:all
+echo   (Dev console deprecation warning is already suppressed.)
 echo ================================================================
 echo.
 exit /b 0

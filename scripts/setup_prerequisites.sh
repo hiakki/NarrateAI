@@ -535,6 +535,7 @@ main() {
   echo ""
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo -e "${GREEN}  Setup complete. Run the app with:  pnpm dev:all${NC}"
+  echo -e "${GREEN}  (Dev console deprecation warning is already suppressed.)${NC}"
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo ""
 }

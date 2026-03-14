@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next dev",
     "dev:all": "concurrently -n app,worker,sched -c blue,green,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm scheduler\"",
     "build": "next build",
     "start": "next start",
@@ -54,6 +54,7 @@
     ]
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^3.0.0",
     "@types/fluent-ffmpeg": "^2.1.28",
