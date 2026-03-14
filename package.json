@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next dev",
     "dev:all": "concurrently -n app,worker,sched -c blue,green,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm scheduler\"",
+    "dev:tunnel": "node scripts/run-dev-tunnel.js",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

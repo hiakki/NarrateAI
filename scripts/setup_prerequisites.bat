@@ -53,8 +53,10 @@ echo   %~nx0 --skip-prereqs       Skip tool installation
 echo   %~nx0 --stop               Stop all services
 echo   %~nx0 --status             Show status
 echo.
-echo After setup, run the app with:  pnpm dev:all
-echo Backup/restore only:            scripts\backup-restore.bat
+echo After setup:
+echo   Run app:           pnpm dev:all
+echo   Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)
+echo Backup/restore:      scripts\backup-restore.bat
 echo.
 exit /b 0
 
@@ -487,8 +489,10 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo ================================================================
-echo   Setup complete. Run the app with:  pnpm dev:all
-echo   (Dev console deprecation warning is already suppressed.)
+echo   Setup complete.
+echo   Run app:           pnpm dev:all
+echo   Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)
+echo   (Dev deprecation warning suppressed. Localtunnel not used.)
 echo ================================================================
 echo.
 exit /b 0

@@ -540,8 +540,10 @@ main() {
 
   echo ""
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}  Setup complete. Run the app with:  pnpm dev:all${NC}"
-  echo -e "${GREEN}  (Dev console deprecation warning is already suppressed.)${NC}"
+  echo -e "${GREEN}  Setup complete.${NC}"
+  echo -e "${GREEN}  Run app:           pnpm dev:all${NC}"
+  echo -e "${GREEN}  Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)${NC}"
+  echo -e "${GREEN}  (Dev deprecation warning suppressed. Localtunnel not used.)${NC}"
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo ""
 }
