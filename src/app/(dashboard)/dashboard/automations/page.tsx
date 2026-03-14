@@ -17,6 +17,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
   AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { formatPlatformError } from "@/lib/format-platform-error";
 
 interface PlatformEntry {
   platform: string;
@@ -42,12 +43,18 @@ interface Automation {
   niche: string;
   artStyle: string;
   tone: string;
+  duration?: number;
   targetPlatforms: string[];
   enabled: boolean;
   frequency: string;
   postTime: string;
   timezone: string;
   characterId: string | null;
+  llmProvider?: string | null;
+  ttsProvider?: string | null;
+  imageProvider?: string | null;
+  imageToVideoProvider?: string | null;
+  effectiveImageToVideoProvider?: string | null;
   lastRunAt: string | null;
   createdAt: string;
   series: { _count: { videos: number }; lastVideo: LastVideo | null } | null;
@@ -76,6 +83,11 @@ const STATUS_CFG: Record<string, { label: string; className: string; icon: typeo
 };
 
 const FREQ_THRESHOLDS: Record<string, number> = { daily: 26, every_other_day: 50, weekly: 170 };
+
+function videoStyleLabel(imageToVideoProvider: string | null | undefined): string {
+  if (!imageToVideoProvider) return "Static images";
+  return `I2V (${imageToVideoProvider.replace(/_/g, " ")})`;
+}
 
 function firstTriggerMinutes(postTime: string): number {
   const first = postTime.split(",")[0]?.trim() ?? "23:59";
@@ -125,9 +137,6 @@ function getLocalDateKey(date: Date, timezone: string): string {
 function isMissed(auto: Automation): boolean {
   if (!auto.enabled) return false;
 
-  // Daily definition requested:
-  // missed = has not run at all between today's 12:00 AM and now (automation timezone),
-  // and at least one scheduled slot has already passed today.
   if (auto.frequency === "daily") {
     const { dateKey: todayKey, minuteOfDay: nowMinute } = getLocalNowParts(auto.timezone);
     const slots = auto.postTime
@@ -138,20 +147,20 @@ function isMissed(auto: Automation): boolean {
       .sort((a, b) => a - b);
 
     if (slots.length === 0) return false;
-    const hasPassedSlotToday = slots.some((m) => m <= nowMinute);
-    if (!hasPassedSlotToday) return false;
-
     if (!auto.lastRunAt) return true;
+
     const lastRunKey = getLocalDateKey(new Date(auto.lastRunAt), auto.timezone);
-    return lastRunKey !== todayKey;
+    if (lastRunKey === todayKey) return false;
+
+    if (slots.some((m) => m <= nowMinute)) return true;
+
+    const yesterdayKey = getLocalDateKey(new Date(Date.now() - 86_400_000), auto.timezone);
+    return lastRunKey !== yesterdayKey;
   }
 
-  // Keep previous behavior for non-daily frequencies.
   const timesPerDay = auto.postTime.split(",").length;
   let threshold = FREQ_THRESHOLDS[auto.frequency] ?? 26;
-  if (timesPerDay > 1 && auto.frequency === "daily") {
-    threshold = Math.min(threshold, 26 / timesPerDay);
-  }
+  if (timesPerDay > 1) threshold = Math.min(threshold, 26 / timesPerDay);
   if (!auto.lastRunAt) return true;
   const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (1000 * 60 * 60);
   return hours > threshold;
@@ -199,6 +208,13 @@ export default function AutomationsPage() {
     currentName: string;
     failed: string[];
   } | null>(null);
+  const [retryAllState, setRetryAllState] = useState<{
+    running: boolean;
+    current: number;
+    total: number;
+    currentName: string;
+    failed: string[];
+  } | null>(null);
 
   type InsightsSummary = {
     totalViews: number;
@@ -208,6 +224,8 @@ export default function AutomationsPage() {
     totalInteractions: number;
     videoCount: number;
     lastRefreshedAt: string | null;
+    avgViews?: number;
+    avgInteractions?: number;
   };
   type InsightsData = {
     lastRefreshedAt: string | null;
@@ -234,7 +252,7 @@ export default function AutomationsPage() {
 
   const fetchAutomations = useCallback(async () => {
     try {
-      const res = await fetch("/api/automations");
+      const res = await fetch("/api/automations", { cache: "no-store" });
       const json = await res.json();
       if (json.data) setAutomations(json.data);
     } catch { /* ignore */ }
@@ -265,11 +283,11 @@ export default function AutomationsPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
-    if (hasActiveWork || triggeringId || retryingVideoId || postingKey) {
+    if (hasActiveWork || triggeringId || retryingVideoId || postingKey || retryAllState?.running) {
       pollRef.current = setInterval(fetchAutomations, 8000);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [hasActiveWork, triggeringId, retryingVideoId, postingKey, fetchAutomations]);
+  }, [hasActiveWork, triggeringId, retryingVideoId, postingKey, retryAllState?.running, fetchAutomations]);
 
   async function toggleEnabled(id: string, enabled: boolean) {
     setAutomations((prev) =>
@@ -418,6 +436,11 @@ export default function AutomationsPage() {
 
   const pausedAutomations = useMemo(
     () => sortedAutomations.filter((a) => !a.enabled),
+    [sortedAutomations],
+  );
+
+  const automationsWithFailedVideo = useMemo(
+    () => sortedAutomations.filter((a) => a.series?.lastVideo?.status === "FAILED"),
     [sortedAutomations],
   );
 
@@ -621,6 +644,40 @@ export default function AutomationsPage() {
     setTimeout(() => setDeleteAllState(null), failed.length > 0 ? 8000 : 3000);
   }
 
+  async function handleRetryAllOrSelected() {
+    const hasSelection = selectedIds.size > 0;
+    const targets = hasSelection
+      ? automationsWithFailedVideo.filter((a) => selectedIds.has(a.id))
+      : automationsWithFailedVideo;
+    if (targets.length === 0) return;
+
+    const failed: string[] = [];
+    setRetryAllState({ running: true, current: 0, total: targets.length, currentName: targets[0].name, failed });
+
+    for (let i = 0; i < targets.length; i++) {
+      const auto = targets[i];
+      const videoId = auto.series?.lastVideo?.id;
+      setRetryAllState((s) => s ? { ...s, current: i, currentName: auto.name } : s);
+      setRetryingVideoId(videoId ?? null);
+      if (videoId) {
+        try {
+          const res = await fetch(`/api/videos/${videoId}/retry`, { method: "POST" });
+          if (!res.ok) {
+            const json = await res.json().catch(() => ({}));
+            failed.push(`${auto.name}: ${json.error || "Retry failed"}`);
+          }
+          await fetchAutomations();
+        } catch {
+          failed.push(`${auto.name}: Network error`);
+        }
+      }
+      setRetryingVideoId(null);
+    }
+
+    setRetryAllState({ running: false, current: targets.length, total: targets.length, currentName: "", failed });
+    setTimeout(() => setRetryAllState(null), failed.length > 0 ? 8000 : 3000);
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -629,7 +686,7 @@ export default function AutomationsPage() {
     );
   }
 
-  const isBusy = !!stopAllState?.running || !!runAllState?.running || !!runSelectedState?.running || !!deleteAllState?.running || pausingAll || resumingAll;
+  const isBusy = !!stopAllState?.running || !!runAllState?.running || !!runSelectedState?.running || !!deleteAllState?.running || !!retryAllState?.running || pausingAll || resumingAll;
   const hasSelection = selectedIds.size > 0;
   const selLabel = hasSelection ? "Selected" : "All";
 
@@ -651,6 +708,9 @@ export default function AutomationsPage() {
   const deleteCount = hasSelection
     ? sortedAutomations.filter((a) => selectedIds.has(a.id)).length
     : sortedAutomations.length;
+  const retryCount = hasSelection
+    ? automationsWithFailedVideo.filter((a) => selectedIds.has(a.id)).length
+    : automationsWithFailedVideo.length;
 
   const allSelected = sortedAutomations.length > 0 && selectedIds.size === sortedAutomations.length;
 
@@ -848,6 +908,27 @@ export default function AutomationsPage() {
             )}
           </Button>
 
+          {/* Retry failed videos (all or selected) */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-amber-300 text-amber-700 hover:bg-amber-100"
+            disabled={isBusy || retryCount === 0}
+            onClick={handleRetryAllOrSelected}
+          >
+            {retryAllState?.running ? (
+              <>
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                Retrying {retryAllState.current + 1}/{retryAllState.total}
+              </>
+            ) : (
+              <>
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                Retry {selLabel}{retryCount > 0 ? ` (${retryCount})` : ""}
+              </>
+            )}
+          </Button>
+
           {/* 5. Delete Selected/All */}
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -1039,6 +1120,40 @@ export default function AutomationsPage() {
         </div>
       )}
 
+      {retryAllState && (
+        <div className={`mb-6 rounded-lg border p-4 text-sm ${
+          retryAllState.running
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : retryAllState.failed.length > 0
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-green-200 bg-green-50 text-green-800"
+        }`}>
+          {retryAllState.running ? (
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+              <span>
+                Retrying <strong>{retryAllState.currentName}</strong> ({retryAllState.current + 1} of {retryAllState.total})
+              </span>
+            </div>
+          ) : retryAllState.failed.length > 0 ? (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>Retried {retryAllState.total - retryAllState.failed.length}/{retryAllState.total} videos</span>
+              </div>
+              {retryAllState.failed.map((msg, i) => (
+                <p key={i} className="ml-6 text-xs opacity-80">{msg}</p>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <span>All {retryAllState.total} failed videos retried successfully</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {triggerResult && (
         <div className={`mb-4 rounded-lg border p-3 text-sm flex items-center gap-2 ${
           triggerResult.ok
@@ -1069,7 +1184,7 @@ export default function AutomationsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
           {sortedAutomations.map((auto) => {
             const lv = auto.series?.lastVideo ?? null;
             const lvStatus = lv ? (STATUS_CFG[lv.status] ?? STATUS_CFG.QUEUED) : null;
@@ -1078,11 +1193,11 @@ export default function AutomationsPage() {
             return (
               <Card
                 key={auto.id}
-                className={`flex flex-col transition-colors hover:border-primary/50 ${
+                className={`flex flex-col h-full transition-colors hover:border-primary/50 ${
                   selectedIds.has(auto.id) ? "ring-2 ring-primary/40 border-primary/50" : ""
                 }`}
               >
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-3 shrink-0">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <button
@@ -1113,52 +1228,63 @@ export default function AutomationsPage() {
                     </div>
                   </div>
                 </CardHeader>
-                <Link href={`/dashboard/automations/${auto.id}`} className="flex-1 flex flex-col">
-                  <CardContent className="pt-0 space-y-3 flex-1 flex flex-col">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary" className="capitalize text-xs">
-                        {auto.niche}
-                      </Badge>
-                      <Badge variant="outline" className="capitalize text-xs">
-                        {auto.tone}
-                      </Badge>
-                      {auto.characterId ? (
-                        <Badge variant="default" className="text-xs bg-amber-500 hover:bg-amber-600">
-                          <Star className="h-2.5 w-2.5 mr-0.5" /> Star
+                <Link href={`/dashboard/automations/${auto.id}`} className="flex-1 flex flex-col min-h-0">
+                  <CardContent className="pt-0 space-y-3 flex-1 flex flex-col min-h-0">
+                    <div className="shrink-0 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap h-[52px] content-start overflow-hidden">
+                        <Badge variant="secondary" className="capitalize text-xs">
+                          {auto.niche}
                         </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs text-muted-foreground">
-                          <EyeOff className="h-2.5 w-2.5 mr-0.5" /> Faceless
+                        <Badge variant="outline" className="capitalize text-xs">
+                          {auto.tone}
                         </Badge>
-                      )}
+                        {auto.duration != null && (
+                          <Badge variant="outline" className="text-xs">
+                            {auto.duration}s
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-xs text-muted-foreground" title="Final video form">
+                          <Film className="h-2.5 w-2.5 mr-0.5" />
+                          {videoStyleLabel(auto.effectiveImageToVideoProvider)}
+                        </Badge>
+                        {auto.characterId ? (
+                          <Badge variant="default" className="text-xs bg-amber-500 hover:bg-amber-600">
+                            <Star className="h-2.5 w-2.5 mr-0.5" /> Star
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            <EyeOff className="h-2.5 w-2.5 mr-0.5" /> Faceless
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground h-8 overflow-hidden">
+                        <Clock className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{FREQ_LABEL[auto.frequency] ?? auto.frequency} at {auto.postTime.split(",").map((t: string) => t.trim()).sort().join(", ")}</span>
+                        <span className="text-muted-foreground/60 shrink-0">·</span>
+                        <Film className="h-3 w-3 shrink-0" />
+                        <span>{auto.series?._count.videos ?? 0}</span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Clock className="h-3 w-3" />
-                      <span>{FREQ_LABEL[auto.frequency] ?? auto.frequency} at {auto.postTime.split(",").map((t: string) => t.trim()).sort().join(", ")}</span>
-                      <span className="text-muted-foreground/60">·</span>
-                      <Film className="h-3 w-3" />
-                      <span>{auto.series?._count.videos ?? 0}</span>
-                    </div>
-
-                    {/* Last video status */}
+                    {/* Last video status — min-height only; alignment from fixed top block above */}
+                    <div className="min-h-[120px] flex flex-col shrink-0">
                     {lv && lvStatus ? (
                       <div className="rounded-lg border p-2.5 space-y-2 bg-muted/30">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-medium truncate flex-1">
+                        <div className="flex items-center justify-between gap-2 shrink-0">
+                          <p className="text-xs font-medium truncate flex-1 min-w-0">
                             {lv.title || "Untitled"}
                           </p>
-                          <div className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${lvStatus.className}`}>
+                          <div className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 ${lvStatus.className}`}>
                             <lvStatus.icon className={`h-2.5 w-2.5 ${lv.status === "GENERATING" ? "animate-spin" : ""}`} />
                             {lvStatus.label}
                           </div>
                         </div>
-                        <div className="text-[10px] text-muted-foreground">
+                        <div className="text-[10px] text-muted-foreground shrink-0">
                           {timeAgo(lv.createdAt)}
                         </div>
 
-                        {/* Per-platform status — always show all targets */}
-                        {auto.targetPlatforms.length > 0 && (
+                        {/* Per-platform status */}
+                        {auto.targetPlatforms.length > 0 ? (
                           <div className="space-y-1">
                             {auto.targetPlatforms.map((p) => {
                               const cfg = PLATFORM_CFG[p];
@@ -1193,7 +1319,7 @@ export default function AutomationsPage() {
                               } else if (isFail) {
                                 rowClass = "bg-red-50 border-red-200";
                                 statusEl = (
-                                  <span className="flex items-center gap-1 text-red-600" title={entry.error}>
+                                  <span className="flex items-center gap-1 text-red-600" title={entry.error ? formatPlatformError(entry.error) : undefined}>
                                     <XCircle className="h-3 w-3" />
                                     <span>Failed</span>
                                   </span>
@@ -1235,8 +1361,7 @@ export default function AutomationsPage() {
                               );
                             })}
                           </div>
-                        )}
-
+                        ) : null}
                       </div>
                     ) : (
                       <div className="text-xs text-muted-foreground/60 italic">
@@ -1245,23 +1370,26 @@ export default function AutomationsPage() {
                           : "No videos yet"}
                       </div>
                     )}
+                    </div>
 
-                    {/* Collective insights report for this automation — always show so user can refresh */}
-                    {!insightsLoading && (() => {
-                      const agg = insightsData?.byAutomation?.[auto.id];
-                      const views = agg?.totalViews ?? 0;
-                      const interactions = agg?.totalInteractions ?? 0;
-                      const lastRef = agg?.lastRefreshedAt ?? insightsData?.lastRefreshedAt;
-                      return (
-                        <div className="mt-3 pt-3 border-t border-border/60 space-y-1.5">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                              <BarChart2 className="h-3 w-3" />
-                              Insights
-                            </span>
-                            <div className="flex items-center gap-1">
+                    {/* Insights — fixed height, always rendered so all tiles align */}
+                    <div className="mt-3 pt-3 border-t border-border/60 h-[88px] flex flex-col shrink-0">
+                      <div className="flex items-center justify-between gap-1 shrink-0">
+                        <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                          <BarChart2 className="h-3 w-3" />
+                          Insights
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {insightsLoading ? (
+                            <span className="text-xs text-muted-foreground/80">Loading…</span>
+                          ) : (
+                            <>
                               <span className="text-xs text-muted-foreground/80">
-                                {lastRef ? timeAgo(lastRef) : insightsData ? "Not refreshed" : "Refresh to load"}
+                                {(() => {
+                                  const agg = insightsData?.byAutomation?.[auto.id];
+                                  const lastRef = agg?.lastRefreshedAt ?? insightsData?.lastRefreshedAt;
+                                  return lastRef ? timeAgo(lastRef) : insightsData ? "Not refreshed" : "Refresh to load";
+                                })()}
                               </span>
                               <button
                                 type="button"
@@ -1276,26 +1404,42 @@ export default function AutomationsPage() {
                                   <RefreshCw className="h-3 w-3" />
                                 )}
                               </button>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs">
-                            <span className="flex items-center gap-1 text-muted-foreground">
-                              <Eye className="h-3 w-3" />
-                              {formatNumber(views)} views
-                            </span>
-                            <span className="flex items-center gap-1 text-muted-foreground">
-                              <Heart className="h-3 w-3" />
-                              {formatNumber(interactions)} interactions
-                            </span>
-                          </div>
+                            </>
+                          )}
                         </div>
-                      );
-                    })()}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs mt-1.5">
+                        {insightsLoading ? (
+                          <span className="col-span-2 text-muted-foreground/60">Loading…</span>
+                        ) : (() => {
+                          const agg = insightsData?.byAutomation?.[auto.id];
+                          const views = agg?.totalViews ?? 0;
+                          const interactions = agg?.totalInteractions ?? 0;
+                          return (
+                            <>
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                <Eye className="h-3 w-3" />
+                                {formatNumber(views)} views
+                              </span>
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                <Heart className="h-3 w-3" />
+                                {formatNumber(interactions)} interactions
+                              </span>
+                              {(agg?.videoCount != null && agg.videoCount >= 1) ? (
+                                <span className="flex items-center gap-1 text-muted-foreground/80 col-span-2 text-[10px]">
+                                  Avg: {formatNumber(agg?.avgViews ?? 0)} views · {formatNumber(agg?.avgInteractions ?? 0)} interactions per video
+                                </span>
+                              ) : null}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
                   </CardContent>
                 </Link>
 
-                {/* Footer actions */}
-                <div className="px-6 pb-4 flex items-center justify-between gap-2">
+                {/* Footer actions — anchored to bottom of tile */}
+                <div className="mt-auto px-6 pb-4 pt-2 flex items-center justify-between gap-2 shrink-0 border-t border-border/60">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {/* Retry generation for failed video */}
                     {lv?.status === "FAILED" && (
@@ -1338,7 +1482,7 @@ export default function AutomationsPage() {
                           }
                           disabled={isPosting}
                           onClick={(e) => { e.preventDefault(); handlePostPlatform(lv.id, p); }}
-                          title={isFailed && entry?.error ? entry.error : undefined}
+                          title={isFailed && entry?.error ? formatPlatformError(entry.error) : undefined}
                         >
                           {isPosting ? (
                             <Loader2 className="h-3 w-3 animate-spin" />

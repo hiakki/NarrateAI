@@ -165,7 +165,7 @@ Three roles in `User.role`: `owner`, `admin`, `user` (default).
 ## Error Handling
 
 - All API routes: wrap in try/catch, return proper HTTP status codes
-- AI services: retry 3x with exponential backoff, fallback to secondary provider
+- AI services: retry 3x with exponential backoff; no provider fallbacks (use only the chosen provider)
 - BullMQ jobs: configure `attempts: 3`, `backoff: { type: 'exponential', delay: 5000 }`
 - Client-side: use error boundaries + toast notifications
 

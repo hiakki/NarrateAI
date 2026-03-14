@@ -7,6 +7,7 @@ import { OpenAILlmProvider } from "./llm/openai";
 import { DeepSeekLlmProvider } from "./llm/deepseek";
 import { QwenLlmProvider } from "./llm/qwen";
 import { LocalLlmProvider } from "./llm/local";
+import { LocalBackendLlmProvider } from "./llm/local-backend";
 import { HuggingFaceStoryLlmProvider } from "./llm/huggingface-story";
 import { getAllStoryModels, storyModelToProviderId } from "@/config/story-models";
 
@@ -15,6 +16,7 @@ import { ElevenLabsTtsProvider } from "./tts/elevenlabs";
 import { CosyVoiceTtsProvider } from "./tts/cosyvoice";
 import { FishAudioTtsProvider } from "./tts/fishaudio";
 import { EdgeTtsProvider } from "./tts/edge-tts";
+import { LocalBackendTtsProvider } from "./tts/local-backend";
 import { HuggingFaceTtsProvider } from "./tts/huggingface-tts";
 
 import { GeminiImageProvider } from "./image/gemini";
@@ -28,6 +30,7 @@ import { SiliconFlowImageProvider } from "./image/siliconflow";
 import { LeonardoImageProvider } from "./image/leonardo";
 import { IdeogramImageProvider } from "./image/ideogram";
 import { PollinationsImageProvider } from "./image/pollinations";
+import { LocalBackendImageProvider } from "./image/local-backend";
 import { HuggingFaceImageProvider } from "./image/huggingface";
 
 const LLM_MAP: Record<string, () => LlmProviderInterface> = {
@@ -36,6 +39,7 @@ const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   DEEPSEEK_V3: () => new DeepSeekLlmProvider(),
   QWEN: () => new QwenLlmProvider(),
   LOCAL_LLM: () => new LocalLlmProvider(),
+  LOCAL_BACKEND: () => new LocalBackendLlmProvider(),
   HF_STORY: () => new HuggingFaceStoryLlmProvider("HF_STORY"),
   ...Object.fromEntries(
     getAllStoryModels().map((m) => [
@@ -51,6 +55,7 @@ const TTS_MAP: Record<string, () => TtsProviderInterface> = {
   COSYVOICE: () => new CosyVoiceTtsProvider(),
   FISH_AUDIO: () => new FishAudioTtsProvider(),
   EDGE_TTS: () => new EdgeTtsProvider(),
+  LOCAL_BACKEND: () => new LocalBackendTtsProvider(),
   HF_TTS: () => new HuggingFaceTtsProvider(),
 };
 
@@ -66,6 +71,7 @@ const IMAGE_MAP: Record<string, () => ImageProviderInterface> = {
   LEONARDO: () => new LeonardoImageProvider(),
   IDEOGRAM: () => new IdeogramImageProvider(),
   POLLINATIONS: () => new PollinationsImageProvider(),
+  LOCAL_BACKEND: () => new LocalBackendImageProvider(),
   HF_IMAGE: () => new HuggingFaceImageProvider(),
 };
 

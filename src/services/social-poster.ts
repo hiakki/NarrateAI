@@ -13,6 +13,27 @@ const log = createLogger("SocialPoster");
 
 const db = new PrismaClient();
 
+/** Extract user-facing message from API error (e.g. Meta JSON). Log raw to console only. */
+function sanitizeErrorForUi(raw: string): string {
+  if (!raw || typeof raw !== "string") return "Something went wrong. Try again later.";
+  const trimmed = raw.trim();
+  if (!trimmed) return "Something went wrong. Try again later.";
+  try {
+    if ((trimmed.startsWith("{") && trimmed.includes('"error"')) || trimmed.startsWith("{")) {
+      const parsed = JSON.parse(trimmed) as { error?: { message?: string; error_user_msg?: string }; message?: string };
+      const err = parsed?.error;
+      const msg = err?.error_user_msg || err?.message || parsed?.message;
+      if (typeof msg === "string" && msg.trim()) {
+        console.error("[SocialPoster] API error (raw):", trimmed.length > 1500 ? trimmed.slice(0, 1500) + "…" : trimmed);
+        return msg.trim();
+      }
+    }
+  } catch {
+    // not JSON or no message field
+  }
+  return trimmed;
+}
+
 interface PostResult {
   platform: string;
   success: boolean;
@@ -388,11 +409,19 @@ export async function postVideoToSocials(
               lastResult = { success: false, error: `Unsupported platform: ${platform}` };
           }
         } catch (e) {
-          lastResult = { success: false, error: e instanceof Error ? e.message : "Unknown error" };
+          const raw = e instanceof Error ? e.message : "Unknown error";
+          lastResult = { success: false, error: sanitizeErrorForUi(raw) };
         }
 
         if (lastResult?.success) {
           log.log(`Posted to ${platform} (${account.username}) on attempt ${attempt}: ${lastResult.postId}`);
+          break;
+        }
+
+        const errLower = (lastResult?.error ?? "").toLowerCase();
+        const noRetry = errLower.includes("reconnect") || errLower.includes("expired") || errLower.includes("revoked") || errLower.includes("quota");
+        if (noRetry) {
+          log.error(`${platform} (${account.username}): ${lastResult?.error} — not retryable`);
           break;
         }
 
@@ -417,9 +446,10 @@ export async function postVideoToSocials(
         return { platform, ...result };
       } else {
         const errMsg = result.error ?? "Unknown error";
+        const cleanMsg = sanitizeErrorForUi(errMsg);
         const displayError = platform === "FACEBOOK"
-          ? `${errMsg}\nRetry after 24 hours.`
-          : errMsg;
+          ? `${cleanMsg}\nRetry after 24 hours.`
+          : cleanMsg;
         await finalizePlatform(videoId, {
           platform, success: false, error: displayError,
         });
@@ -436,7 +466,7 @@ export async function postVideoToSocials(
   const results: PostResult[] = settled.map((s, i) => {
     if (s.status === "fulfilled") return s.value;
     log.error(`Platform ${targetPlatforms[i]} threw:`, s.reason);
-    return { platform: targetPlatforms[i], success: false, error: String(s.reason) };
+    return { platform: targetPlatforms[i], success: false, error: sanitizeErrorForUi(String(s.reason)) };
   });
 
   return results;

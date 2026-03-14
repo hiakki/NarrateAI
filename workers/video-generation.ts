@@ -5,12 +5,12 @@ import { PrismaClient } from "@prisma/client";
 import { getTtsProvider, getImageProvider } from "../src/services/providers/factory";
 import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
-import { generateClipsFromImages } from "../src/services/image-to-video";
+import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File } from "../src/services/image-to-video";
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
 import { postVideoToSocials } from "../src/services/social-poster";
-import { createLogger } from "../src/lib/logger";
+import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
 import {
   buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath,
   scenesAbsDir, voiceoverAbsPath, contextAbsPath, scriptAbsPath,
@@ -41,6 +41,8 @@ interface Checkpoint {
   reviewMode?: boolean;
   musicPath?: string;
   relDir?: string;
+  stageTimings?: Record<string, { startedAt: number; completedAt: number; durationMs: number }>;
+  imageToVideoProvider?: string;
 }
 
 async function updateStage(videoId: string, stage: string) {
@@ -54,6 +56,23 @@ async function updateStage(videoId: string, stage: string) {
       throw new Error(`Video ${videoId} no longer exists (deleted during job)`);
     }
     throw e;
+  }
+}
+
+function recordStageStart(checkpoint: Checkpoint, stage: string) {
+  checkpoint.stageTimings = checkpoint.stageTimings ?? {};
+  checkpoint.stageTimings[stage] = {
+    startedAt: Date.now(),
+    completedAt: 0,
+    durationMs: 0,
+  };
+}
+
+function recordStageEnd(checkpoint: Checkpoint, stage: string) {
+  const entry = checkpoint.stageTimings?.[stage];
+  if (entry && entry.startedAt) {
+    entry.completedAt = Date.now();
+    entry.durationMs = entry.completedAt - entry.startedAt;
   }
 }
 
@@ -89,6 +108,7 @@ const worker = new Worker<VideoJobData>(
       tone, niche, artStyle, reviewMode, characterPrompt, imageToVideoProvider,
     } = job.data;
 
+    return runWithVideoIdAsync(videoId, async () => {
     const videoExists = await db.video.findUnique({ where: { id: videoId }, select: { id: true } });
     if (!videoExists) {
       throw new Error(`Video ${videoId} no longer exists (deleted before job ran). Job abandoned.`);
@@ -105,10 +125,17 @@ const worker = new Worker<VideoJobData>(
     const checkpoint = await loadCheckpoint(videoId);
     const completed = new Set(checkpoint.completedStages ?? []);
 
+    if (imageToVideoProvider && !checkpoint.imageToVideoProvider) {
+      checkpoint.imageToVideoProvider = imageToVideoProvider;
+      await saveCheckpoint(videoId, checkpoint);
+    }
+
     // ── Generate script if not provided (trigger route delegates this to the worker) ──
     if (!scenes?.length && !completed.has("SCRIPT")) {
+      recordStageStart(checkpoint, "SCRIPT");
+      await saveCheckpoint(videoId, { ...checkpoint });
       await updateStage(videoId, "SCRIPT");
-      log.log(`SCRIPT generating for ${videoId} (LLM=${llmProvider})…`);
+      log.log(`[SCRIPT]`, `SCRIPT generating (LLM=${llmProvider})…`);
 
       const seriesId = job.data.seriesId;
       const recentWithTitles = seriesId
@@ -130,6 +157,7 @@ const worker = new Worker<VideoJobData>(
         language: language ?? "en",
         avoidThemes: avoidThemes.length > 0 ? avoidThemes : undefined,
         varietySeed,
+        videoId,
       };
       const script = await generateScript(
         scriptInput,
@@ -159,8 +187,8 @@ const worker = new Worker<VideoJobData>(
 
     await fs.unlink(scriptAbsPath(relDir)).catch(() => {});
 
-    log.log(`START ${videoId} | LLM=${llmProvider} TTS=${ttsProvider} IMG=${imageProvider} | scenes=${scenes.length} resumed=[${[...completed].join(",")}]`);
-    log.log(`${isResume ? "RESUME" : "CREATED"} dir: public/${relDir}/`);
+    log.log(`[START]`, `LLM=${llmProvider} TTS=${ttsProvider} IMG=${imageProvider} | scenes=${scenes.length} resumed=[${[...completed].join(",")}]`);
+    log.log(`[START]`, `${isResume ? "RESUME" : "CREATED"} dir: public/${relDir}/`);
 
     let audioPath = checkpoint.audioPath;
     let durationMs = checkpoint.durationMs;
@@ -185,6 +213,9 @@ const worker = new Worker<VideoJobData>(
     try {
       // ── Script (log to context.txt) ──
       if (!completed.has("SCRIPT")) {
+        if (!checkpoint.stageTimings?.SCRIPT?.startedAt) {
+          recordStageStart(checkpoint, "SCRIPT");
+        }
         await updateStage(videoId, "SCRIPT");
         await db.video.update({ where: { id: videoId }, data: { scriptText, title } });
 
@@ -205,17 +236,19 @@ const worker = new Worker<VideoJobData>(
           ),
         );
 
+        recordStageEnd(checkpoint, "SCRIPT");
         completed.add("SCRIPT");
         await saveCheckpoint(videoId, { ...checkpoint, completedStages: [...completed], relDir });
-        log.log(`SCRIPT done "${title}" (${scriptText.length} chars). Full input prompt and LLM output logged in public/${relDir}/context.txt`);
+        log.log(`[SCRIPT]`, `SCRIPT done "${title}" (${scriptText.length} chars). Full input prompt and LLM output logged in public/${relDir}/context.txt`);
       }
 
       // ── TTS ──
       const audioValid = audioPath && (await fileExists(audioPath)) && (await isValidAudioFile(audioPath));
       if (!completed.has("TTS") || !audioPath || !(await fileExists(audioPath)) || !audioValid) {
         if (audioPath && !audioValid && completed.has("TTS")) {
-          log.warn(`Voiceover file invalid or corrupted, re-running TTS: ${audioPath}`);
+          log.warn(`[TS]`, `Voiceover file invalid or corrupted, re-running TTS: ${audioPath}`);
         }
+        recordStageStart(checkpoint, "TTS");
         await updateStage(videoId, "TTS");
         const resolvedVoice = resolveVoiceForProvider(ttsProvider, voiceId, language);
         const tts = getTtsProvider(ttsProvider);
@@ -234,6 +267,7 @@ const worker = new Worker<VideoJobData>(
         );
 
         await db.video.update({ where: { id: videoId }, data: { voiceoverUrl: localVoiceover } });
+        recordStageEnd(checkpoint, "TTS");
         completed.add("TTS");
         await saveCheckpoint(videoId, {
           completedStages: [...completed], relDir,
@@ -241,9 +275,9 @@ const worker = new Worker<VideoJobData>(
           imagePaths,
         });
         audioPath = localVoiceover;
-        log.log(`TTS done ${durationMs}ms (${ttsProvider}, voice=${resolvedVoice})`);
+        log.log(`[TS]`, `TTS done ${durationMs}ms (${ttsProvider}, voice=${resolvedVoice})`);
       } else {
-        log.debug(`TTS skipped (checkpoint ${durationMs}ms)`);
+        log.debug(`[TS]`, `TTS skipped (checkpoint ${durationMs}ms)`);
       }
 
       // ── Expand scenes ──
@@ -255,6 +289,7 @@ const worker = new Worker<VideoJobData>(
         await Promise.all(imagePaths.map(fileExists)).then(r => r.every(Boolean));
 
       if (!completed.has("IMAGES") || !allImagesExist) {
+        recordStageStart(checkpoint, "IMAGES");
         await updateStage(videoId, "IMAGES");
         const resolvedArtStyle = getArtStyleById(artStyle);
         const resolvedNeg = negativePrompt ?? resolvedArtStyle?.negativePrompt ?? "low quality, blurry, watermark, text";
@@ -276,7 +311,7 @@ const worker = new Worker<VideoJobData>(
           `\n── RESULT ──\n${targetImageCount} images generated → scenes/ directory`,
         );
 
-        log.log(`IMAGES generating ${targetImageCount} (${imageProvider})`);
+        log.log(`[IMG]`, `IMAGES generating ${targetImageCount} (${imageProvider})`);
 
         const img = getImageProvider(imageProvider);
         const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
@@ -286,6 +321,7 @@ const worker = new Worker<VideoJobData>(
         });
         imagePaths = imgResult.imagePaths;
 
+        recordStageEnd(checkpoint, "IMAGES");
         completed.add("IMAGES");
         await saveCheckpoint(videoId, {
           completedStages: [...completed], relDir,
@@ -295,7 +331,7 @@ const worker = new Worker<VideoJobData>(
           reviewMode,
           musicPath,
         });
-        log.log(`IMAGES done ${imagePaths.length} images`);
+        log.log(`[IMG]`, `IMAGES done ${imagePaths.length} images`);
 
         if (reviewMode) {
           await fs.writeFile(contextAbsPath(relDir), ctx.join("\n"), "utf-8");
@@ -303,7 +339,7 @@ const worker = new Worker<VideoJobData>(
             where: { id: videoId },
             data: { status: "REVIEW", generationStage: null, voiceoverUrl: audioPath },
           });
-          log.log(`REVIEW paused ${videoId}`);
+          log.log(`[IMG]`, `REVIEW paused ${videoId}`);
           return;
         }
       } else {
@@ -312,33 +348,64 @@ const worker = new Worker<VideoJobData>(
           const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}${ext}`);
           if (!(await fileExists(dest))) await fs.copyFile(imagePaths![i], dest);
         }
-        log.debug(`IMAGES skipped (checkpoint ${imagePaths!.length})`);
+        log.debug(`[IMG]`, `IMAGES skipped (checkpoint ${imagePaths!.length})`);
       }
 
       // ── Optional: image-to-video (per-scene clips) ──
       let sceneInputs: Array<{ type: "image"; path: string } | { type: "video"; path: string }> | undefined;
       if (imageToVideoProvider && !reviewMode && imagePaths!.length > 0) {
-        log.log(`IMAGE-TO-VIDEO generating clips (${imageToVideoProvider}) for ${imagePaths!.length} scenes`);
-        const clipResults = await generateClipsFromImages(imagePaths!, {
+        recordStageStart(checkpoint, "I2V");
+        await updateStage(videoId, "I2V");
+
+        // Scan for existing valid clips — skip on retry, delete corrupt ones
+        const existingClips = new Map<number, string>();
+        for (let i = 0; i < imagePaths!.length; i++) {
+          const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
+          if (await fileExists(dest)) {
+            if (await isValidMp4File(dest)) {
+              existingClips.set(i, dest);
+            } else {
+              log.warn(`[I2V]`, `scene-${i.toString().padStart(3, "0")} clip corrupt, removing`);
+              await fs.unlink(dest).catch(() => {});
+            }
+          }
+        }
+
+        const toGenerate = imagePaths!.length - existingClips.size;
+        log.log(`[I2V]`, `${toGenerate} to generate, ${existingClips.size} cached — ${imageToVideoProvider}`);
+
+        const prompts = imageSlots.map((s, i) =>
+          buildImageToVideoPrompt(s.visualDescription, i, imageSlots.length),
+        );
+        const { results: clipResults, ctxLines: i2vCtx } = await generateClipsFromImages(imagePaths!, {
           providerId: imageToVideoProvider,
-          onProgress: (idx, p) => p && log.debug(`Scene ${idx + 1} clip done`),
+          prompts,
+          durationSec: 5,
+          noFallback: true,
+          existingClips,
         });
+        ctxSection("3.5 · IMAGE-TO-VIDEO", ...i2vCtx);
+
         sceneInputs = [];
         for (let i = 0; i < imagePaths!.length; i++) {
           const clipPath = clipResults[i];
-          if (clipPath) {
+          if (!clipPath) {
+            throw new Error(`scene-${i.toString().padStart(3, "0")} I2V produced no clip (no fallback)`);
+          }
+          if (!existingClips.has(i)) {
             const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
             await fs.copyFile(clipPath, dest);
             sceneInputs.push({ type: "video", path: dest });
           } else {
-            sceneInputs.push({ type: "image", path: imagePaths![i] });
+            sceneInputs.push({ type: "video", path: clipPath });
           }
         }
-        const clipCount = sceneInputs.filter((s) => s.type === "video").length;
-        log.log(`IMAGE-TO-VIDEO done: ${clipCount}/${sceneInputs.length} clips`);
+        log.log(`[I2V]`, `IMAGE-TO-VIDEO done: ${sceneInputs.length}/${sceneInputs.length} clips`);
+        recordStageEnd(checkpoint, "I2V");
       }
 
       // ── Assembly ──
+      recordStageStart(checkpoint, "ASSEMBLY");
       await updateStage(videoId, "ASSEMBLY");
       const outputPath = videoAbsPath(relDir);
 
@@ -367,13 +434,18 @@ const worker = new Worker<VideoJobData>(
         niche: niche ?? "",
         language: language ?? "en",
       });
-      log.log(`ASSEMBLY done`);
+      log.log(`[ASSEMBLE]`, `ASSEMBLY done`);
+
+      recordStageEnd(checkpoint, "ASSEMBLY");
+      await saveCheckpoint(videoId, { ...checkpoint });
 
       await fs.writeFile(contextAbsPath(relDir), ctx.join("\n"), "utf-8");
 
       // ── Finalize ──
+      recordStageStart(checkpoint, "UPLOADING");
       await updateStage(videoId, "UPLOADING");
       const relVideoUrl = videoRelUrl(relDir);
+      recordStageEnd(checkpoint, "UPLOADING");
       await db.video.update({
         where: { id: videoId },
         data: {
@@ -381,60 +453,73 @@ const worker = new Worker<VideoJobData>(
           generationStage: null,
           videoUrl: relVideoUrl,
           duration: durationMs ? Math.round(durationMs / 1000) : null,
-          checkpointData: null,
+          checkpointData: checkpoint as never,
+          stageTimings: checkpoint.stageTimings ?? null,
         },
       });
 
-      log.log(`READY ${videoId} → ${relVideoUrl}`);
+      log.log(`[READY]`, `${videoId} → ${relVideoUrl}`);
 
       try {
         const results = await postVideoToSocials(videoId);
         if (results.length > 0) {
           const posted = results.filter((r) => r.success).map((r) => r.platform);
           const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-          if (posted.length > 0) log.log(`POSTED ${videoId} → ${posted.join(", ")}`);
-          if (failed.length > 0) log.warn(`POST_FAIL ${videoId}: ${failed.join("; ")}`);
+          if (posted.length > 0) log.log(`[POST]`, `POSTED → ${posted.join(", ")}`);
+          if (failed.length > 0) log.warn(`[POST]`, `POST_FAIL: ${failed.join("; ")}`);
         }
       } catch (postErr) {
-        log.warn(`POST_ERR ${videoId}:`, postErr);
+        log.warn(`[POST]`, `POST_ERR:`, postErr);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      // Always print exact failure to console (basic rule: user sees real errors)
-      console.error(`[Worker] FAILED ${videoId}:`, msg);
+      console.error(`[worker-${videoId}] [ERR] FAILED:`, msg);
       if (error instanceof Error && error.stack) console.error(error.stack);
       if (error instanceof Error && "cause" in error && (error as Error & { cause?: unknown }).cause !== undefined) {
-        console.error("[Worker] Cause:", (error as Error & { cause?: unknown }).cause);
+        console.error(`[worker-${videoId}] [ERR] Cause:`, (error as Error & { cause?: unknown }).cause);
       }
-      log.error(`FAILED ${videoId}: ${msg}`);
-      if (error instanceof Error && error.stack) log.error(`Stack: ${error.stack}`);
+      log.error(`[ERR]`, `FAILED: ${msg}`);
+      if (error instanceof Error && error.stack) log.error(`[ERR]`, `Stack: ${error.stack}`);
 
       try {
+        const cp = await loadCheckpoint(videoId);
         await db.video.update({
           where: { id: videoId },
-          data: { status: "FAILED", generationStage: null, errorMessage: msg.slice(0, 500) },
+          data: {
+            status: "FAILED",
+            generationStage: null,
+            errorMessage: msg.slice(0, 500),
+            stageTimings: cp.stageTimings ?? null,
+          },
         });
       } catch (dbErr) {
-        log.error(`CRITICAL db update failed for ${videoId}:`, dbErr);
-        console.error("[Worker] CRITICAL db update failed:", dbErr);
+        log.error(`[ERR]`, `CRITICAL db update failed:`, dbErr);
+        console.error(`[worker-${videoId}] [ERR] CRITICAL db update failed:`, dbErr);
       }
 
       throw error;
     }
+    });
   },
-  { connection: redis as never, concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10) }
+  {
+    connection: redis as never,
+    concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10),
+    lockDuration: 600_000,
+    lockRenewTime: 300_000,
+    stalledInterval: 600_000,
+  }
 );
 
-worker.on("completed", (job) => log.log(`JOB_DONE ${job.id}`));
+worker.on("completed", (job) => log.log(`[JOB]`, `JOB_DONE ${job.id}`));
 worker.on("failed", (job, err) => {
   const msg = err?.message ?? String(err);
-  // Always print exact failure to console (basic rule: user sees real errors)
-  console.error(`[Worker] JOB_FAIL ${job?.id}:`, msg);
+  const videoId = job?.data?.videoId ?? job?.id;
+  console.error(`[worker-${videoId}] [ERR] JOB_FAIL:`, msg);
   if (err instanceof Error && err.stack) console.error(err.stack);
   if (err instanceof Error && "cause" in err && (err as Error & { cause?: unknown }).cause !== undefined) {
-    console.error("[Worker] Cause:", (err as Error & { cause?: unknown }).cause);
+    console.error(`[worker-${videoId}] [ERR] Cause:`, (err as Error & { cause?: unknown }).cause);
   }
-  log.error(`JOB_FAIL ${job?.id}: ${msg}`);
+  log.error(`[ERR]`, `JOB_FAIL ${job?.id}: ${msg}`);
   if (err instanceof Error && err.stack) log.error(err.stack);
 });
 

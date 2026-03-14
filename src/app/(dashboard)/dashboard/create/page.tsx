@@ -201,9 +201,9 @@ export default function CreatePage() {
         body: JSON.stringify({
           name: generatedScript.title, niche: selectedNiche, artStyle, voiceId, language, tone, duration,
           title: generatedScript.title, scriptText: scenes.map((s) => s.text).join(" "), scenes,
-          llmProvider: llmProvider || undefined,
-          ttsProvider: ttsProvider || undefined,
-          imageProvider: imageProvider || undefined,
+          llmProvider: llmProvider || providerData?.defaults.llmProvider || undefined,
+          ttsProvider: ttsProvider || providerData?.defaults.ttsProvider || undefined,
+          imageProvider: imageProvider || providerData?.defaults.imageProvider || undefined,
           characterId: selectedCharacterId || undefined,
         }),
       });

@@ -17,14 +17,17 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  /** "replicate" | "huggingface" */
-  type: "replicate" | "huggingface";
+  type: "replicate" | "huggingface" | "local" | "pollinations";
+  /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
+  localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
   replicateModel?: string;
   /** Hugging Face model ID (e.g. "Lightricks/LTX-Video-0.9.7-distilled") when type === "huggingface" */
   hfModelId?: string;
   /** URL to Hugging Face Space or similar when type === "external" */
   externalUrl?: string;
+  /** Pollinations video model name (e.g. "grok-video", "wan") when type === "pollinations" */
+  pollinationsModel?: string;
   costEstimate?: string;
   envVar: string;
 }
@@ -57,6 +60,23 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     hfModelId: "Wan-AI/Wan2.2-TI2V-5B",
     costEstimate: "Free (HF)",
     envVar: "HUGGINGFACE_API_KEY",
+  },
+  LOCAL_BACKEND: {
+    id: "LOCAL_BACKEND",
+    name: "Local Backend (I2V)",
+    description: "Your local server POST /api/video — image + prompt → short video clip.",
+    type: "local",
+    costEstimate: "Free",
+    envVar: "",
+  },
+  POLLINATIONS_GROK_VIDEO: {
+    id: "POLLINATIONS_GROK_VIDEO",
+    name: "Grok Video (Pollinations)",
+    description: "xAI Grok video generation via Pollinations — the only model available on the free tier. ~5s clips, ~40s generation time.",
+    type: "pollinations",
+    pollinationsModel: "grok-video",
+    costEstimate: "Free (tier balance)",
+    envVar: "POLLINATIONS_API_KEY",
   },
 };
 
@@ -102,8 +122,10 @@ export function getImageToVideoProvider(id: string): ImageToVideoProviderInfo | 
 
 export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] {
   return Object.values(IMAGE_TO_VIDEO_PROVIDERS).filter((p) => {
+    if (p.type === "local") return true;
     if (!p.envVar) return true;
     if (p.envVar === "HUGGINGFACE_API_KEY") return isHuggingFaceConfigured();
+    if (p.envVar === "POLLINATIONS_API_KEY") return !!process.env.POLLINATIONS_API_KEY;
     return !!process.env[p.envVar];
   });
 }
@@ -120,8 +142,8 @@ export interface ImageToVideoProviderOption {
 export function getImageToVideoProviderOptionsForSettings(): ImageToVideoProviderOption[] {
   const off: ImageToVideoProviderOption = {
     id: "",
-    name: "Off",
-    description: "Do not animate scene images (use static images with Ken Burns only).",
+    name: "Static images → final video",
+    description: "Use scene images as-is (Ken Burns effect) and stitch into the final video. No AI animation.",
     costEstimate: "Free",
     envVar: "",
   };

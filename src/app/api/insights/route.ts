@@ -114,10 +114,10 @@ export async function GET(req: NextRequest) {
       where: { userId },
       select: { id: true, name: true, seriesId: true },
     });
-    const byAutomation: Record<string, { totalViews: number; totalLikes: number; totalComments: number; totalReactions: number; totalInteractions: number; videoCount: number; lastRefreshedAt: string | null }> = {};
+    const byAutomation: Record<string, { totalViews: number; totalLikes: number; totalComments: number; totalReactions: number; totalInteractions: number; videoCount: number; lastRefreshedAt: string | null; avgViews: number; avgInteractions: number }> = {};
     for (const auto of automations) {
       if (!auto.seriesId) {
-        byAutomation[auto.id] = { totalViews: 0, totalLikes: 0, totalComments: 0, totalReactions: 0, totalInteractions: 0, videoCount: 0, lastRefreshedAt: null };
+        byAutomation[auto.id] = { totalViews: 0, totalLikes: 0, totalComments: 0, totalReactions: 0, totalInteractions: 0, videoCount: 0, lastRefreshedAt: null, avgViews: 0, avgInteractions: 0 };
         continue;
       }
       const autoVideos = videos.filter((v) => v.seriesId === auto.seriesId);
@@ -131,14 +131,18 @@ export async function GET(req: NextRequest) {
         ar += s.reactions;
         if (v.insightsRefreshedAt && (!aRefreshed || v.insightsRefreshedAt > aRefreshed)) aRefreshed = v.insightsRefreshedAt;
       }
+      const interactions = al + ac + ar;
+      const n = autoVideos.length;
       byAutomation[auto.id] = {
         totalViews: av,
         totalLikes: al,
         totalComments: ac,
         totalReactions: ar,
-        totalInteractions: al + ac + ar,
-        videoCount: autoVideos.length,
+        totalInteractions: interactions,
+        videoCount: n,
         lastRefreshedAt: aRefreshed?.toISOString() ?? null,
+        avgViews: n > 0 ? Math.round((av / n) * 10) / 10 : 0,
+        avgInteractions: n > 0 ? Math.round((interactions / n) * 10) / 10 : 0,
       };
     }
 

@@ -4,15 +4,21 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("Facebook");
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 
-/** Return the full API error body as a string so logs/UI show exactly what FB returned (no sugarcoating). */
-function rawFbError(body: unknown): string {
-  if (body == null) return "Unknown error";
+/** Log raw API error to console; return a short user-facing message for UI. */
+function fbErrorForUi(body: unknown): string {
+  if (body == null) return "Something went wrong. Try again later.";
+  const raw = typeof body === "string" ? body : JSON.stringify(body);
+  const truncated = raw.length > 2000 ? raw.slice(0, 2000) + "…" : raw;
+  console.error("[Facebook] API error (raw):", truncated);
   try {
-    const s = typeof body === "string" ? body : JSON.stringify(body);
-    return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
+    const parsed = typeof body === "object" ? body : JSON.parse(raw);
+    const err = (parsed as { error?: { message?: string; error_user_msg?: string } }).error;
+    const msg = err?.error_user_msg || err?.message;
+    if (typeof msg === "string" && msg.trim()) return msg.trim();
   } catch {
-    return String(body);
+    // ignore parse errors
   }
+  return "Something went wrong. Try again later.";
 }
 
 interface PostResult {
@@ -85,7 +91,7 @@ export async function postFacebookReel(
 
     if (!startRes.ok) {
       const err = await startRes.json().catch(() => ({}));
-      return { success: false, error: rawFbError(err) };
+      return { success: false, error: fbErrorForUi(err) };
     }
 
     const { video_id: videoId, upload_url: uploadUrl } = await startRes.json();
@@ -106,7 +112,7 @@ export async function postFacebookReel(
       const err = await uploadRes.text();
       let parsed: unknown;
       try { parsed = JSON.parse(err); } catch { parsed = err; }
-      return { success: false, error: rawFbError(parsed) };
+      return { success: false, error: fbErrorForUi(parsed) };
     }
 
     const finishRes = await fetch(`${GRAPH_API}/${pageId}/video_reels`, {
@@ -123,7 +129,7 @@ export async function postFacebookReel(
 
     if (!finishRes.ok) {
       const err = await finishRes.json().catch(() => ({}));
-      return { success: false, error: rawFbError(err) };
+      return { success: false, error: fbErrorForUi(err) };
     }
 
     const result = await finishRes.json();
@@ -227,9 +233,9 @@ export async function postFacebookComment(
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      const raw = rawFbError(err);
-      log.warn(`FB first comment failed on ${videoId}: ${raw}`);
-      return { success: false, error: raw };
+      const raw = typeof err === "string" ? err : JSON.stringify(err);
+      log.warn(`FB first comment failed on ${videoId}:`, raw);
+      return { success: false, error: fbErrorForUi(err) };
     }
     const { id } = await res.json();
     log.log(`FB first comment posted: ${id} at ${new Date().toISOString()} | text: "${text.slice(0, 80)}..."`);

@@ -42,6 +42,7 @@ enum GenerationStage {
   SCRIPT
   TTS
   IMAGES
+  I2V
   ASSEMBLY
   UPLOADING
 }
@@ -66,6 +67,7 @@ enum LlmProvider {
   DEEPSEEK_V3
   QWEN
   LOCAL_LLM
+  LOCAL_BACKEND
   HF_STORY
   HF_STORY_ZEPHYR
   HF_STORY_MISTRAL_INSTRUCT
@@ -82,6 +84,7 @@ enum TtsProvider {
   FISH_AUDIO
   EDGE_TTS
   HF_TTS
+  LOCAL_BACKEND
 }
 
 enum ImageProvider {
@@ -97,6 +100,7 @@ enum ImageProvider {
   IDEOGRAM
   POLLINATIONS
   HF_IMAGE
+  LOCAL_BACKEND
 }
 
 // ─── Models ──────────────────────────────────────────────
@@ -191,6 +195,7 @@ model Automation {
   llmProvider     LlmProvider?
   ttsProvider     TtsProvider?
   imageProvider   ImageProvider?
+  imageToVideoProvider String?
 
   targetPlatforms Json          @default("[]")
   enabled         Boolean       @default(true)
@@ -232,6 +237,7 @@ model Video {
   postedPlatforms  Json             @default("[]")
   errorMessage     String?
   checkpointData   Json?
+  stageTimings     Json?   // per-stage durations: { SCRIPT: { startedAt, completedAt, durationMs }, ... }
   retryCount       Int              @default(0)
   insights         Json?
   insightsRefreshedAt DateTime?
@@ -298,7 +304,7 @@ model AdminSettings {
   id                    String   @id @default("singleton")
   enabledLlmProviders   Json     @default("[\"GEMINI_FLASH\",\"OPENAI_GPT4O_MINI\",\"DEEPSEEK_V3\",\"QWEN\"]")
   enabledTtsProviders   Json     @default("[\"GEMINI_TTS\",\"ELEVENLABS\",\"COSYVOICE\",\"FISH_AUDIO\",\"EDGE_TTS\",\"HF_TTS\"]")
-  enabledImageProviders Json     @default("[\"GEMINI_IMAGEN\",\"DALLE3\",\"FLUX\",\"KOLORS\",\"SDXL\",\"FLUX_SCHNELL\",\"TOGETHER\",\"SILICONFLOW\",\"LEONARDO\",\"IDEOGRAM\",\"POLLINATIONS\",\"HF_IMAGE\"]")
+  enabledImageProviders Json     @default("[\"GEMINI_IMAGEN\",\"DALLE3\",\"FLUX\",\"KOLORS\",\"SDXL\",\"FLUX_SCHNELL\",\"TOGETHER\",\"SILICONFLOW\",\"LEONARDO\",\"IDEOGRAM\",\"POLLINATIONS\",\"HF_IMAGE\",\"LOCAL_BACKEND\"]")
   updatedAt             DateTime @updatedAt
 
   @@map("admin_settings")

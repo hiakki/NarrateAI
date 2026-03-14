@@ -85,16 +85,20 @@ function isAuthError(err: unknown): boolean {
   const code = (err as { code?: number | string }).code;
   if (code === 401 || code === "401") return true;
   const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
   return (
-    msg.toLowerCase().includes("invalid authentication") ||
-    msg.toLowerCase().includes("invalid credentials") ||
-    msg.toLowerCase().includes("token has been expired or revoked")
+    lower.includes("invalid authentication") ||
+    lower.includes("invalid credentials") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("token has been expired or revoked")
   );
 }
 
 /** Translate raw YouTube API errors into actionable messages for logs & UI. */
 function classifyYtError(raw: string): string {
   const lower = raw.toLowerCase();
+  if (lower.includes("invalid_grant"))
+    return "YouTube refresh token expired or revoked. Reconnect YouTube in Channels settings.";
   if (lower.includes("token has been expired or revoked"))
     return "YouTube token expired/revoked. Reconnect YouTube in Channels.";
   if (lower.includes("quota") || lower.includes("quotaexceeded"))

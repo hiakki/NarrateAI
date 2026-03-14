@@ -25,7 +25,7 @@ function getGeminiDisplayName(): string {
 function getLocalLlmName(): string {
   const model = (process.env.LOCAL_LLM_MODEL ?? "").trim();
   if (model) return `Local LLM (${model})`;
-  const url = (process.env.LOCAL_LLM_URL ?? "").trim();
+  const url = (process.env.LOCAL_BACKEND_URL ?? process.env.LOCAL_LLM_URL ?? "").trim();
   if (url) {
     try { return `Local LLM (${new URL(url).hostname})`; } catch { /* ignore */ }
   }
@@ -68,10 +68,18 @@ export const LLM_PROVIDERS: Record<string, ProviderInfo> = {
   LOCAL_LLM: {
     id: "LOCAL_LLM",
     name: getLocalLlmName(),
-    description: "Your own LLM — Ollama, vLLM, llama.cpp, or any OpenAI-compatible endpoint",
+    description: "OpenAI-compatible chat at LOCAL_BACKEND_URL/v1 (Ollama, vLLM, etc.)",
     costEstimate: "Free",
     qualityLabel: "Good",
-    envVar: "LOCAL_LLM_URL",
+    envVar: "LOCAL_BACKEND_URL",
+  },
+  LOCAL_BACKEND: {
+    id: "LOCAL_BACKEND",
+    name: "Local Backend",
+    description: "Single server: /api/story, /api/tts, /api/image, /api/video. Same LOCAL_BACKEND_URL.",
+    costEstimate: "Free",
+    qualityLabel: "Good",
+    envVar: "LOCAL_BACKEND_URL",
   },
   // HF_STORY removed: only concrete HF models are shown (e.g. HF: Qwen 7B Instruct).
   // Existing automations with llmProvider "HF_STORY" still work via factory fallback and resolve to the single model.
@@ -129,6 +137,14 @@ export const TTS_PROVIDERS: Record<string, ProviderInfo> = {
     description: "100% free Microsoft neural voices, no API key needed",
     costEstimate: "Free",
     qualityLabel: "Great",
+    envVar: "",
+  },
+  LOCAL_BACKEND: {
+    id: "LOCAL_BACKEND",
+    name: "Local Backend TTS",
+    description: "Your local server POST /api/tts (edge-tts or custom). Set LOCAL_BACKEND_URL or default http://localhost:8000",
+    costEstimate: "Free",
+    qualityLabel: "Good",
     envVar: "",
   },
   HF_TTS: {
@@ -238,6 +254,14 @@ export const IMAGE_PROVIDERS: Record<string, ProviderInfo> = {
     qualityLabel: "Great",
     envVar: "HUGGINGFACE_API_KEY",
   },
+  LOCAL_BACKEND: {
+    id: "LOCAL_BACKEND",
+    name: "Local Backend Image",
+    description: "Your local server POST /api/image. Set LOCAL_BACKEND_URL or default http://localhost:8000",
+    costEstimate: "Free",
+    qualityLabel: "Good",
+    envVar: "",
+  },
 };
 
 const PROVIDER_MAPS: Record<ProviderStage, Record<string, ProviderInfo>> = {
@@ -267,6 +291,9 @@ function isLlmProviderAvailable(p: ProviderInfo): boolean {
   if (p.id === "HF_STORY" || p.id.startsWith("HF_STORY_")) {
     return isHfStoryEnvAvailable();
   }
+  if (p.id === "LOCAL_LLM") {
+    return isEnvAvailable("LOCAL_BACKEND_URL") || isEnvAvailable("LOCAL_LLM_URL");
+  }
   return isEnvAvailable(p.envVar);
 }
 
@@ -293,6 +320,9 @@ export function isProviderAvailable(stage: ProviderStage, providerId: string): b
   if (!info) return false;
   if (stage === "llm" && (info.id === "HF_STORY" || info.id.startsWith("HF_STORY_"))) {
     return isHfStoryEnvAvailable();
+  }
+  if (stage === "llm" && info.id === "LOCAL_LLM") {
+    return isEnvAvailable("LOCAL_BACKEND_URL") || isEnvAvailable("LOCAL_LLM_URL");
   }
   if (stage === "tts" && info.id === "HF_TTS") return false;
   return isEnvAvailable(info.envVar);

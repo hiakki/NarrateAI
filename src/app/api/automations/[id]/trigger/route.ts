@@ -124,7 +124,7 @@ export async function POST(
       llmProvider: providers.llm,
       ttsProvider: providers.tts,
       imageProvider: providers.image,
-      imageToVideoProvider: auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
+      imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
     });
 

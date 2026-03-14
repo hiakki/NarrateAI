@@ -55,6 +55,7 @@ interface AutomationDetail {
   llmProvider: string | null;
   ttsProvider: string | null;
   imageProvider: string | null;
+  imageToVideoProvider: string | null;
   characterId: string | null;
   targetPlatforms: string[];
   enabled: boolean;
@@ -88,9 +89,10 @@ interface ProviderInfo {
 }
 
 interface ProviderData {
-  defaults: { llmProvider: string; ttsProvider: string; imageProvider: string };
+  defaults: { llmProvider: string; ttsProvider: string; imageProvider: string; imageToVideoProvider?: string | null };
   platformDefaults: { llm: string; tts: string; image: string };
   available: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
+  imageToVideo?: { all: { id: string; name: string; description?: string }[]; availableIds: string[] };
 }
 
 const PLATFORM_CONFIG = {
@@ -104,6 +106,60 @@ const PLATFORM_CONFIG = {
 const FREQ_LABEL: Record<string, string> = {
   daily: "Daily", every_other_day: "Every other day", weekly: "Weekly",
 };
+
+const FREQ_THRESHOLDS: Record<string, number> = { daily: 26, every_other_day: 50, weekly: 170 };
+
+function parseSlotMinute(t: string): number {
+  const [h, m] = t.trim().split(":").map((n) => parseInt(n, 10));
+  return (Number.isFinite(h) ? h : 23) * 60 + (Number.isFinite(m) ? m : 59);
+}
+
+function localNowParts(tz: string): { dateKey: string; minuteOfDay: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const hour = parseInt(v("hour") || "0", 10);
+  const minute = parseInt(v("minute") || "0", 10);
+  return {
+    dateKey: `${v("year")}-${v("month")}-${v("day")}`,
+    minuteOfDay: (Number.isFinite(hour) ? hour : 0) * 60 + (Number.isFinite(minute) ? minute : 0),
+  };
+}
+
+function localDateKey(date: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${v("year")}-${v("month")}-${v("day")}`;
+}
+
+function isScheduleMissed(auto: { enabled: boolean; frequency: string; postTime: string; timezone: string; lastRunAt: string | null }): boolean {
+  if (!auto.enabled) return false;
+
+  if (auto.frequency === "daily") {
+    const { dateKey: todayKey, minuteOfDay: nowMinute } = localNowParts(auto.timezone);
+    const slots = auto.postTime.split(",").map((t) => parseSlotMinute(t)).sort((a, b) => a - b);
+    if (slots.length === 0) return false;
+    if (!auto.lastRunAt) return true;
+
+    const lastRunKey = localDateKey(new Date(auto.lastRunAt), auto.timezone);
+    if (lastRunKey === todayKey) return false;
+
+    if (slots.some((m) => m <= nowMinute)) return true;
+
+    const yesterdayKey = localDateKey(new Date(Date.now() - 86_400_000), auto.timezone);
+    return lastRunKey !== yesterdayKey;
+  }
+
+  const timesPerDay = auto.postTime.split(",").length;
+  let threshold = FREQ_THRESHOLDS[auto.frequency] ?? 26;
+  if (timesPerDay > 1) threshold = Math.min(threshold, 26 / timesPerDay);
+  if (!auto.lastRunAt) return true;
+  return (Date.now() - new Date(auto.lastRunAt).getTime()) / 3_600_000 > threshold;
+}
 
 const FREQUENCIES = [
   { value: "daily", label: "Daily" },
@@ -146,6 +202,7 @@ export default function AutomationDetailPage() {
   const [saveMsg, setSaveMsg] = useState("");
   const [triggering, setTriggering] = useState(false);
   const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
+  const [resettingProviders, setResettingProviders] = useState(false);
 
   const [editName, setEditName] = useState("");
   const [editNiche, setEditNiche] = useState("");
@@ -157,6 +214,7 @@ export default function AutomationDetailPage() {
   const [editLlmProvider, setEditLlmProvider] = useState("");
   const [editTtsProvider, setEditTtsProvider] = useState("");
   const [editImageProvider, setEditImageProvider] = useState("");
+  const [editImageToVideoProvider, setEditImageToVideoProvider] = useState<string>("");
   const [editCharacterId, setEditCharacterId] = useState<string>("");
   const [editFrequency, setEditFrequency] = useState("daily");
   const [editPostTimes, setEditPostTimes] = useState<string[]>(["09:00"]);
@@ -216,7 +274,7 @@ export default function AutomationDetailPage() {
   const fetchData = useCallback(async () => {
     try {
       const [autoRes, acctRes, provRes, charRes] = await Promise.all([
-        fetch(`/api/automations/${id}`),
+        fetch(`/api/automations/${id}`, { cache: "no-store" }),
         fetch("/api/social/accounts"),
         fetch("/api/settings/providers"),
         fetch("/api/characters"),
@@ -254,11 +312,12 @@ export default function AutomationDetailPage() {
     setEditLlmProvider(auto.llmProvider === "HF_STORY" ? "HF_STORY_QWEN_7B" : (auto.llmProvider ?? ""));
     setEditTtsProvider(auto.ttsProvider ?? "");
     setEditImageProvider(auto.imageProvider ?? "");
+    setEditImageToVideoProvider(auto.imageToVideoProvider ?? "");
     setEditCharacterId(auto.characterId ?? "");
     setEditFrequency(auto.frequency);
     setEditPostTimes(auto.postTime.split(",").map((t: string) => t.trim()));
     setEditTimezone(auto.timezone);
-    setShowProviders(!!(auto.llmProvider || auto.ttsProvider || auto.imageProvider));
+    setShowProviders(!!(auto.llmProvider || auto.ttsProvider || auto.imageProvider || auto.imageToVideoProvider));
     setEditing(true);
     setSaveMsg("");
   }
@@ -278,9 +337,11 @@ export default function AutomationDetailPage() {
           duration: editDuration,
           language: editLanguage,
           voiceId: editVoiceId || null,
-          llmProvider: editLlmProvider && editLlmProvider !== (providerData?.defaults.llmProvider ?? providerData?.platformDefaults.llm) ? editLlmProvider : null,
-          ttsProvider: editTtsProvider && editTtsProvider !== (providerData?.defaults.ttsProvider ?? providerData?.platformDefaults.tts) ? editTtsProvider : null,
-          imageProvider: editImageProvider && editImageProvider !== (providerData?.defaults.imageProvider ?? providerData?.platformDefaults.image) ? editImageProvider : null,
+          // Persist chosen providers; no fallbacks — use exactly what the user selected
+          llmProvider: editLlmProvider?.trim() ? editLlmProvider.trim() : null,
+          ttsProvider: editTtsProvider?.trim() ? editTtsProvider.trim() : null,
+          imageProvider: editImageProvider?.trim() ? editImageProvider.trim() : null,
+          imageToVideoProvider: editImageToVideoProvider || null,
           characterId: editCharacterId || null,
           frequency: editFrequency,
           postTime: editPostTimes.join(","),
@@ -399,6 +460,32 @@ export default function AutomationDetailPage() {
     } finally {
       setRetryingVideoId(null);
     }
+  }
+
+  async function handleResetProviders() {
+    setResettingProviders(true);
+    try {
+      const res = await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          llmProvider: null,
+          ttsProvider: null,
+          imageProvider: null,
+          imageToVideoProvider: null,
+        }),
+      });
+      if (res.ok) {
+        setAuto((prev) => prev ? {
+          ...prev,
+          llmProvider: null,
+          ttsProvider: null,
+          imageProvider: null,
+          imageToVideoProvider: null,
+        } : prev);
+      }
+    } catch { /* ignore */ }
+    setResettingProviders(false);
   }
 
   if (loading) {
@@ -717,6 +804,31 @@ export default function AutomationDetailPage() {
                             ))}
                           </div>
                         </div>
+                        {providerData.imageToVideo && (
+                          <div>
+                            <Label className="text-[10px] mb-0.5 block text-muted-foreground">Final video from</Label>
+                            <p className="text-[10px] text-muted-foreground mb-1">Static images only: stitch scene images into the final video (Ken Burns). Or use AI image-to-video: each scene becomes a short clip, then clips are stitched with voiceover.</p>
+                            <div className="flex flex-wrap gap-1">
+                              {providerData.imageToVideo.all.map((p) => {
+                                const available = p.id === "" || (providerData.imageToVideo?.availableIds ?? []).includes(p.id);
+                                const resolved = editImageToVideoProvider || (providerData.defaults.imageToVideoProvider ?? "");
+                                const selected = resolved === p.id;
+                                return (
+                                  <Button
+                                    key={p.id}
+                                    size="xs"
+                                    variant={selected ? "default" : "outline"}
+                                    disabled={!available}
+                                    onClick={() => setEditImageToVideoProvider(selected ? "" : p.id)}
+                                    title={p.description}
+                                  >
+                                    {p.name}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -783,12 +895,23 @@ export default function AutomationDetailPage() {
                     </div>
                   )}
                 </div>
-                {(auto.llmProvider || auto.ttsProvider || auto.imageProvider) && (
+                {(auto.llmProvider || auto.ttsProvider || auto.imageProvider || auto.imageToVideoProvider) && (
                   <>
                     <div className="col-span-2">
                       <Separator className="my-1" />
-                      <span className="text-muted-foreground text-xs">Provider Overrides</span>
-                      <div className="flex gap-3 mt-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground text-xs">Provider Overrides</span>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-destructive"
+                          onClick={handleResetProviders}
+                          disabled={resettingProviders}
+                        >
+                          {resettingProviders ? <Loader2 className="h-3 w-3 animate-spin" /> : <><X className="mr-0.5 h-3 w-3" /> Reset</>}
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-1">
                         {auto.llmProvider && (
                           <Badge variant="secondary" className="text-[10px]">Script: {formatProvider(auto.llmProvider)}</Badge>
                         )}
@@ -797,6 +920,11 @@ export default function AutomationDetailPage() {
                         )}
                         {auto.imageProvider && (
                           <Badge variant="secondary" className="text-[10px]">Image: {formatProvider(auto.imageProvider)}</Badge>
+                        )}
+                        {auto.imageToVideoProvider && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Video: Image-to-Video ({formatProvider(auto.imageToVideoProvider)})
+                          </Badge>
                         )}
                       </div>
                     </div>
@@ -994,14 +1122,7 @@ export default function AutomationDetailPage() {
                   </span>
                 </div>
                 {(() => {
-                  const thresholds: Record<string, number> = { daily: 26, every_other_day: 50, weekly: 170 };
-                  const timesPerDay = auto.postTime.split(",").length;
-                  let threshold = thresholds[auto.frequency] ?? 26;
-                  if (timesPerDay > 1 && auto.frequency === "daily") threshold = Math.min(threshold, 26 / timesPerDay);
-                  const hoursSince = auto.lastRunAt
-                    ? (Date.now() - new Date(auto.lastRunAt).getTime()) / (1000 * 60 * 60)
-                    : Infinity;
-                  const missed = auto.enabled && hoursSince > threshold;
+                  const missed = auto.enabled && isScheduleMissed(auto);
                   return (
                     <div className="space-y-1.5">
                       <div className="text-xs text-muted-foreground">

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { z } from "zod/v4";
 import fs from "fs/promises";
 import path from "path";
+import { IMAGE_TO_VIDEO_PROVIDERS } from "@/config/image-to-video-providers";
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -16,6 +17,7 @@ const updateSchema = z.object({
   llmProvider: z.string().nullable().optional(),
   ttsProvider: z.string().nullable().optional(),
   imageProvider: z.string().nullable().optional(),
+  imageToVideoProvider: z.string().nullable().optional(),
   characterId: z.string().nullable().optional(),
   targetPlatforms: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
@@ -105,6 +107,19 @@ export async function PATCH(
     if (input.ttsProvider !== undefined) data.ttsProvider = input.ttsProvider;
     if (input.imageProvider !== undefined)
       data.imageProvider = input.imageProvider;
+    if (input.imageToVideoProvider !== undefined) {
+      const val = input.imageToVideoProvider ?? null;
+      if (val !== null) {
+        const valid = new Set(Object.keys(IMAGE_TO_VIDEO_PROVIDERS));
+        if (!valid.has(val)) {
+          return NextResponse.json(
+            { error: `Invalid imageToVideoProvider: ${val}` },
+            { status: 400 },
+          );
+        }
+      }
+      data.imageToVideoProvider = val;
+    }
     if (input.characterId !== undefined)
       data.characterId = input.characterId;
     if (input.targetPlatforms !== undefined) {
@@ -117,13 +132,39 @@ export async function PATCH(
     if (input.postTime !== undefined) data.postTime = input.postTime;
     if (input.timezone !== undefined) data.timezone = input.timezone;
 
-    const scheduleChanged =
+    const scheduleFieldsSent =
       input.postTime !== undefined ||
       input.frequency !== undefined ||
       input.timezone !== undefined;
-    if (scheduleChanged) data.lastRunAt = null;
+    if (scheduleFieldsSent) {
+      const current = await db.automation.findUnique({
+        where: { id },
+        select: { postTime: true, frequency: true, timezone: true },
+      });
+      const actuallyChanged =
+        (input.postTime !== undefined && input.postTime !== current?.postTime) ||
+        (input.frequency !== undefined && input.frequency !== current?.frequency) ||
+        (input.timezone !== undefined && input.timezone !== current?.timezone);
+      if (actuallyChanged) data.lastRunAt = null;
+    }
 
     const updated = await db.automation.update({ where: { id }, data });
+
+    // Keep linked series in sync so retries use the same providers (no fallbacks)
+    const providerKeys = ["llmProvider", "ttsProvider", "imageProvider"] as const;
+    const hasProviderUpdate = providerKeys.some((k) => input[k] !== undefined);
+    if (hasProviderUpdate && updated.seriesId) {
+      const seriesData: Record<string, unknown> = {};
+      if (input.llmProvider !== undefined) seriesData.llmProvider = input.llmProvider;
+      if (input.ttsProvider !== undefined) seriesData.ttsProvider = input.ttsProvider;
+      if (input.imageProvider !== undefined) seriesData.imageProvider = input.imageProvider;
+      if (Object.keys(seriesData).length > 0) {
+        await db.series.update({
+          where: { id: updated.seriesId },
+          data: seriesData as never,
+        });
+      }
+    }
 
     return NextResponse.json({ data: updated });
   } catch (error) {

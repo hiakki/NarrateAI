@@ -47,7 +47,7 @@ Next.js 14+ App Router, TypeScript, Tailwind CSS, Prisma, BullMQ.
 - Each stage is a standalone function in src/services/
 - Always implement retry logic with exponential backoff
 - Log all AI API calls with input/output sizes for cost tracking
-- Use multi-provider fallback (primary → secondary)
+- No fallbacks: use only the chosen provider (series/automation/user default); never substitute another provider on failure
 
 ## Key Files to Reference
 - PLAN.md — project plan, DB schema, API endpoints

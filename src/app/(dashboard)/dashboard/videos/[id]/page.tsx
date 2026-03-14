@@ -50,14 +50,51 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { formatPlatformError } from "@/lib/format-platform-error";
 
-const stages = [
+const BASE_STAGES = [
   { key: "SCRIPT", label: "Script", detail: "AI is writing your narration", icon: FileText },
   { key: "TTS", label: "Voiceover", detail: "Generating AI voiceover", icon: Mic },
   { key: "IMAGES", label: "Images", detail: "Creating scene visuals", icon: ImageIcon },
   { key: "ASSEMBLY", label: "Assembly", detail: "Building video with Ken Burns + captions + music", icon: Clapperboard },
   { key: "UPLOADING", label: "Finalize", detail: "Saving your video", icon: Upload },
 ];
+
+const I2V_STAGE = { key: "I2V", label: "Image-to-Video", detail: "Animating scene images into video clips", icon: Film };
+
+function buildStages(hasI2V: boolean) {
+  if (!hasI2V) return BASE_STAGES;
+  const idx = BASE_STAGES.findIndex((s) => s.key === "ASSEMBLY");
+  const copy = [...BASE_STAGES];
+  copy.splice(idx, 0, I2V_STAGE);
+  return copy;
+}
+
+type StageTimings = Record<string, { startedAt: number; completedAt: number; durationMs: number }>;
+
+function formatStageDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s > 0 ? `${min}m ${s}s` : `${min}m`;
+}
+
+function getStageTimingLabel(
+  timings: StageTimings | null | undefined,
+  stageKey: string,
+  currentStageKey: string | null,
+  isDone: boolean,
+  isFailedStep: boolean,
+): string | null {
+  if (!timings?.[stageKey]) return null;
+  const t = timings[stageKey];
+  if (t.durationMs > 0) return formatStageDuration(t.durationMs);
+  if (t.startedAt && (stageKey === currentStageKey || isFailedStep))
+    return `— (${formatStageDuration(Date.now() - t.startedAt)} so far)`;
+  return null;
+}
 
 export default function VideoDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -177,6 +214,10 @@ export default function VideoDetailPage() {
   const [linkError, setLinkError] = useState("");
   const [savingLink, setSavingLink] = useState(false);
   const [insightsRefreshing, setInsightsRefreshing] = useState(false);
+  const [rerunStep, setRerunStep] = useState<"TTS" | "IMAGES" | "I2V" | null>(null);
+  const [rerunImageProvider, setRerunImageProvider] = useState<string>("LOCAL_BACKEND");
+  const [rerunTtsProvider, setRerunTtsProvider] = useState<string>("EDGE_TTS");
+  const [rerunI2VProvider, setRerunI2VProvider] = useState<string>("LOCAL_BACKEND");
 
   async function handleSaveLink(platform: string) {
     const url = linkInput.trim();
@@ -265,7 +306,7 @@ export default function VideoDetailPage() {
         alert(data.error || "Retry failed");
         return;
       }
-      queryClient.invalidateQueries({ queryKey: ["video", id] });
+      await queryClient.refetchQueries({ queryKey: ["video", id] });
     } catch {
       alert("Retry failed");
     } finally {
@@ -396,6 +437,34 @@ export default function VideoDetailPage() {
     }
   }
 
+  async function handleRerunStep(
+    step: "TTS" | "IMAGES" | "I2V",
+    overrides?: { imageProvider?: string; ttsProvider?: string; imageToVideoProvider?: string },
+  ) {
+    setRerunStep(step);
+    try {
+      const body: Record<string, string | undefined> = { step };
+      if (step === "IMAGES" && overrides?.imageProvider) body.imageProvider = overrides.imageProvider;
+      if (step === "TTS" && overrides?.ttsProvider) body.ttsProvider = overrides.ttsProvider;
+      if (step === "I2V" && overrides?.imageToVideoProvider !== undefined) body.imageToVideoProvider = overrides.imageToVideoProvider;
+      const res = await fetch(`/api/videos/${id}/rerun-step`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Failed to rerun step");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+    } catch {
+      alert("Failed to rerun step");
+    } finally {
+      setRerunStep(null);
+    }
+  }
+
   const [queuedTimedOut, setQueuedTimedOut] = useState(false);
   const [countdown, setCountdown] = useState(60);
   const queuedSince = useRef<number | null>(null);
@@ -403,7 +472,7 @@ export default function VideoDetailPage() {
   const { data: video, isLoading } = useQuery({
     queryKey: ["video", id],
     queryFn: async () => {
-      const res = await fetch(`/api/videos/${id}`);
+      const res = await fetch(`/api/videos/${id}`, { cache: "no-store" });
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
       return json.data;
@@ -414,12 +483,41 @@ export default function VideoDetailPage() {
       if (status === "QUEUED") return 8000;
       if (status === "GENERATING") {
         const stage = query.state.data?.generationStage;
-        return stage === "IMAGES" ? 10000 : 15000;
+        return stage === "IMAGES" || stage === "I2V" ? 10000 : 15000;
       }
       if (status === "READY" || status === "POSTED") return 30000;
       return false;
     },
   });
+
+  const { data: providerData } = useQuery({
+    queryKey: ["settings", "providers"],
+    queryFn: async () => {
+      const res = await fetch("/api/settings/providers");
+      if (!res.ok) throw new Error("Failed to fetch");
+      const json = await res.json();
+      return json.data as {
+        defaults: { imageProvider?: string | null; ttsProvider?: string | null; imageToVideoProvider?: string | null };
+        available: { image: { id: string; name: string }[]; tts: { id: string; name: string }[] };
+        imageToVideo: { all: { id: string; name: string }[]; availableIds: string[] };
+      };
+    },
+    enabled: !!video && (video.status === "READY" || video.status === "REVIEW"),
+  });
+
+  useEffect(() => {
+    if (providerData?.defaults?.imageProvider && providerData.available?.image?.some((p) => p.id === providerData.defaults.imageProvider)) {
+      setRerunImageProvider(providerData.defaults.imageProvider);
+    }
+    if (providerData?.defaults?.ttsProvider && providerData.available?.tts?.some((p) => p.id === providerData.defaults.ttsProvider)) {
+      setRerunTtsProvider(providerData.defaults.ttsProvider);
+    }
+    if (providerData?.defaults?.imageToVideoProvider && providerData.imageToVideo?.availableIds?.includes(providerData.defaults.imageToVideoProvider)) {
+      setRerunI2VProvider(providerData.defaults.imageToVideoProvider);
+    } else if (providerData?.imageToVideo?.all?.some((p) => p.id === "LOCAL_BACKEND")) {
+      setRerunI2VProvider("LOCAL_BACKEND");
+    }
+  }, [providerData?.defaults?.imageProvider, providerData?.defaults?.ttsProvider, providerData?.defaults?.imageToVideoProvider, providerData?.available?.image, providerData?.available?.tts, providerData?.imageToVideo]);
 
   useEffect(() => {
     if (publishingPlatforms.size === 0 || !video) return;
@@ -492,9 +590,14 @@ export default function VideoDetailPage() {
   const isReady = video.status === "READY" || video.status === "POSTED";
   const isFailed = video.status === "FAILED";
 
+  const hasI2V = !!video.imageToVideoProvider || video.generationStage === "I2V";
+  const stages = buildStages(hasI2V);
+
   const currentStageIndex = video.generationStage
     ? stages.findIndex((s) => s.key === video.generationStage)
     : -1;
+
+  const stageTimings = (video as { stageTimings?: StageTimings }).stageTimings;
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -629,11 +732,34 @@ export default function VideoDetailPage() {
                         }`}
                       >
                         {stage.label}
-                        {isDone && (
-                          <span className="ml-2 text-xs font-normal text-green-500">
-                            Done
-                          </span>
-                        )}
+                        {(() => {
+                          const timingLabel = getStageTimingLabel(
+                            stageTimings,
+                            stage.key,
+                            video.generationStage,
+                            isDone,
+                            false,
+                          );
+                          if (timingLabel) {
+                            return (
+                              <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                                {isActive && timingLabel.includes("so far") ? (
+                                  <span className="animate-pulse">{timingLabel}</span>
+                                ) : (
+                                  timingLabel
+                                )}
+                              </span>
+                            );
+                          }
+                          if (isDone) {
+                            return (
+                              <span className="ml-2 text-xs font-normal text-green-500">
+                                Done
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
                       </p>
                       {isActive && (
                         <p className="text-xs text-muted-foreground mt-0.5 animate-pulse">
@@ -714,6 +840,93 @@ export default function VideoDetailPage() {
                 Listen to the voiceover, review each image and its prompt. Edit prompts and regenerate images as needed.
                 Deselect images you don&apos;t want. When ready, click <strong>Proceed</strong> to assemble the final video.
               </p>
+            </CardContent>
+          </Card>
+
+          {/* Pipeline steps: rerun TTS or Images (assembly & final video re-created automatically) */}
+          <Card>
+            <div className="px-4 py-3 border-b">
+              <h3 className="text-sm font-semibold">Pipeline steps</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
+              </p>
+            </div>
+            <CardContent className="p-4 space-y-2">
+              {[
+                { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
+                { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
+                { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
+                { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
+                { key: "ASSEMBLY", label: "Assembly", status: "Pending", icon: Clapperboard, canRerun: false },
+                { key: "UPLOADING", label: "Final video", status: "Pending", icon: Upload, canRerun: false },
+              ].map(({ key, label, status, icon: Icon, canRerun }) => (
+                <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                  <div className="flex items-center gap-2">
+                    <Icon className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">{label}</span>
+                    <span className="text-xs text-muted-foreground">— {status}</span>
+                  </div>
+                  {canRerun && (
+                    <div className="flex items-center gap-2">
+                      {key === "TTS" && providerData?.available?.tts?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunTtsProvider}
+                          onChange={(e) => setRerunTtsProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.available.tts.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {key === "IMAGES" && providerData?.available?.image?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunImageProvider}
+                          onChange={(e) => setRerunImageProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.available.image.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunI2VProvider}
+                          onChange={(e) => setRerunI2VProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={rerunStep !== null}
+                        onClick={() => {
+                          const step = key as "TTS" | "IMAGES" | "I2V";
+                          const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
+                            : step === "IMAGES" ? { imageProvider: rerunImageProvider }
+                            : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
+                            : undefined;
+                          handleRerunStep(step, overrides);
+                        }}
+                      >
+                        {rerunStep === key ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
+                        ) : (
+                          <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </CardContent>
           </Card>
 
@@ -871,6 +1084,109 @@ export default function VideoDetailPage() {
                 </span>
               )}
             </div>
+            {isReady && (
+              <div className="px-4 py-2 border-t border-green-200/60">
+                <p className="text-xs text-muted-foreground mb-1.5">Step timings</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-green-800/90">
+                  {stages.map((s) => {
+                    const d = stageTimings?.[s.key]?.durationMs;
+                    const value = d != null && d > 0 ? formatStageDuration(d) : "NA";
+                    return (
+                      <span key={s.key}>
+                        {s.label} {value}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Pipeline steps: rerun TTS or Images (assembly & final video re-created automatically) */}
+          <Card>
+            <div className="px-4 py-3 border-b">
+              <h3 className="text-sm font-semibold">Pipeline steps</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
+              </p>
+            </div>
+            <CardContent className="p-4 space-y-2">
+              {[
+                { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
+                { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
+                { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
+                { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
+                { key: "ASSEMBLY", label: "Assembly", status: "Done", icon: Clapperboard, canRerun: false },
+                { key: "UPLOADING", label: "Final video", status: "Done", icon: Upload, canRerun: false },
+              ].map(({ key, label, status, icon: Icon, canRerun }) => (
+                <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                  <div className="flex items-center gap-2">
+                    <Icon className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">{label}</span>
+                    <span className="text-xs text-muted-foreground">— {status}</span>
+                  </div>
+                  {canRerun && (
+                    <div className="flex items-center gap-2">
+                      {key === "TTS" && providerData?.available?.tts?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunTtsProvider}
+                          onChange={(e) => setRerunTtsProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.available.tts.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {key === "IMAGES" && providerData?.available?.image?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunImageProvider}
+                          onChange={(e) => setRerunImageProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.available.image.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rerunI2VProvider}
+                          onChange={(e) => setRerunI2VProvider(e.target.value)}
+                          disabled={rerunStep !== null}
+                        >
+                          {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={rerunStep !== null}
+                        onClick={() => {
+                          const step = key as "TTS" | "IMAGES" | "I2V";
+                          const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
+                            : step === "IMAGES" ? { imageProvider: rerunImageProvider }
+                            : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
+                            : undefined;
+                          handleRerunStep(step, overrides);
+                        }}
+                      >
+                        {rerunStep === key ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
+                        ) : (
+                          <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </CardContent>
           </Card>
 
           <div className="rounded-lg overflow-hidden bg-black shadow-xl">
@@ -978,7 +1294,7 @@ export default function VideoDetailPage() {
                     const connected = connectedSet.has(key);
                     const isPublishing = publishingPlatforms.has(key);
                     const clientFailError = failedPublishes.get(key);
-                    const serverFailError = isServerFailed ? entry.error : undefined;
+                    const serverFailError = isServerFailed && entry?.error ? formatPlatformError(entry.error) : undefined;
                     const failError = clientFailError || serverFailError;
                     const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted;
                     const isEditingThisLink = editingLink === key;
@@ -1245,34 +1561,52 @@ export default function VideoDetailPage() {
             );
           })()}
 
-          {/* Scene images gallery */}
+          {/* Scene images / clips gallery */}
           {video.sceneImages && (video.sceneImages as string[]).length > 0 && (
             <Card className="mt-6">
               <div className="px-6 py-3 border-b flex items-center gap-2">
                 <ImageIcon className="h-4 w-4" />
-                <span className="text-sm font-medium">Scene Images</span>
+                <span className="text-sm font-medium">Scenes</span>
                 <span className="text-xs text-muted-foreground ml-auto">
                   {(video.sceneImages as string[]).length} scenes
+                  {(video.sceneClips as (string | null)[] | undefined)?.some(Boolean) && (
+                    <> · {(video.sceneClips as (string | null)[]).filter(Boolean).length} clips</>
+                  )}
                 </span>
               </div>
               <CardContent className="p-4">
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                  {(video.sceneImages as string[]).map((url: string, i: number) => (
-                    <div
-                      key={url}
-                      className="relative aspect-[9/16] rounded-md overflow-hidden bg-muted border group cursor-pointer"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={url}
-                        alt={`Scene ${i + 1}`}
-                        className="absolute inset-0 w-full h-full object-cover transition-transform group-hover:scale-105"
-                      />
-                      <span className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] text-center py-0.5">
-                        {i + 1}
-                      </span>
-                    </div>
-                  ))}
+                  {(video.sceneImages as string[]).map((imgUrl: string, i: number) => {
+                    const clipUrl = (video.sceneClips as (string | null)[] | undefined)?.[i];
+                    return (
+                      <div
+                        key={imgUrl}
+                        className="relative aspect-[9/16] rounded-md overflow-hidden bg-muted border group cursor-pointer"
+                      >
+                        {clipUrl ? (
+                          <video
+                            src={clipUrl}
+                            muted
+                            loop
+                            playsInline
+                            onMouseEnter={(e) => (e.target as HTMLVideoElement).play()}
+                            onMouseLeave={(e) => { const v = e.target as HTMLVideoElement; v.pause(); v.currentTime = 0; }}
+                            className="absolute inset-0 w-full h-full object-cover"
+                          />
+                        ) : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={imgUrl}
+                            alt={`Scene ${i + 1}`}
+                            className="absolute inset-0 w-full h-full object-cover transition-transform group-hover:scale-105"
+                          />
+                        )}
+                        <span className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] text-center py-0.5">
+                          {i + 1}{clipUrl ? " ▶" : ""}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -1282,70 +1616,130 @@ export default function VideoDetailPage() {
 
       {/* ── FAILED ── */}
       {isFailed && (
-        <Card className="border-red-200">
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-red-200 bg-red-50">
-            <XCircle className="h-4 w-4 text-red-600" />
-            <span className="text-sm font-medium text-red-700">
-              Generation failed
-            </span>
-          </div>
-          <CardContent className="py-8">
-            <div className="text-center">
-              <AlertCircle className="h-12 w-12 text-red-400 mx-auto mb-4" />
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                {video.errorMessage || "An unknown error occurred."}
-              </p>
-              <div className="flex gap-3 justify-center mt-6">
-                <Button
-                  onClick={handleRetry}
-                  disabled={retrying}
-                >
-                  {retrying ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Retrying...</>
-                  ) : (
-                    <><Film className="mr-2 h-4 w-4" /> Retry Generation</>
-                  )}
-                </Button>
-                <Button variant="outline" onClick={() => router.back()}>
-                  Go Back
-                </Button>
+        <Card className="mb-8 overflow-hidden border-red-200">
+          <div className="px-6 py-4 border-b border-red-200 bg-red-50">
+            <div className="flex items-center gap-3">
+              <XCircle className="h-5 w-5 text-red-600 shrink-0" />
+              <div className="flex-1">
+                <h2 className="font-semibold text-red-800">Generation failed</h2>
+                <p className="text-sm text-red-700/90 mt-0.5">
+                  {video.errorMessage || "An unknown error occurred."}
+                </p>
               </div>
             </div>
+          </div>
+          <CardContent className="py-6 px-6">
+            {/* Full step list with color coding and timings (same layout as progress tracker) */}
+            <div className="space-y-0">
+              {(() => {
+                const failedAt =
+                  video.generationStage
+                    ? stages.findIndex((s) => s.key === video.generationStage)
+                    : stages.findIndex(
+                        (s) =>
+                          stageTimings?.[s.key]?.startedAt &&
+                          !(stageTimings[s.key].durationMs > 0),
+                      );
+                const failedStepLabel = failedAt >= 0 ? stages[failedAt]?.label : null;
 
-            {/* Show which stages completed before failure */}
-            {video.generationStage && (
-              <div className="mt-6 pt-6 border-t">
-                <p className="text-xs text-muted-foreground mb-3">
-                  Progress before failure:
-                </p>
-                <div className="flex gap-2">
-                  {stages.map((stage, i) => {
-                    const failedAt = stages.findIndex(
-                      (s) => s.key === video.generationStage
-                    );
-                    return (
-                      <div
-                        key={stage.key}
-                        className={`flex items-center gap-1 rounded-full px-2 py-1 text-xs ${
-                          i < failedAt
-                            ? "bg-green-100 text-green-700"
-                            : i === failedAt
-                            ? "bg-red-100 text-red-700"
-                            : "bg-muted text-muted-foreground"
-                        }`}
+                return (
+                  <>
+                    {stages.map((stage, i) => {
+                      const Icon = stage.icon;
+                      const isDone = failedAt >= 0 && i < failedAt;
+                      const isFailedStep = i === failedAt;
+                      const isPending = failedAt < 0 || i > failedAt;
+                      const isLast = i === stages.length - 1;
+                      const t = stageTimings?.[stage.key];
+                      const durationMs = t?.durationMs ?? 0;
+                      const timeLabel = isDone && durationMs > 0
+                        ? formatStageDuration(durationMs)
+                        : isFailedStep
+                        ? "Failed"
+                        : null;
+
+                      return (
+                        <div key={stage.key} className="flex gap-4">
+                          <div className="flex flex-col items-center">
+                            <div
+                              className={`h-10 w-10 rounded-full flex items-center justify-center border-2 shrink-0 ${
+                                isDone
+                                  ? "border-green-500 bg-green-50 text-green-600"
+                                  : isFailedStep
+                                  ? "border-red-500 bg-red-50 text-red-600"
+                                  : "border-muted-foreground/20 bg-muted/50 text-muted-foreground/40"
+                              }`}
+                            >
+                              {isDone ? (
+                                <CheckCircle2 className="h-5 w-5" />
+                              ) : isFailedStep ? (
+                                <XCircle className="h-5 w-5" />
+                              ) : (
+                                <Icon className="h-5 w-5" />
+                              )}
+                            </div>
+                            {!isLast && (
+                              <div
+                                className={`w-0.5 h-8 ${
+                                  isDone ? "bg-green-500" : isFailedStep ? "bg-red-300" : "bg-muted-foreground/15"
+                                }`}
+                              />
+                            )}
+                          </div>
+                          <div className="pt-2 pb-4">
+                            <p
+                              className={`text-sm font-medium ${
+                                isDone
+                                  ? "text-green-600"
+                                  : isFailedStep
+                                  ? "text-red-700"
+                                  : "text-muted-foreground/50"
+                              }`}
+                            >
+                              {stage.label}
+                              {timeLabel != null && (
+                                <span className={`ml-2 text-xs font-normal tabular-nums ${
+                                  isDone ? "text-green-600" : isFailedStep ? "text-red-600" : "text-muted-foreground"
+                                }`}>
+                                  {timeLabel}
+                                </span>
+                              )}
+                            </p>
+                            {isFailedStep && (
+                              <p className="text-xs text-red-600 mt-0.5">
+                                This step failed. Retry will resume from here.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="flex flex-wrap gap-3 mt-6 pt-6 border-t border-border">
+                      <Button
+                        onClick={handleRetry}
+                        disabled={retrying}
+                        className="bg-red-600 hover:bg-red-700"
                       >
-                        {i < failedAt ? (
-                          <CheckCircle2 className="h-3 w-3" />
-                        ) : i === failedAt ? (
-                          <XCircle className="h-3 w-3" />
-                        ) : null}
-                        {stage.label}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                        {retrying ? (
+                          <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Retrying...</>
+                        ) : (
+                          <><RefreshCw className="mr-2 h-4 w-4" /> Retry from{failedStepLabel ? ` ${failedStepLabel}` : " failed step"}
+                          </>
+                        )}
+                      </Button>
+                      <Button variant="outline" onClick={() => router.back()}>
+                        Go Back
+                      </Button>
+                    </div>
+                    {failedStepLabel && (
+                      <p className="text-xs text-muted-foreground mt-3">
+                        Completed steps (Script, Voiceover) will be reused. Generation will continue from {failedStepLabel}.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
           </CardContent>
         </Card>
       )}

@@ -8,7 +8,7 @@ import { getDefaultVoiceId } from "@/config/voices";
 import { generateScript } from "@/services/script-generator";
 import { enqueueVideoGeneration } from "@/services/queue";
 import { resolveProviders } from "@/services/providers/resolve";
-import { createLogger } from "@/lib/logger";
+import { createLogger, runWithVideoIdAsync } from "@/lib/logger";
 
 const log = createLogger("API:Retry");
 
@@ -21,6 +21,8 @@ export async function POST(
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await params;
+    return runWithVideoIdAsync(id, async () => {
+      try {
     const video = await db.video.findUnique({
       where: { id },
       include: {
@@ -125,6 +127,11 @@ export async function POST(
     });
 
     return NextResponse.json({ data: { videoId: video.id, status: "QUEUED" } });
+      } catch (error) {
+        log.error("Retry error:", error instanceof Error ? error.message : error);
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to retry" }, { status: 500 });
+      }
+    });
   } catch (error) {
     log.error("Retry error:", error instanceof Error ? error.message : error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to retry" }, { status: 500 });

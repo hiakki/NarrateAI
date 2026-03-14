@@ -10,6 +10,8 @@ export interface ScriptInput {
   avoidThemes?: string[];
   /** Optional seed (e.g. timestamp) to encourage unique output per run. */
   varietySeed?: string;
+  /** Optional video ID for logging on the LLM server (e.g. to observe parallel vs FIFO). */
+  videoId?: string;
 }
 
 export interface Scene {

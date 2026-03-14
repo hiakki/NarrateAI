@@ -9,7 +9,7 @@ import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
 import { resolveProviders } from "../src/services/providers/resolve";
 import { getDefaultVoiceId } from "../src/config/voices";
-import { createLogger } from "../src/lib/logger";
+import { createLogger, runWithAutomationIdAsync } from "../src/lib/logger";
 
 const db = new PrismaClient();
 const logger = createLogger("Scheduler");
@@ -130,17 +130,18 @@ function isDue(auto: AutoRow): { due: boolean; reason: string } {
 }
 
 async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
+  return runWithAutomationIdAsync(auto.id, async () => {
   const { due, reason } = isDue(auto as unknown as AutoRow);
 
   if (!due) {
-    debug(`SKIP "${auto.name}" — ${reason}`);
+    debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
     return;
   }
 
-  log(`TRIGGER "${auto.name}" (${auto.id}) — ${reason}`);
+  log(`[TRIGGER]`, `"${auto.name}" — ${reason}`);
 
   if (!auto.seriesId) {
-    log(`Automation "${auto.name}" has no linked series, creating one...`);
+    log(`[AUTO]`, `No linked series, creating one...`);
     const newSeries = await db.series.create({
       data: {
         userId: auto.user.id,
@@ -160,7 +161,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       data: { seriesId: newSeries.id },
     });
     (auto as { seriesId: string | null }).seriesId = newSeries.id;
-    log(`Created series "${newSeries.name}" (${newSeries.id}) for automation "${auto.name}"`);
+    log(`[AUTO]`, `Created series "${newSeries.name}" (${newSeries.id})`);
   }
 
   const pendingVideo = await db.video.findFirst({
@@ -170,7 +171,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     },
   });
   if (pendingVideo) {
-    log(`Automation "${auto.name}" already has a video in progress (${pendingVideo.id}), skipping`);
+    log(`[SKIP]`, `Video in progress (${pendingVideo.id}), skipping`);
     return;
   }
 
@@ -222,7 +223,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       llmProvider: providers.llm,
       ttsProvider: providers.tts,
       imageProvider: providers.image,
-      imageToVideoProvider: auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
+      imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
     });
 
@@ -231,11 +232,12 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       data: { lastRunAt: new Date() },
     });
 
-    log(`Queued video ${video.id} for "${auto.name}" (script gen in worker)`);
+    log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
-    err(`Failed to auto-generate for "${auto.name}": ${msg}`);
+    err(`[ERR]`, `Failed to auto-generate: ${msg}`);
   }
+  });
 }
 
 async function runInBatches<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, BarChart2, Eye, Heart, Zap, Lightbulb, ArrowUpDown, ArrowUp, ArrowDown, Sparkles } from "lucide-react";
+import { Loader2, BarChart2, Eye, Heart, Zap, Lightbulb, ArrowUpDown, ArrowUp, ArrowDown, Sparkles, RefreshCw, Film } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -54,6 +54,7 @@ export default function ReportPage() {
   const [sortKey, setSortKey] = useState<SortKey>("totalViews");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [suggestedRow, setSuggestedRow] = useState<AutomationRow | null>(null);
+  const [refreshingInsights, setRefreshingInsights] = useState(false);
 
   const fetchReport = useCallback(async () => {
     setLoading(true);
@@ -73,6 +74,29 @@ export default function ReportPage() {
   useEffect(() => {
     fetchReport();
   }, [fetchReport]);
+
+  const refreshInsightsThenReport = useCallback(async () => {
+    setRefreshingInsights(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/insights/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to refresh insights");
+      await fetchReport();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to refresh insights");
+    } finally {
+      setRefreshingInsights(false);
+    }
+  }, [fetchReport]);
+
+  const INSIGHTS_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshInsightsThenReport();
+    }, INSIGHTS_REFRESH_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [refreshInsightsThenReport]);
 
   const byAutomation = data?.scorecard?.byAutomation ?? [];
   const sortedRows = useMemo(() => {
@@ -236,18 +260,46 @@ export default function ReportPage() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart2 className="h-4 w-4" />
-                Scorecard
-              </CardTitle>
-              {sc.lastRefreshedAt && (
-                <p className="text-xs text-muted-foreground">
-                  Insights last refreshed: {new Date(sc.lastRefreshedAt).toLocaleString()}
-                </p>
-              )}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <BarChart2 className="h-4 w-4" />
+                    Scorecard
+                  </CardTitle>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {sc.lastRefreshedAt && (
+                      <p className="text-xs text-muted-foreground">
+                        Insights last refreshed: {new Date(sc.lastRefreshedAt).toLocaleString()}
+                      </p>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 h-7 text-xs"
+                      disabled={refreshingInsights}
+                      onClick={() => refreshInsightsThenReport()}
+                    >
+                      {refreshingInsights ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      Refresh insights
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total videos</p>
+                  <p className="text-2xl font-semibold tabular-nums mt-1 flex items-center gap-1">
+                    <Film className="h-5 w-5 text-muted-foreground" />
+                    {formatNumber(sc.totalVideos)}
+                  </p>
+                </div>
                 <div className="rounded-lg border bg-muted/30 p-4">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total views</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1 flex items-center gap-1">

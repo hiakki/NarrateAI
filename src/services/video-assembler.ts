@@ -30,6 +30,8 @@ const MUSIC_VOLUME: Record<string, number> = {
 };
 
 const TRANSITION_SECONDS = 0.18;
+/** Slightly longer fades when stitching pre-generated video clips for smoother flow. */
+const VIDEO_CLIP_TRANSITION_SECONDS = 0.28;
 
 const DRAMATIC_TONES = new Set(["dramatic"]);
 const HORROR_NICHES = new Set(["scary-stories", "true-crime", "conspiracy-theories", "dark-psychology", "survival"]);
@@ -246,12 +248,14 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   const FPS = 30;
   const filterParts: string[] = [];
   const concatInputs: string[] = [];
+  const hasVideoClips = sceneInputs.some((s) => s.type === "video");
+  const transitionSec = hasVideoClips ? VIDEO_CLIP_TRANSITION_SECONDS : TRANSITION_SECONDS;
 
   for (let i = 0; i < sceneInputs.length; i++) {
     const dur = Math.max(1, (sceneTimings[i].endMs - sceneTimings[i].startMs) / 1000);
     const frames = Math.round(dur * FPS);
-    const fadeIn = i === 0 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
-    const fadeOut = i === sceneInputs.length - 1 ? 0 : Math.min(TRANSITION_SECONDS, dur / 4);
+    const fadeIn = i === 0 ? 0 : Math.min(transitionSec, dur / 4);
+    const fadeOut = i === sceneInputs.length - 1 ? 0 : Math.min(transitionSec, dur / 4);
     const fadeOutStart = Math.max(0, dur - fadeOut);
     const scene = sceneInputs[i];
 
@@ -267,7 +271,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
           `[v${i}]`
       );
     } else {
-      log.debug(`Scene ${i + 1}: video clip, ${dur.toFixed(2)}s`);
+      log.debug(`Scene ${i + 1}: video clip, ${dur.toFixed(2)}s, fade=${transitionSec}s`);
       filterParts.push(
         `[${i}:v]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2` +
           `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}` +

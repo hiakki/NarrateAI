@@ -296,9 +296,9 @@ export default function SettingsPage() {
             <Separator />
 
             <ProviderSection
-              title="Image-to-Video"
+              title="Final video from"
               icon={<Video className="h-4 w-4 text-primary" />}
-              description="Animate each scene image into a short video clip. Free: Off, or LTX-Video / Wan 2.2 via Hugging Face (HF). Paid: Stable Video Diffusion via Replicate."
+              description="Static images only: scene images are stitched into the final video (Ken Burns). Or use AI image-to-video: each scene image becomes a short clip, then clips are stitched with voiceover."
               allProviders={(providers?.imageToVideo?.all ?? []).map((p) => ({
                 ...p,
                 qualityLabel: "Good" as const,

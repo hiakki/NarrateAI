@@ -364,9 +364,10 @@ export default function NewAutomationPage() {
           name: name || `${niche?.name ?? selectedNiche} ${automationCount + 1}`,
           niche: selectedNiche,
           artStyle, voiceId, language, tone, duration,
-          llmProvider: llmProvider && llmProvider !== providerData?.defaults.llmProvider && llmProvider !== providerData?.platformDefaults.llm ? llmProvider : undefined,
-          ttsProvider: ttsProvider && ttsProvider !== providerData?.defaults.ttsProvider && ttsProvider !== providerData?.platformDefaults.tts ? ttsProvider : undefined,
-          imageProvider: imageProvider && imageProvider !== providerData?.defaults.imageProvider && imageProvider !== providerData?.platformDefaults.image ? imageProvider : undefined,
+          // Persist chosen providers; no fallbacks — use exactly what the user selected
+          llmProvider: llmProvider?.trim() ? llmProvider.trim() : undefined,
+          ttsProvider: ttsProvider?.trim() ? ttsProvider.trim() : undefined,
+          imageProvider: imageProvider?.trim() ? imageProvider.trim() : undefined,
           targetPlatforms: [...selectedPlatforms],
           includeAiTags,
           frequency, postTime: postTimes.join(","), timezone,

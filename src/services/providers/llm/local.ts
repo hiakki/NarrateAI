@@ -1,15 +1,15 @@
-import OpenAI from "openai";
 import type { LlmProviderInterface, ScriptInput, GeneratedScript } from "./types";
 import { buildPrompt, getSceneCount } from "./prompt";
 import { safeParseLlmJson } from "./parse-json";
+import { getLocalChatBaseUrl } from "@/lib/local-backend";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("LLM:Local");
 
 export class LocalLlmProvider implements LlmProviderInterface {
-  private get baseURL() {
-    const url = (process.env.LOCAL_LLM_URL ?? "").trim();
-    if (!url) throw new Error("LOCAL_LLM_URL is not configured");
+  private get baseURL(): string {
+    const url = getLocalChatBaseUrl();
+    if (!url) throw new Error("LOCAL_BACKEND_URL (or LOCAL_LLM_URL) is not configured");
     return url;
   }
   private get model() {
@@ -27,11 +27,16 @@ export class LocalLlmProvider implements LlmProviderInterface {
     messages: { role: string; content: string }[],
     maxTokens: number,
     temperature: number,
+    videoId?: string,
   ): Promise<{ content: string; finishReason: string }> {
     const endpoint = `${this.baseURL}/chat/completions`;
+    const headers: Record<string, string> = {
+      ...this.headers,
+      ...(videoId != null && videoId !== "" ? { "X-Video-Id": videoId } : {}),
+    };
     const res = await fetch(endpoint, {
       method: "POST",
-      headers: this.headers,
+      headers,
       body: JSON.stringify({
         model: this.model,
         messages,
@@ -48,10 +53,14 @@ export class LocalLlmProvider implements LlmProviderInterface {
         const errJson = await res.json().catch(() => null);
         detail = errJson?.error?.message ?? JSON.stringify(errJson).slice(0, 300);
       } else {
-        const snippet = (await res.text()).slice(0, 300);
-        detail = snippet.includes("<html") || snippet.includes("<!DOCTYPE")
-          ? "Got HTML error page (likely Cloudflare/proxy error, is your local LLM running?)"
-          : snippet;
+        const snippet = (await res.text()).slice(0, 500);
+        if (res.status === 524) {
+          detail = "Cloudflare timeout (524). Request took longer than the proxy allows. Use the backend on the same network without a tunnel, or a tunnel with a longer timeout.";
+        } else if (snippet.includes("<html") || snippet.includes("<!DOCTYPE")) {
+          detail = "Proxy or origin returned an HTML error page. If using Cloudflare tunnel, the request may have timed out (524) or the origin may be unreachable.";
+        } else {
+          detail = snippet.slice(0, 300);
+        }
       }
       log.error(`── RESPONSE ERROR ── HTTP ${res.status}: ${detail}`);
       throw new Error(`Local LLM ${res.status}: ${detail}`);
@@ -105,6 +114,7 @@ export class LocalLlmProvider implements LlmProviderInterface {
       ],
       4096,
       0.95,
+      input.videoId,
     );
 
     log.log(`── RESPONSE ── ${text.length} chars, finish=${finishReason}`);

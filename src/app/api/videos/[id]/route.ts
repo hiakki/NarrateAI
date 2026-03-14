@@ -4,32 +4,45 @@ import { db } from "@/lib/db";
 import { resolveScenesDir, resolveVideoFile } from "@/lib/video-paths";
 import fs from "fs/promises";
 
-async function countSceneImages(videoUrl: string | null, videoId: string): Promise<{ count: number; urls: string[] }> {
+const SCENE_IMG_RE = /^scene-\d+\.(jpg|jpeg|png|webp)$/i;
+const SCENE_CLIP_RE = /^scene-(\d+)-clip\.mp4$/i;
+
+async function countSceneImages(videoUrl: string | null, videoId: string): Promise<{ count: number; urls: string[]; clipUrls: (string | null)[] }> {
+  function buildResult(files: string[], baseUrl: string) {
+    const images = files.filter(f => SCENE_IMG_RE.test(f)).sort();
+    const clipSet = new Map<string, string>();
+    for (const f of files) {
+      const m = SCENE_CLIP_RE.exec(f);
+      if (m) clipSet.set(m[1], f);
+    }
+    const clipUrls = images.map((img) => {
+      const idx = img.match(/scene-(\d+)\./)?.[1];
+      const clipFile = idx ? clipSet.get(idx) : undefined;
+      return clipFile ? `${baseUrl}/scenes/${clipFile}` : null;
+    });
+    return { count: images.length, urls: images.map(f => `${baseUrl}/scenes/${f}`), clipUrls };
+  }
+
   if (!videoUrl) {
     const legacy = `${process.cwd()}/public/videos/${videoId}/scenes`;
     try {
       const files = await fs.readdir(legacy);
-      const scenes = files.filter(f => f.startsWith("scene-")).sort();
-      return { count: scenes.length, urls: scenes.map(f => `/videos/${videoId}/scenes/${f}`) };
+      return buildResult(files, `/videos/${videoId}`);
     } catch {
-      return { count: 0, urls: [] };
+      return { count: 0, urls: [], clipUrls: [] };
     }
   }
 
   const dir = resolveScenesDir(videoUrl);
   try {
     const files = await fs.readdir(dir);
-    const scenes = files.filter(f => f.startsWith("scene-")).sort();
     const isNew = /\/video\.mp4$/.test(videoUrl);
     const baseUrl = isNew
       ? videoUrl.replace(/\/video\.mp4$/, "")
       : `/videos/${videoId}`;
-    return {
-      count: scenes.length,
-      urls: scenes.map(f => `${baseUrl}/scenes/${f}`),
-    };
+    return buildResult(files, baseUrl);
   } catch {
-    return { count: 0, urls: [] };
+    return { count: 0, urls: [], clipUrls: [] };
   }
 }
 
@@ -54,18 +67,24 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const sceneImages = await countSceneImages(video.videoUrl, id);
-    const checkpoint = video.checkpointData as { totalImageCount?: number; imagePrompts?: string[] } | null;
+    const checkpoint = video.checkpointData as { totalImageCount?: number; imagePrompts?: string[]; stageTimings?: Record<string, { startedAt: number; completedAt: number; durationMs: number }>; imageToVideoProvider?: string } | null;
     const scenesJson = video.scenesJson as { text: string; visualDescription: string }[] | null;
     const totalScenes = checkpoint?.totalImageCount ?? scenesJson?.length ?? 0;
+    const stageTimings = video.stageTimings ?? checkpoint?.stageTimings ?? null;
 
     return NextResponse.json({
       data: {
         ...video,
         sceneImages: sceneImages.urls,
+        sceneClips: sceneImages.clipUrls,
         sceneImageCount: sceneImages.count,
         totalScenes,
         imagePrompts: video.status === "REVIEW" ? (checkpoint?.imagePrompts ?? []) : undefined,
+        stageTimings,
+        imageToVideoProvider: checkpoint?.imageToVideoProvider ?? null,
       },
+    }, {
+      headers: { "Cache-Control": "no-store, max-age=0" },
     });
   } catch (error) {
     console.error("Get video error:", error);

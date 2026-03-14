@@ -5,7 +5,24 @@ const log = createLogger("Instagram");
 const GRAPH_VERSION = "v21.0";
 const GRAPH_API = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-/** Return the full API error body as a string so logs/UI show exactly what Meta returned (no sugarcoating). */
+/** Log raw API error to console; return a short user-facing message for UI. */
+function metaErrorForUi(body: unknown): string {
+  if (body == null) return "Something went wrong. Try again later.";
+  const raw = typeof body === "string" ? body : JSON.stringify(body);
+  const truncated = raw.length > 2000 ? raw.slice(0, 2000) + "…" : raw;
+  console.error("[Instagram] API error (raw):", truncated);
+  try {
+    const parsed = typeof body === "object" ? body : JSON.parse(raw);
+    const err = (parsed as { error?: { message?: string; error_user_msg?: string } }).error;
+    const msg = err?.error_user_msg || err?.message;
+    if (typeof msg === "string" && msg.trim()) return msg.trim();
+  } catch {
+    // ignore
+  }
+  return "Something went wrong. Try again later.";
+}
+
+/** Return full error body for logging only (do not use for UI). */
 function rawMetaError(body: unknown): string {
   if (body == null) return "Unknown error";
   try {
@@ -109,7 +126,7 @@ export async function postInstagramReel(
         error: raw,
         at: new Date().toISOString(),
       });
-      return { success: false, error: raw };
+      return { success: false, error: metaErrorForUi(err) };
     }
 
     const createData = await createRes.json();
@@ -190,7 +207,7 @@ export async function postInstagramReel(
         error: raw,
         at: new Date().toISOString(),
       });
-      return { success: false, error: raw };
+      return { success: false, error: metaErrorForUi(err) };
     }
 
     const { id: postId } = await publishRes.json();
@@ -236,8 +253,8 @@ export async function postInstagramComment(
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const raw = rawMetaError(err);
-      log.warn(`IG first comment failed: ${raw}`);
-      return { success: false, error: raw };
+      log.warn(`IG first comment failed:`, raw);
+      return { success: false, error: metaErrorForUi(err) };
     }
     const { id } = await res.json();
     log.log(`IG first comment posted: ${id} at ${new Date().toISOString()} | text: "${text.slice(0, 80)}..."`);
@@ -371,7 +388,7 @@ async function uploadWithRetry(
             const errWithTrace = traceId || debugId ? `${raw}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}` : raw;
             return {
               success: false,
-              error: errWithTrace,
+              error: metaErrorForUi(data),
               traceId: traceId || undefined,
               debugId: debugId || undefined,
             };
@@ -396,10 +413,9 @@ async function uploadWithRetry(
         let parsed: unknown;
         try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
         const raw = rawMetaError(parsed ?? { status: res.status, text: text.slice(0, 500) });
-        const errWithTrace = traceId || debugId ? `${raw}${traceId ? ` | x-fb-trace-id=${traceId}` : ""}${debugId ? ` | x-fb-debug=${debugId}` : ""}` : raw;
         return {
           success: false,
-          error: errWithTrace,
+          error: metaErrorForUi(parsed ?? { status: res.status, text: text.slice(0, 500) }),
           traceId: traceId || undefined,
           debugId: debugId || undefined,
           apiVersion: apiVersion || undefined,
@@ -439,8 +455,8 @@ async function pollMediaStatus(
       if (status === "FINISHED") return { ready: true };
       if (status === "ERROR") {
         const raw = rawMetaError(data);
-        log.error(`Container ${containerId} failed: ${raw}`);
-        return { ready: false, error: raw };
+        log.error(`Container ${containerId} failed:`, raw);
+        return { ready: false, error: metaErrorForUi(data) };
       }
     } catch {
       log.error(`Poll ${i + 1} network error, retrying...`);

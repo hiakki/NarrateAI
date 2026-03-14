@@ -32,6 +32,11 @@ export async function GET() {
     if (!session?.user)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { defaultImageToVideoProvider: true },
+    });
+
     const automations = await db.automation.findMany({
       where: { userId: session.user.id },
       include: {
@@ -58,8 +63,12 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
+    const envI2V = process.env.USE_IMAGE_TO_VIDEO || null;
+
     const data = automations.map((a) => ({
       ...a,
+      effectiveImageToVideoProvider:
+        (a.imageToVideoProvider || null) ?? user?.defaultImageToVideoProvider ?? envI2V,
       series: a.series
         ? {
             _count: a.series._count,
