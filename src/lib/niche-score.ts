@@ -29,6 +29,7 @@ const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
   "money-wealth": { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 86, SHARECHAT: 84, MOJ: 84 },
   "funny-stories": { FACEBOOK: 82, YOUTUBE: 80, INSTAGRAM: 88, SHARECHAT: 86, MOJ: 86 },
   "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
+  "character-storytelling": { FACEBOOK: 78, YOUTUBE: 82, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
   satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90, SHARECHAT: 88, MOJ: 88 },
 };
 
@@ -129,7 +130,7 @@ export function computeNicheScore(
 
   const perPlatform: Record<string, number> = {};
   for (const platform of PLATFORMS) {
-    const topic = baseByPlatform[platform];
+    const topic = baseByPlatform[platform] ?? 68;
     const art =
       platform === "INSTAGRAM" || platform === "SHARECHAT" || platform === "MOJ"
         ? artBase + 2
@@ -146,21 +147,17 @@ export function computeNicheScore(
       platform === "INSTAGRAM" || platform === "SHARECHAT" || platform === "MOJ"
         ? timeBase + 2
         : timeBase;
-    const overall = clamp(
-      (topic * SCORE_WEIGHTS.topic +
-        art * SCORE_WEIGHTS.art +
-        voice * SCORE_WEIGHTS.voice +
-        lang * SCORE_WEIGHTS.language +
-        toneBase * SCORE_WEIGHTS.tone +
-        time * SCORE_WEIGHTS.time) /
-        100,
-    );
-    perPlatform[platform] = overall;
+    const raw = (topic * SCORE_WEIGHTS.topic +
+      art * SCORE_WEIGHTS.art +
+      voice * SCORE_WEIGHTS.voice +
+      lang * SCORE_WEIGHTS.language +
+      toneBase * SCORE_WEIGHTS.tone +
+      time * SCORE_WEIGHTS.time) / 100;
+    perPlatform[platform] = Number.isFinite(raw) ? clamp(raw) : 0;
   }
 
-  const overall = clamp(
-    PLATFORMS.reduce((sum, p) => sum + perPlatform[p], 0) / PLATFORMS.length,
-  );
+  const rawOverall = PLATFORMS.reduce((sum, p) => sum + perPlatform[p], 0) / PLATFORMS.length;
+  const overall = Number.isFinite(rawOverall) ? clamp(rawOverall) : 0;
   return { overall, perPlatform };
 }
 

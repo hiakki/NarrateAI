@@ -319,6 +319,7 @@ export async function POST(
         imageProvider: finalImage,
         imageToVideoProvider: useI2V,
         characterPrompt: video.series.character?.fullPrompt ?? undefined,
+        aspectRatio: niche?.aspectRatio ?? "9:16",
       });
 
       return NextResponse.json({

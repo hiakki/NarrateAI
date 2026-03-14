@@ -1,3 +1,5 @@
+export type AspectRatio = "9:16" | "16:9";
+
 export interface Niche {
   id: string;
   name: string;
@@ -7,6 +9,12 @@ export interface Niche {
   defaultTone: string;
   defaultArtStyle: string;
   defaultMusic: string;
+  /** When set, videos in this niche use this aspect ratio (e.g. 16:9 for cinematic storytelling). Default 9:16. */
+  aspectRatio?: AspectRatio;
+  /** Max duration in seconds for this niche (e.g. 600 = 10 min for long-form). Default 120. */
+  maxDuration?: number;
+  /** Min duration in seconds for this niche. Default 15. */
+  minDuration?: number;
 }
 
 export const NICHES: Niche[] = [
@@ -295,6 +303,25 @@ export const NICHES: Niche[] = [
     defaultMusic: "dramatic",
   },
   {
+    id: "character-storytelling",
+    name: "Character Storytelling",
+    icon: "🎬",
+    description: "Character-centric narratives with emotional hooks, drama, and BGM. Cinematic 16:9 format; story length is flexible (30s to 10 min). Best with a recurring character (Star mode).",
+    sampleTopics: [
+      "A lone warrior's last stand at the gate",
+      "The moment she chose to walk away",
+      "The letter that changed everything",
+      "Two strangers on a train",
+      "The day the silence broke",
+    ],
+    defaultTone: "dramatic",
+    defaultArtStyle: "realistic",
+    defaultMusic: "dramatic",
+    aspectRatio: "16:9",
+    minDuration: 30,
+    maxDuration: 600,
+  },
+  {
     id: "satisfying",
     name: "Satisfying",
     icon: "✨",
@@ -312,4 +339,12 @@ export const NICHES: Niche[] = [
 
 export function getNicheById(id: string): Niche | undefined {
   return NICHES.find((n) => n.id === id);
+}
+
+export function getDurationRangeForNiche(nicheId: string): { min: number; max: number } {
+  const niche = getNicheById(nicheId);
+  return {
+    min: niche?.minDuration ?? 15,
+    max: niche?.maxDuration ?? 120,
+  };
 }

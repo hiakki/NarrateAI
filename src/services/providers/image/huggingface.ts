@@ -26,6 +26,7 @@ export class HuggingFaceImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     _negativePrompt?: string,
     onProgress?: OnImageProgress,
+    _options?: import("./types").ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const token = getToken();
     const model = getModel();

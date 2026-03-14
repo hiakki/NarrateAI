@@ -29,6 +29,8 @@ export interface VideoJobData {
   imageToVideoProvider?: string;
   reviewMode?: boolean;
   characterPrompt?: string;
+  /** Output aspect ratio. Default 9:16 (Reels/Shorts). Use 16:9 for cinematic/long-form (e.g. character-storytelling niche). */
+  aspectRatio?: "9:16" | "16:9";
 }
 
 function createRedisConnection() {

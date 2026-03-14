@@ -124,6 +124,7 @@ export async function POST(
       imageProvider: resolved.image,
       imageToVideoProvider: video.series.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
       characterPrompt: video.series.character?.fullPrompt ?? undefined,
+      aspectRatio: niche?.aspectRatio ?? "9:16",
     });
 
     return NextResponse.json({ data: { videoId: video.id, status: "QUEUED" } });

@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { createLogger } from "@/lib/logger";
-import type { ImageProviderInterface, ImageGenResult, OnImageProgress } from "./types";
+import type { ImageProviderInterface, ImageGenResult, OnImageProgress, ImageGenCallOptions } from "./types";
 
 const log = createLogger("Image:Pollinations");
 const API_URL = "https://gen.pollinations.ai/image";
@@ -13,6 +13,7 @@ export class PollinationsImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     _negativePrompt?: string,
     onProgress?: OnImageProgress,
+    options?: ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const apiKey = process.env.POLLINATIONS_API_KEY;
     if (!apiKey) {
@@ -33,7 +34,10 @@ export class PollinationsImageProvider implements ImageProviderInterface {
       const rawPrompt = `${scene.visualDescription}`.slice(0, 1500);
       const encoded = encodeURIComponent(rawPrompt);
       const seed = (Date.now() % 1_000_000) + i;
-      const url = `${API_URL}/${encoded}?width=832&height=1472&nologo=true&model=flux&seed=${seed}&key=${apiKey}`;
+      const isLandscape = options?.aspectRatio === "16:9";
+      const width = isLandscape ? 1344 : 832;
+      const height = isLandscape ? 768 : 1472;
+      const url = `${API_URL}/${encoded}?width=${width}&height=${height}&nologo=true&model=flux&seed=${seed}&key=${apiKey}`;
 
       let buffer: Buffer | null = null;
       let lastError: string | null = null;

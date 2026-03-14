@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getDurationRangeForNiche } from "@/config/niches";
 import { z } from "zod/v4";
 
 const createSchema = z.object({
@@ -10,7 +11,7 @@ const createSchema = z.object({
   voiceId: z.string().optional(),
   language: z.string().default("en"),
   tone: z.string().default("dramatic"),
-  duration: z.number().min(15).max(120).default(45),
+  duration: z.number().min(15).max(600).default(45),
   llmProvider: z.string().optional(),
   ttsProvider: z.string().optional(),
   imageProvider: z.string().optional(),
@@ -95,6 +96,14 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const input = createSchema.parse(body);
+
+    const durationRange = getDurationRangeForNiche(input.niche);
+    if (input.duration < durationRange.min || input.duration > durationRange.max) {
+      return NextResponse.json(
+        { error: `Duration must be ${durationRange.min}-${durationRange.max}s for this niche` },
+        { status: 400 },
+      );
+    }
 
     const validPlatforms = new Set(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"]);
     const filteredPlatforms = input.targetPlatforms.filter((p) =>

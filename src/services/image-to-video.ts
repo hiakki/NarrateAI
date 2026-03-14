@@ -40,6 +40,8 @@ export async function generateClipFromImage(
     prompt?: string;
     /** Target duration in seconds; may be capped by model (e.g. 5–10s) */
     durationSec?: number;
+    /** Output aspect ratio; 16:9 for cinematic long-form. */
+    aspectRatio?: "9:16" | "16:9";
   } = {}
 ): Promise<ImageToVideoResult> {
   const providerId = options.providerId ?? "SVD_REPLICATE";
@@ -89,6 +91,7 @@ export async function generateClipFromImage(
         provider.pollinationsModel,
         options.prompt,
         options.durationSec ?? 5,
+        options.aspectRatio ?? "9:16",
       );
     }
     throw new Error(`Missing config for image-to-video provider: ${providerId}`);
@@ -349,6 +352,7 @@ async function generateClipViaPollinations(
   model: string,
   prompt?: string,
   durationSec: number = 5,
+  aspectRatio: "9:16" | "16:9" = "9:16",
 ): Promise<ImageToVideoResult> {
   const apiKey = getPollinationsApiKey();
   const maxAttempts = 5;
@@ -372,7 +376,7 @@ async function generateClipViaPollinations(
         model,
         image: imageUrl,
         duration: String(durationSec),
-        aspectRatio: "9:16",
+        aspectRatio,
         key: apiKey,
         seed: String(Math.floor(Math.random() * 999999)),
       });
@@ -498,6 +502,7 @@ export async function generateClipsFromImages(
     noFallback?: boolean;
     existingClips?: Map<number, string>;
     concurrency?: number;
+    aspectRatio?: "9:16" | "16:9";
   } = {}
 ): Promise<{ results: (string | null)[]; ctxLines: string[] }> {
   const concurrency = options.concurrency ?? 3;
@@ -552,6 +557,7 @@ export async function generateClipsFromImages(
           providerId: options.providerId,
           prompt: options.prompts?.[i],
           durationSec,
+          aspectRatio: options.aspectRatio ?? "9:16",
         })
           .then(async ({ videoPath }) => {
             const elapsed = ((Date.now() - start) / 1000).toFixed(1);

@@ -294,6 +294,27 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
       moodKeywords: "forbidden knowledge, dark insight, manipulation exposed, noir psychological thriller, mind games revealed, empowerment through awareness",
     },
   },
+  "character-storytelling": {
+    dramatic: {
+      storytellingRules: [
+        "The story is driven by ONE central character — their choices, emotions, and arc. Every scene serves the character.",
+        "Open with an emotional hook: a pivotal moment, a decision, a loss, or a revelation that defines the character.",
+        "Maintain strict character consistency: same person, same look, same voice throughout. The character is the through-line.",
+        "Use vivid internal stakes — what does the character want? What do they fear? What are they willing to sacrifice?",
+        "Build to a clear emotional payoff: triumph, loss, acceptance, or transformation. The viewer should feel the character's journey.",
+        "Dialogue and narration should sound like this character — distinct voice, not generic. Let their personality show.",
+        "Pacing can breathe: allow moments of silence, reaction shots, and visual storytelling. Not every second needs words.",
+      ],
+      visualStyleGuide: [
+        "HOOK: The character in a defining moment — face half in shadow, hand reaching or pulling back, eyes locked on something off-screen — cinematic 16:9 widescreen, shallow depth of field, single strong light source, film grain, emotional weight in the frame",
+        "BUILD: Character in motion or in conflict with their environment — walking through rain, standing at a crossroads, sitting alone in a crowded room — wide or medium shot, environment supports the mood, color palette reflects inner state",
+        "TENSION: Close-up on the character's reaction — micro-expressions, a tear, a clenched jaw, a flicker of hope — intimate 85mm portrait feel, rim lighting, shallow DOF, audience feels their emotion",
+        "CLIMAX: The character at the peak of their arc — moment of truth, sacrifice, or breakthrough — dramatic composition, strong contrast, the character fills the frame or is dwarfed by consequence",
+        "RESOLUTION: Aftermath — character changed or at peace or broken; the world looks different through their eyes — softer light, wider shot, closure in the composition",
+      ],
+      moodKeywords: "character-driven, emotional, cinematic, dramatic arc, human stakes, consistent protagonist, story first, film-like narrative",
+    },
+  },
   "space-cosmos": {
     dramatic: {
       storytellingRules: [

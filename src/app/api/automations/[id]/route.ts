@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 import fs from "fs/promises";
 import path from "path";
 import { IMAGE_TO_VIDEO_PROVIDERS } from "@/config/image-to-video-providers";
+import { getDurationRangeForNiche } from "@/config/niches";
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -13,7 +14,7 @@ const updateSchema = z.object({
   voiceId: z.string().optional(),
   language: z.string().optional(),
   tone: z.string().optional(),
-  duration: z.number().min(15).max(120).optional(),
+  duration: z.number().min(15).max(600).optional(),
   llmProvider: z.string().nullable().optional(),
   ttsProvider: z.string().nullable().optional(),
   imageProvider: z.string().nullable().optional(),
@@ -94,6 +95,23 @@ export async function PATCH(
 
     const body = await req.json();
     const input = updateSchema.parse(body);
+
+    if (input.duration !== undefined) {
+      const current = await db.automation.findUnique({
+        where: { id },
+        select: { niche: true },
+      });
+      const effectiveNiche = input.niche ?? current?.niche;
+      if (effectiveNiche) {
+        const range = getDurationRangeForNiche(effectiveNiche);
+        if (input.duration < range.min || input.duration > range.max) {
+          return NextResponse.json(
+            { error: `Duration must be ${range.min}-${range.max}s for this niche` },
+            { status: 400 },
+          );
+        }
+      }
+    }
 
     const data: Record<string, unknown> = {};
     if (input.name !== undefined) data.name = input.name;

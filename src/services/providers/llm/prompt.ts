@@ -39,7 +39,8 @@ export function getSceneCount(duration: number): number {
   if (duration <= 45) return 5;
   if (duration <= 60) return 6;
   if (duration <= 90) return 8;
-  return Math.min(12, Math.round(duration / 10));
+  if (duration <= 120) return Math.min(12, Math.round(duration / 10));
+  return Math.min(30, Math.max(12, Math.round(duration / 15)));
 }
 
 export function buildPrompt(input: ScriptInput, sceneCount: number, characterPrompt?: string): string {
@@ -49,11 +50,13 @@ export function buildPrompt(input: ScriptInput, sceneCount: number, characterPro
 
   const enhancer = getPromptEnhancer(input.niche, input.tone);
 
-  // TTS speaks at ~2 w/s. Platform limit is 90s for Reels/Shorts.
-  const PLATFORM_MAX_SECS = 88; // 2s safety margin
-  const minTotalWords = Math.max(1, Math.floor(input.duration * 0.9 * 2.0));
-  const targetTotalWords = Math.round(input.duration * 2.5);
-  const maxTotalWords = Math.floor(PLATFORM_MAX_SECS * 2.0);
+  const TTS_WORDS_PER_SEC = 2.0;
+  const minTotalWords = Math.max(1, Math.floor(input.duration * 0.9 * TTS_WORDS_PER_SEC));
+  const targetTotalWords = Math.round(input.duration * 2.2);
+  const isLongForm = input.duration > 120;
+  const maxTotalWords = isLongForm
+    ? Math.floor(input.duration * 2.5)
+    : Math.floor(88 * TTS_WORDS_PER_SEC);
   const minWordsPerScene = Math.ceil(minTotalWords / sceneCount);
   const targetWordsPerScene = Math.ceil(targetTotalWords / sceneCount);
   const maxWordsPerScene = Math.floor(maxTotalWords / sceneCount);
@@ -122,8 +125,8 @@ ${visualGuideBlock}
 - LENGTH (NON-NEGOTIABLE — script REJECTED if outside range):
   * Target: ${targetTotalWords} words of narration total (across all ${sceneCount} scenes).
   * MINIMUM: ${minTotalWords} words — shorter = video too short = REJECTED.
-  * MAXIMUM: ${maxTotalWords} words — longer = video exceeds 90-second platform limit for Reels/Shorts = REJECTED.
-  * Acceptable range: ${minTotalWords}–${maxTotalWords} words. Aim for exactly ${targetTotalWords}.
+  * ${isLongForm ? `MAXIMUM: ${maxTotalWords} words (long-form, no 90s cap). Aim for ~${targetTotalWords} words.` : `MAXIMUM: ${maxTotalWords} words — longer = video exceeds 90-second platform limit for Reels/Shorts = REJECTED.`}
+  * Acceptable range: ${minTotalWords}–${maxTotalWords} words. Aim for ${isLongForm ? `~${targetTotalWords}` : `exactly ${targetTotalWords}`}.
   * Per scene: ${minWordsPerScene}–${maxWordsPerScene} words each — 3-5 full sentences, not one.
   * Common mistake: writing a single 8-12 word sentence per scene. That produces a 20-second video instead of ${input.duration}s.
 - Use short, punchy sentences. Every word must earn its place.

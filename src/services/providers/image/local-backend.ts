@@ -23,6 +23,7 @@ export class LocalBackendImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     negativePrompt?: string,
     onProgress?: OnImageProgress,
+    _options?: import("./types").ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const url = `${this.baseUrl}/api/image`;
     const body = {

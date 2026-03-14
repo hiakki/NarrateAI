@@ -12,6 +12,7 @@ export class IdeogramImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     negativePrompt?: string,
     onProgress?: OnImageProgress,
+    _options?: import("./types").ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const apiKey = process.env.IDEOGRAM_API_KEY;
     if (!apiKey) throw new Error("IDEOGRAM_API_KEY is not configured");

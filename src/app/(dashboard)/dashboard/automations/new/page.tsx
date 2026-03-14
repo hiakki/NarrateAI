@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { NICHES } from "@/config/niches";
+import { NICHES, getDurationRangeForNiche } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
 import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
 import { getPromptEnhancer } from "@/config/prompt-enhancers";
@@ -94,6 +94,7 @@ const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
   "money-wealth": { FACEBOOK: 74, YOUTUBE: 76, INSTAGRAM: 86, SHARECHAT: 84, MOJ: 84 },
   "funny-stories": { FACEBOOK: 82, YOUTUBE: 80, INSTAGRAM: 88, SHARECHAT: 86, MOJ: 86 },
   "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
+  "character-storytelling": { FACEBOOK: 78, YOUTUBE: 82, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
   satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90, SHARECHAT: 88, MOJ: 88 },
 };
 
@@ -210,7 +211,7 @@ export default function NewAutomationPage() {
     times: string[];
   }) => {
     const nicheDef = NICHES.find((n) => n.id === cfg.nicheId);
-    const baseByPlatform = NICHE_PLATFORM_BASE[cfg.nicheId] ?? { FACEBOOK: 68, YOUTUBE: 68, INSTAGRAM: 68 };
+    const baseByPlatform = NICHE_PLATFORM_BASE[cfg.nicheId] ?? { FACEBOOK: 68, YOUTUBE: 68, INSTAGRAM: 68, SHARECHAT: 68, MOJ: 68 };
     const schedule = getScheduleForNiche(cfg.nicheId, cfg.languageId);
     const recommendedLocalSlots = schedule.slots.map((s) => hmToMinutes(convertTime(s.time, schedule.viewerTimezone, timezone)));
     const selectedMins = (cfg.times.length > 0
@@ -555,7 +556,7 @@ export default function NewAutomationPage() {
                     <>
                       <div className="rounded-md border p-3 bg-muted/30">
                         <p className="text-xs text-muted-foreground">Overall potential</p>
-                        <p className="text-2xl font-bold">{activeNicheScore.overall}%</p>
+                        <p className="text-2xl font-bold">{Number.isFinite(activeNicheScore.overall) ? `${activeNicheScore.overall}%` : "—"}</p>
                         <p className="text-[11px] text-muted-foreground mt-1">
                           Based on topic, art style, voice, language, tone and time.
                         </p>
@@ -565,7 +566,7 @@ export default function NewAutomationPage() {
                         {PLATFORMS.map((p) => (
                           <div key={p} className="flex items-center justify-between rounded-md border px-2.5 py-1.5 text-xs">
                             <span>{platformShort(p)}</span>
-                            <span className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</span>
+                            <span className="font-semibold">{Number.isFinite(activeNicheScore.perPlatform[p]?.overall) ? `${activeNicheScore.perPlatform[p].overall}%` : "—"}</span>
                           </div>
                         ))}
                       </div>
@@ -659,10 +660,17 @@ export default function NewAutomationPage() {
             </div>
             <div>
               <Label className="mb-2 block">Duration</Label>
-              <div className="flex gap-2">
-                {[30, 45, 60].map((d) => (
-                  <Button key={d} variant={duration === d ? "default" : "outline"} size="sm" onClick={() => setDuration(d)}>{d}s</Button>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {(() => {
+                  const { min, max } = getDurationRangeForNiche(selectedNiche || "");
+                  const presets = max > 120 ? [30, 60, 90, 120, 180, 300, 600] : [15, 30, 45, 60, 90, 120];
+                  let options = presets.filter((d) => d >= min && d <= max);
+                  if (duration >= min && duration <= max && !options.includes(duration)) options = [...options, duration].sort((a, b) => a - b);
+                  if (options.length === 0) options.push(Math.max(min, 30));
+                  return options.map((d) => (
+                    <Button key={d} variant={duration === d ? "default" : "outline"} size="sm" onClick={() => setDuration(d)}>{d}s</Button>
+                  ));
+                })()}
               </div>
             </div>
           </div>
@@ -936,7 +944,7 @@ export default function NewAutomationPage() {
                     {PLATFORMS.filter((p) => selectedPlatforms.size === 0 || selectedPlatforms.has(p)).map((p) => (
                       <div key={p} className="rounded-md border px-2 py-1 text-center">
                         <div className="text-muted-foreground">{platformShort(p)}</div>
-                        <div className="font-semibold">{activeNicheScore.perPlatform[p].overall}%</div>
+                        <div className="font-semibold">{Number.isFinite(activeNicheScore.perPlatform[p]?.overall) ? `${activeNicheScore.perPlatform[p].overall}%` : "—"}</div>
                       </div>
                     ))}
                   </div>

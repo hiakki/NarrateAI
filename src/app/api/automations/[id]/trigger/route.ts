@@ -126,6 +126,7 @@ export async function POST(
       imageProvider: providers.image,
       imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
+      aspectRatio: getNicheById(auto.niche)?.aspectRatio ?? "9:16",
     });
 
     await db.automation.update({

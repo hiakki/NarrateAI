@@ -460,6 +460,7 @@ async function recoverStuckVideos() {
           imageProvider: resolved.image,
           imageToVideoProvider: usr.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
           characterPrompt: video.series.character?.fullPrompt ?? undefined,
+          aspectRatio: niche?.aspectRatio ?? "9:16",
         });
 
         log(`Re-enqueued video ${video.id} for recovery (will resume from ${hasCheckpoint ? `stage after [${completedStages.join(",")}]` : "beginning"})`);

@@ -106,7 +106,9 @@ const worker = new Worker<VideoJobData>(
       videoId, userId, userName, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
       tone, niche, artStyle, reviewMode, characterPrompt, imageToVideoProvider,
+      aspectRatio: jobAspectRatio,
     } = job.data;
+    const aspectRatio = jobAspectRatio ?? "9:16";
 
     return runWithVideoIdAsync(videoId, async () => {
     const videoExists = await db.video.findUnique({ where: { id: videoId }, select: { id: true } });
@@ -304,7 +306,7 @@ const worker = new Worker<VideoJobData>(
         let enhancedSlots = imageSlots.map((s) => ({ ...s }));
         if (resolvedArtStyle) {
           enhancedSlots = imageSlots.map((s, i) => {
-            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, imageSlots.length, characterPrompt);
+            const built = buildImagePrompt(s.visualDescription, resolvedArtStyle, i, imageSlots.length, characterPrompt, aspectRatio);
             return { ...s, visualDescription: built.prompt };
           });
         }
@@ -325,7 +327,7 @@ const worker = new Worker<VideoJobData>(
           const ext = path.extname(srcPath) || ".png";
           const dest = path.join(scDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
           await fs.copyFile(srcPath, dest);
-        });
+        }, { aspectRatio });
         imagePaths = imgResult.imagePaths;
 
         recordStageEnd(checkpoint, "IMAGES");
@@ -390,6 +392,7 @@ const worker = new Worker<VideoJobData>(
           durationSec: 5,
           noFallback: true,
           existingClips,
+          aspectRatio,
         });
         ctxSection("3.5 · IMAGE-TO-VIDEO", ...i2vCtx);
 
@@ -440,6 +443,7 @@ const worker = new Worker<VideoJobData>(
         tone: tone ?? "dramatic",
         niche: niche ?? "",
         language: language ?? "en",
+        aspectRatio,
       });
       log.log(`[ASSEMBLE]`, `ASSEMBLY done`);
 

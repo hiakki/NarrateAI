@@ -205,6 +205,16 @@ const EN_SCHEDULES: Record<string, NicheSchedule> = {
     ],
     reason: "Underdog stories hit hardest early morning (people starting their day motivated) and at night (reflecting on their own journey).",
   },
+  "character-storytelling": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "20:00", label: "Prime time drama" },
+      { time: "21:30", label: "Night watch" },
+      { time: "12:00", label: "Lunch break stories" },
+    ],
+    reason: "Character-driven stories and drama perform well in prime time and before bed when viewers have time to invest in narrative.",
+  },
   satisfying: {
     viewerTimezone: US_EAST,
     viewerRegion: "US (East Coast)",
@@ -399,6 +409,16 @@ const HI_SCHEDULES: Record<string, NicheSchedule> = {
       { time: "22:00", label: "Raat ka sapna" },
     ],
     reason: "Underdog stories in Hindi hit hardest early morning for students/hustlers and late night when people dream about their future.",
+  },
+  "character-storytelling": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "20:00", label: "Prime time" },
+      { time: "21:30", label: "Raat ka drama" },
+      { time: "12:00", label: "Lunch break" },
+    ],
+    reason: "Character-driven stories and drama perform well in prime time and before bed when viewers have time for narrative.",
   },
   satisfying: {
     viewerTimezone: INDIA,

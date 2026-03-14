@@ -20,7 +20,7 @@ import {
   CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown, Zap, Sparkles, Globe, Plus, XCircle,
   Star, EyeOff, Share2, Smartphone, BarChart2, Eye, Heart,
 } from "lucide-react";
-import { NICHES } from "@/config/niches";
+import { NICHES, getDurationRangeForNiche } from "@/config/niches";
 import { ART_STYLES } from "@/config/art-styles";
 import { LANGUAGES } from "@/config/languages";
 import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
@@ -715,10 +715,17 @@ export default function AutomationDetailPage() {
                   </div>
                   <div>
                     <Label className="text-xs mb-1 block">Duration</Label>
-                    <div className="flex gap-1.5">
-                      {[30, 45, 60].map((d) => (
-                        <Button key={d} size="xs" variant={editDuration === d ? "default" : "outline"} onClick={() => setEditDuration(d)}>{d}s</Button>
-                      ))}
+                    <div className="flex flex-wrap gap-1.5">
+                      {(() => {
+                        const { min, max } = getDurationRangeForNiche(editNiche || auto?.niche || "");
+                        const presets = max > 120 ? [30, 60, 90, 120, 180, 300, 600] : [15, 30, 45, 60, 90, 120];
+                        let options = presets.filter((d) => d >= min && d <= max);
+                        if (editDuration >= min && editDuration <= max && !options.includes(editDuration)) options = [...options, editDuration].sort((a, b) => a - b);
+                        if (options.length === 0) options.push(Math.max(min, 30));
+                        return options.map((d) => (
+                          <Button key={d} size="xs" variant={editDuration === d ? "default" : "outline"} onClick={() => setEditDuration(d)}>{d}s</Button>
+                        ));
+                      })()}
                     </div>
                   </div>
                   <div>
@@ -945,7 +952,7 @@ export default function AutomationDetailPage() {
               </div>
               <div className="rounded-md border p-3 bg-muted/30">
                 <p className="text-xs text-muted-foreground">Current potential</p>
-                <p className="text-2xl font-bold">{nicheScoreCard.currentScore}%</p>
+                <p className="text-2xl font-bold">{Number.isFinite(nicheScoreCard.currentScore) ? `${nicheScoreCard.currentScore}%` : "—"}</p>
               </div>
 
               {bestForNiche && (
@@ -986,7 +993,7 @@ export default function AutomationDetailPage() {
                       <li key={i} className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
                         <span className="text-muted-foreground">{s.label}</span>
                         <span className="font-semibold tabular-nums text-green-600 dark:text-green-400">
-                          {nicheScoreCard.currentScore}% → {s.newScore}%
+                          {Number.isFinite(nicheScoreCard.currentScore) ? `${nicheScoreCard.currentScore}%` : "—"} → {Number.isFinite(s.newScore) ? `${s.newScore}%` : "—"}
                         </span>
                       </li>
                     ))}

@@ -12,11 +12,16 @@ export interface ImageGenOptions {
 
 export type OnImageProgress = (index: number, imagePath: string) => void | Promise<void>;
 
+export interface ImageGenCallOptions {
+  aspectRatio?: "9:16" | "16:9";
+}
+
 export interface ImageProviderInterface {
   generateImages(
     scenes: { visualDescription: string }[],
     artStylePrompt: string,
     negativePrompt?: string,
     onProgress?: OnImageProgress,
+    options?: ImageGenCallOptions,
   ): Promise<ImageGenResult>;
 }

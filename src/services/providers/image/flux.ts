@@ -13,6 +13,7 @@ export class FluxImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     _negativePrompt?: string,
     onProgress?: OnImageProgress,
+    _options?: import("./types").ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const auth = process.env.REPLICATE_API_TOKEN;
     if (!auth) throw new Error("REPLICATE_API_TOKEN is not configured");

@@ -13,6 +13,7 @@ export class DalleImageProvider implements ImageProviderInterface {
     artStylePrompt: string,
     _negativePrompt?: string,
     onProgress?: OnImageProgress,
+    _options?: import("./types").ImageGenCallOptions,
   ): Promise<ImageGenResult> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");

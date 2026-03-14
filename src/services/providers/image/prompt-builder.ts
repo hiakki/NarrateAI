@@ -5,13 +5,20 @@ export interface ImagePromptResult {
   negativePrompt: string;
 }
 
+export type AspectRatio = "9:16" | "16:9";
+
 export function buildImagePrompt(
   visualDescription: string,
   artStyle: ArtStyle,
   sceneIndex: number,
   totalScenes: number,
   characterPrompt?: string,
+  aspectRatio: AspectRatio = "9:16",
 ): ImagePromptResult {
+  const compositionCue =
+    aspectRatio === "16:9"
+      ? "horizontal 16:9 landscape widescreen composition, cinematic letterbox"
+      : "vertical 9:16 portrait composition";
   const cinematicCues = [
     "cinematic establishing shot, layered foreground/midground/background",
     "dynamic medium shot with implied motion and directional energy",
@@ -37,7 +44,7 @@ export function buildImagePrompt(
     cue,
     progressionCue,
     artStyle.promptModifier,
-    "vertical 9:16 portrait composition",
+    compositionCue,
     QUALITY_SUFFIX,
   ]
     .filter(Boolean)

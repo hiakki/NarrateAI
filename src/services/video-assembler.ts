@@ -6,6 +6,8 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("Assembly");
 
+export type AspectRatio = "9:16" | "16:9";
+
 export interface AssemblyInput {
   /** Scene sources: images (Ken Burns) and/or pre-generated video clips. If omitted, all from imagePaths as images. */
   sceneInputs?: Array<{ type: "image"; path: string } | { type: "video"; path: string }>;
@@ -21,6 +23,8 @@ export interface AssemblyInput {
   tone?: string;
   niche?: string;
   language?: string;
+  /** Output aspect ratio. Default 9:16 (1080x1920). Use 16:9 for cinematic (1920x1080). */
+  aspectRatio?: AspectRatio;
 }
 
 const MUSIC_VOLUME: Record<string, number> = {
@@ -194,7 +198,10 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     tone,
     niche,
     language,
+    aspectRatio = "9:16",
   } = input;
+
+  const [outW, outH] = aspectRatio === "16:9" ? [1920, 1080] : [1080, 1920];
 
   const sceneInputs =
     rawSceneInputs ??
@@ -265,7 +272,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
         `Scene ${i + 1}: image, ${dur.toFixed(2)}s, ${frames}f, effect=${i === 0 ? "hook-zoom" : i === sceneInputs.length - 1 ? "resolve-out" : "varied"}`
       );
       filterParts.push(
-        `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=1080x1920:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS` +
+        `[${i}:v]zoompan=z='${kb.zExpr}':x='${kb.xExpr}':y='${kb.yExpr}':d=${frames}:s=${outW}x${outH}:fps=${FPS},trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS` +
           `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}` +
           `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}` +
           `[v${i}]`
@@ -273,7 +280,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     } else {
       log.debug(`Scene ${i + 1}: video clip, ${dur.toFixed(2)}s, fade=${transitionSec}s`);
       filterParts.push(
-        `[${i}:v]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2` +
+        `[${i}:v]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2` +
           `${fadeIn > 0 ? `,fade=t=in:st=0:d=${fadeIn.toFixed(3)}` : ""}` +
           `${fadeOut > 0 ? `,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)}` : ""}` +
           `[v${i}]`
