@@ -20,6 +20,7 @@ popd
 
 set "PM2_ECO=%PROJECT_DIR%\ecosystem.config.cjs"
 if not defined PORT set "PORT=3000"
+:: Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
 set "NODE_MAJOR=22"
 set "SKIP_PREREQS=0"
 set "RESTORE_FILE="
@@ -118,17 +119,22 @@ goto :eof
 where node >nul 2>nul
 if errorlevel 1 goto :do_install_node
 for /f "tokens=1 delims=.v" %%v in ('node -v 2^>nul') do set "_NV=%%v"
+if !_NV! GEQ 24 (
+    echo [WARN]  Node.js !_NV! detected. Node 22 LTS is recommended to avoid deprecation warnings.
+    echo [INFO]  Consider installing Node %NODE_MAJOR% from https://nodejs.org/en/download
+    goto :eof
+)
 if !_NV! GEQ %NODE_MAJOR% (
     echo [ OK ]  Node.js already installed
     goto :eof
 )
-echo [WARN]  Node.js too old, upgrading...
+echo [WARN]  Node.js too old, need v%NODE_MAJOR%+
 :do_install_node
-echo [INFO]  Installing Node.js %NODE_MAJOR%...
-if "!PKG!"=="winget" winget install -e --id OpenJS.NodeJS --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install nodejs -y
+echo [INFO]  Installing Node.js %NODE_MAJOR% LTS...
+if "!PKG!"=="winget" winget install -e --id OpenJS.NodeJS.%NODE_MAJOR% --accept-package-agreements --accept-source-agreements
+if "!PKG!"=="choco" choco install nodejs-lts -y
 if "!PKG!"=="none" (
-    echo [ERR ] Cannot auto-install Node.js. Get it from https://nodejs.org
+    echo [ERR ] Cannot auto-install Node.js. Install v%NODE_MAJOR% from https://nodejs.org
     exit /b 1
 )
 call :refresh_path

@@ -23,6 +23,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_FILE="$PROJECT_DIR/deploy.log"
 PM2_ECOSYSTEM="$PROJECT_DIR/ecosystem.config.cjs"
 PORT="${PORT:-3000}"
+# Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
 NODE_MAJOR=22
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -91,19 +92,24 @@ install_docker() {
   ok "Docker installed"
 }
 
-# ── Prerequisite: Node.js ────────────────────────────────────────────────────
+# ── Prerequisite: Node.js (22 LTS; avoid 24+ due to DEP0169) ───────────────────
 install_node() {
   if command -v node &>/dev/null; then
     local ver
     ver="$(node -v | sed 's/v//' | cut -d. -f1)"
+    if [[ "$ver" -ge 24 ]]; then
+      warn "Node.js $(node -v) detected. Node 22 LTS is recommended to avoid deprecation warnings (DEP0169)."
+      info "Install Node 22: brew install node@22 (macOS) or https://nodejs.org/en/download"
+      return
+    fi
     if [[ "$ver" -ge "$NODE_MAJOR" ]]; then
       ok "Node.js already installed ($(node -v))"
       return
     fi
-    warn "Node.js $(node -v) found, need v${NODE_MAJOR}+. Upgrading..."
+    warn "Node.js $(node -v) found, need v${NODE_MAJOR}+. Installing..."
   fi
 
-  info "Installing Node.js ${NODE_MAJOR}..."
+  info "Installing Node.js ${NODE_MAJOR} LTS..."
   case "$PKG" in
     apt)
       curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash - 2>/dev/null
@@ -118,7 +124,7 @@ install_node() {
       sudo dnf install -y nodejs
       ;;
     *)
-      err "Cannot auto-install Node.js. Install v${NODE_MAJOR}+ manually: https://nodejs.org"
+      err "Cannot auto-install Node.js. Install v${NODE_MAJOR} LTS manually: https://nodejs.org"
       exit 1
       ;;
   esac
