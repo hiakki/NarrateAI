@@ -1,31 +1,28 @@
 #!/usr/bin/env node
 /**
- * Run pnpm dev:all + Cloudflare tunnel in one process.
- * Loads .env for PORT (default 3000). Requires cloudflared on PATH.
+ * Run pnpm dev:all + tunnel (Cloudflare or localtunnel) in one process.
+ * Env: TUNNEL_PROVIDER=cloudflare|localtunnel, TUNNEL_SUBDOMAIN (for localtunnel), PORT.
  */
 const { spawn, execSync } = require("child_process");
 const path = require("path");
+const { PORT, PROVIDER, getTunnelCommand, getTunnelCommandString } = require("./tunnel-config");
 
 const projectRoot = path.resolve(__dirname, "..");
-try {
-  require("dotenv").config({ path: path.join(projectRoot, ".env") });
-} catch {
-  // dotenv optional
-}
-const PORT = process.env.PORT || "3000";
 
-try {
-  execSync("cloudflared --version", { stdio: "ignore" });
-} catch {
-  console.error("[ERROR] cloudflared not found. Install it first:");
-  console.error("  Windows: winget install Cloudflare.cloudflared");
-  console.error("  macOS:   brew install cloudflare/cloudflare/cloudflared");
-  console.error("  Or run:  scripts/setup_prerequisites.bat or ./scripts/setup_prerequisites.sh");
-  process.exit(1);
+if (PROVIDER === "cloudflare") {
+  try {
+    execSync("cloudflared --version", { stdio: "ignore" });
+  } catch {
+    console.error("[ERROR] cloudflared not found. Install it first:");
+    console.error("  Windows: winget install Cloudflare.cloudflared");
+    console.error("  macOS:   brew install cloudflare/cloudflare/cloudflared");
+    console.error("  Or use localtunnel: set TUNNEL_PROVIDER=localtunnel in .env");
+    process.exit(1);
+  }
 }
 
-const tunnelUrl = `http://localhost:${PORT}`;
-console.log("[INFO] Starting app + tunnel (PORT=" + PORT + "). Public URL will appear below.\n");
+const tunnelCmd = getTunnelCommandString();
+console.log("[INFO] Starting app + " + PROVIDER + " tunnel (PORT=" + PORT + "). Public URL will appear below.\n");
 const child = spawn(
   "pnpm",
   [
@@ -36,7 +33,7 @@ const child = spawn(
     "-c",
     "blue,magenta",
     "pnpm dev:all",
-    `cloudflared tunnel --url ${tunnelUrl}`,
+    tunnelCmd,
   ],
   { stdio: "inherit", shell: true, cwd: projectRoot }
 );

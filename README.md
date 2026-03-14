@@ -80,18 +80,19 @@ This starts the Next.js app, the video-generation worker, and the scheduler in o
 
 ### Public URL (tunneling)
 
-To expose the app on a public URL (e.g. for OAuth callbacks or sharing), use **Cloudflare Tunnel** (cloudflared). Setup installs cloudflared; **localtunnel is not used**.
+Expose the app on a public URL (e.g. for OAuth callbacks or sharing). Two providers:
 
-```bash
-pnpm dev:tunnel
-```
+| Provider    | How to use | Subdomain |
+|------------|------------|-----------|
+| **Cloudflare** (default) | Setup installs `cloudflared`. Set `TUNNEL_PROVIDER=cloudflare` or leave unset. | Random `https://….trycloudflare.com` |
+| **Localtunnel**         | Set `TUNNEL_PROVIDER=localtunnel` in `.env`. Uses the `localtunnel` npm package. | Set `TUNNEL_SUBDOMAIN=myapp` for `https://myapp.loca.lt` (if available) |
 
-This runs `pnpm dev:all` and starts a Cloudflare quick tunnel in one terminal. A `https://….trycloudflare.com` URL will appear in the logs. Set in `.env`:
+- **All in one terminal:** `pnpm dev:tunnel` — runs app + tunnel. Stopping stops both; restarting gives a new URL.
+- **Tunnel only (keeps URL when you restart the app):** run in two terminals:
+  1. `pnpm tunnel` — start the tunnel, copy the public URL once.
+  2. `pnpm dev:all` — run the app; restart anytime without touching the tunnel.
 
-- `NEXT_PUBLIC_APP_URL=https://your-url.trycloudflare.com`
-- `NEXTAUTH_URL=https://your-url.trycloudflare.com`
-
-Then restart so OAuth (Google, Meta, YouTube) redirects work.
+Set in `.env`: `NEXT_PUBLIC_APP_URL` and `NEXTAUTH_URL` to your tunnel URL so OAuth (Google, Meta, YouTube) redirects work.
 
 If you see a `DEP0169 url.parse()` deprecation warning, it comes from a dependency (e.g. Next.js or ioredis); the dev script suppresses it. Safe to ignore or set `NODE_OPTIONS=--disable-warning=DEP0169` if needed.
 
