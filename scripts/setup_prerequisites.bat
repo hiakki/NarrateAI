@@ -297,9 +297,9 @@ call "%SCRIPT_DIR%backup-restore.bat" restore "!_RF!" --yes
 goto :eof
 
 :: ─────────────────────────────────────────────────────────────────────────────
-:build_app
+:prepare_project
 echo.
-echo --- Installing dependencies and building ---
+echo --- Preparing project (deps + schema) ---
 pushd "%PROJECT_DIR%"
 
 echo [INFO]  Installing Node.js dependencies...
@@ -319,15 +319,6 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [ OK ]  Database schema synced
-
-echo [INFO]  Building Next.js application...
-call pnpm build
-if errorlevel 1 (
-    echo [ERR ] Build failed
-    popd
-    exit /b 1
-)
-echo [ OK ]  Build complete
 
 popd
 goto :eof
@@ -458,7 +449,7 @@ exit /b 0
 :do_deploy
 echo.
 echo +================================================+
-echo     NarrateAI -- Setup Prerequisites and Deploy
+echo     NarrateAI -- Setup Prerequisites
 echo +================================================+
 echo.
 
@@ -485,9 +476,12 @@ if not "%RESTORE_FILE%"=="" (
     )
 )
 
-call :build_app
+call :prepare_project
 if errorlevel 1 exit /b 1
 
-call :start_app
-call :start_tunnel
+echo.
+echo ================================================================
+echo   Setup complete. Run the app with:  pnpm dev:all
+echo ================================================================
+echo.
 exit /b 0

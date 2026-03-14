@@ -292,9 +292,9 @@ restore_backup() {
   bash "$SCRIPT_DIR/backup-restore.sh" restore "$archive" --yes
 }
 
-# ── Install dependencies + build ─────────────────────────────────────────────
-build_app() {
-  step "Installing dependencies and building"
+# ── Prepare project (deps + schema only) ──────────────────────────────────────
+prepare_project() {
+  step "Preparing project (dependencies + schema)"
   cd "$PROJECT_DIR"
 
   info "Installing Node.js dependencies..."
@@ -311,10 +311,6 @@ build_app() {
     exit 1
   fi
   ok "Database schema synced"
-
-  info "Building Next.js application..."
-  pnpm build
-  ok "Build complete"
 }
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
@@ -504,7 +500,7 @@ main() {
 
   echo ""
   echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════╗${NC}"
-  echo -e "${BOLD}${CYAN}║         NarrateAI — Deployment Script         ║${NC}"
+  echo -e "${BOLD}${CYAN}║       NarrateAI — Setup Prerequisites         ║${NC}"
   echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════╝${NC}"
   echo ""
 
@@ -533,14 +529,14 @@ main() {
     fi
   fi
 
-  # 5. Build
-  build_app
+  # 5. Prepare project (deps + schema only; no build, no PM2)
+  prepare_project
 
-  # 6. Start app
-  start_app
-
-  # 7. Tunnel
-  start_tunnel
+  echo ""
+  echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}  Setup complete. Run the app with:  pnpm dev:all${NC}"
+  echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+  echo ""
 }
 
 main "$@"
