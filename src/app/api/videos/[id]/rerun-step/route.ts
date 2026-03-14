@@ -154,7 +154,8 @@ export async function POST(
         ttsProvider: step === "TTS" ? null : video.series.ttsProvider,
         imageProvider: step === "IMAGES" ? null : video.series.imageProvider,
       };
-      const resolved = resolveProviders(seriesForResolve, currentUser ?? null);
+      const userForResolve: Parameters<typeof resolveProviders>[1] = currentUser ?? null;
+      const resolved = resolveProviders(seriesForResolve, userForResolve);
       const finalImage = step === "IMAGES" && imageProviderOverride ? imageProviderOverride : resolved.image;
       const finalTts = step === "TTS" && ttsProviderOverride ? ttsProviderOverride : resolved.tts;
       const scenes = (video.scenesJson as { text: string; visualDescription: string }[]) ?? [];
