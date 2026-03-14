@@ -1,13 +1,16 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: NarrateAI — Backup and Restore (Windows)
+:: NarrateAI — Take backup or restore from backup (Windows)
+::
+:: Use this to backup your data or restore from a backup.
+:: To run the app, use: pnpm dev:all
 ::
 :: Usage:
 ::   scripts\backup-restore.bat backup                     Full backup
 ::   scripts\backup-restore.bat backup --db-only           DB + config only
-::   scripts\backup-restore.bat restore <file.tar.gz>      Restore from backup
-::   scripts\backup-restore.bat restore <file.tar.gz> --yes  Skip prompts
+::   scripts\backup-restore.bat restore file.tar.gz       Restore from backup
+::   scripts\backup-restore.bat restore file.tar.gz --yes  Restore without prompts
 ::   scripts\backup-restore.bat list                       List backups
 
 set "SCRIPT_DIR=%~dp0"
@@ -40,13 +43,13 @@ exit /b 1
 :: ─────────────────────────────────────────────────────────────────────────────
 :show_help
 echo.
-echo NarrateAI Backup and Restore - Windows
+echo NarrateAI - Take backup or restore from backup
 echo.
 echo Usage:
 echo   %~nx0 backup                   Full backup
 echo   %~nx0 backup --db-only         DB + config only
 echo   %~nx0 restore file.tar.gz      Restore from backup
-echo   %~nx0 restore file.tar.gz --yes  Skip prompts
+echo   %~nx0 restore file.tar.gz --yes  Restore without prompts
 echo   %~nx0 list                     List backups
 echo.
 echo Included in backup:
@@ -55,6 +58,7 @@ echo   - .env, assets\fonts, public\music, public\characters
 echo   - public\videos (unless --db-only), prisma\schema.prisma
 echo.
 echo Backups saved to: %BKP_DIR%
+echo Run the app with: pnpm dev:all
 echo.
 exit /b 0
 
@@ -94,13 +98,33 @@ goto :eof
 
 :: ─────────────────────────────────────────────────────────────────────────────
 :check_tools
+set "USE_DOCKER_PG=0"
 set "_MISSING="
-where pg_dump >nul 2>nul || set "_MISSING=!_MISSING! pg_dump"
-where psql >nul 2>nul || set "_MISSING=!_MISSING! psql"
 where tar >nul 2>nul || set "_MISSING=!_MISSING! tar"
+set "NEED_PG="
+where pg_dump >nul 2>nul || set "NEED_PG=1" & set "_MISSING=!_MISSING! pg_dump"
+where psql >nul 2>nul || set "NEED_PG=1" & set "_MISSING=!_MISSING! psql"
+if defined NEED_PG (
+    pushd "%PROJECT_DIR%"
+    docker compose exec -T postgres pg_dump --version >nul 2>nul
+    if not errorlevel 1 (
+        docker compose exec -T postgres psql --version >nul 2>nul
+        if not errorlevel 1 (
+            if "!DB_HOST!"=="localhost" set "USE_DOCKER_PG=1"
+            if "!DB_HOST!"=="127.0.0.1" set "USE_DOCKER_PG=1"
+        )
+    )
+    popd
+    if "!USE_DOCKER_PG!"=="1" (
+        echo [INFO]  Using PostgreSQL tools via Docker container.
+        set "_MISSING=!_MISSING: pg_dump=!"
+        set "_MISSING=!_MISSING: psql=!"
+    )
+)
 if not "!_MISSING!"=="" (
     echo [ERROR] Missing tools:!_MISSING!
     echo   Install PostgreSQL client: https://www.postgresql.org/download/windows/
+    echo   Or ensure Docker + Postgres are running and DATABASE_URL uses localhost.
     echo   To create empty tables without restoring, run: pnpm db:push
     exit /b 1
 )
@@ -109,12 +133,24 @@ goto :eof
 :: ─────────────────────────────────────────────────────────────────────────────
 :check_db
 echo [INFO]  Testing database connection...
-set "PGPASSWORD=%DB_PASS%"
-psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% -c "SELECT 1;" >nul 2>nul
-if errorlevel 1 (
-    echo [ERROR] Cannot connect to %DB_HOST%:%DB_PORT%/%DB_NAME%
-    echo   Make sure PostgreSQL is running: docker compose up -d postgres
-    exit /b 1
+if "!USE_DOCKER_PG!"=="1" (
+    pushd "%PROJECT_DIR%"
+    docker compose exec -T postgres psql -U %DB_USER% -d %DB_NAME% -c "SELECT 1;" >nul 2>nul
+    if errorlevel 1 (
+        popd
+        echo [ERROR] Cannot connect to database via Docker.
+        echo   Make sure PostgreSQL is running: docker compose up -d postgres
+        exit /b 1
+    )
+    popd
+) else (
+    set "PGPASSWORD=%DB_PASS%"
+    psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% -c "SELECT 1;" >nul 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Cannot connect to %DB_HOST%:%DB_PORT%/%DB_NAME%
+        echo   Make sure PostgreSQL is running: docker compose up -d postgres
+        exit /b 1
+    )
 )
 echo [ OK ]  Database connection OK
 goto :eof
@@ -153,11 +189,22 @@ set "WORK=%TEMP%\narrateai-bak-%RANDOM%"
 mkdir "%WORK%" 2>nul
 
 echo [INFO]  Dumping database '%DB_NAME%'...
-set "PGPASSWORD=%DB_PASS%"
-pg_dump -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% --no-owner --no-privileges --clean --if-exists -F p -f "%WORK%\database.sql"
-if errorlevel 1 (
-    echo [ERROR] pg_dump failed
-    goto :bak_clean
+if "!USE_DOCKER_PG!"=="1" (
+    pushd "%PROJECT_DIR%"
+    docker compose exec -T postgres pg_dump -U %DB_USER% -d %DB_NAME% --no-owner --no-privileges --clean --if-exists -F p > "%WORK%\database.sql"
+    if errorlevel 1 (
+        popd
+        echo [ERROR] pg_dump failed
+        goto :bak_clean
+    )
+    popd
+) else (
+    set "PGPASSWORD=%DB_PASS%"
+    pg_dump -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% --no-owner --no-privileges --clean --if-exists -F p -f "%WORK%\database.sql"
+    if errorlevel 1 (
+        echo [ERROR] pg_dump failed
+        goto :bak_clean
+    )
 )
 echo [ OK ]  Database dumped
 
@@ -278,10 +325,23 @@ if exist "%WORK%\dot-env" (
 
 if exist "%WORK%\database.sql" (
     echo [INFO]  Restoring database...
-    set "PGPASSWORD=%DB_PASS%"
-    psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '%DB_NAME%';" 2>nul | findstr "1" >nul 2>nul
-    if errorlevel 1 psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d postgres -c "CREATE DATABASE %DB_NAME%;" >nul 2>nul
-    psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% -f "%WORK%\database.sql" >nul 2>nul
+    if "!USE_DOCKER_PG!"=="1" (
+        pushd "%PROJECT_DIR%"
+        docker compose exec -T postgres psql -U %DB_USER% -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '%DB_NAME%';" 2>nul | findstr "1" >nul 2>nul
+        if errorlevel 1 docker compose exec -T postgres psql -U %DB_USER% -d postgres -c "CREATE DATABASE %DB_NAME%;" >nul 2>nul
+        type "%WORK%\database.sql" | docker compose exec -i postgres psql -U %DB_USER% -d %DB_NAME% >nul 2>nul
+        if errorlevel 1 (
+            popd
+            echo [WARN]  Database restore had errors. Check logs.
+        ) else (
+            popd
+        )
+    ) else (
+        set "PGPASSWORD=%DB_PASS%"
+        psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '%DB_NAME%';" 2>nul | findstr "1" >nul 2>nul
+        if errorlevel 1 psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d postgres -c "CREATE DATABASE %DB_NAME%;" >nul 2>nul
+        psql -h %DB_HOST% -p %DB_PORT% -U %DB_USER% -d %DB_NAME% -f "%WORK%\database.sql" >nul 2>nul
+    )
     echo [ OK ]  Database restored
 )
 
@@ -330,9 +390,8 @@ echo.
 echo ============================================================
 echo   Restore complete!
 echo ============================================================
-echo   1. Review .env and update API keys
-echo   2. pnpm install
-echo   3. pnpm dev:all  or  scripts\setup_prerequisites.bat
+echo   1. Review .env and update API keys if needed
+echo   2. Run the app: pnpm dev:all
 echo.
 
 :rst_clean

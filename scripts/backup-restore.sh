@@ -2,21 +2,18 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NarrateAI — Backup & Restore
+# NarrateAI — Take backup or restore from backup
 #
-# Backs up PostgreSQL database, generated videos, environment config,
-# fonts, music, characters, and Prisma schema into a single .tar.gz.
+# Use to backup your data or restore from a backup. Run the app with: pnpm dev:all
 #
 # Usage:
 #   ./scripts/backup-restore.sh backup              # full backup (DB + all assets)
-#   ./scripts/backup-restore.sh backup --db-only    # database + config only
+#   ./scripts/backup-restore.sh backup --db-only   # database + config only
 #   ./scripts/backup-restore.sh restore <file.tar.gz>
 #   ./scripts/backup-restore.sh restore <file.tar.gz> --yes   # skip confirmation
-#   ./scripts/backup-restore.sh list                # list available backups
+#   ./scripts/backup-restore.sh list               # list available backups
 #
-# Environment variables (auto-read from .env if present):
-#   DATABASE_URL  — postgres connection string
-#   BACKUP_DIR    — where to store backups (default: ./backups)
+# Environment (auto-read from .env): DATABASE_URL, BACKUP_DIR (default: ./backups)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -363,8 +360,7 @@ do_restore() {
   echo ""
   echo "  Next steps:"
   echo "    1. Review .env and update API keys if needed"
-  echo "    2. Run: pnpm install"
-  echo "    3. Run: pnpm dev:all   (or use scripts/setup_prerequisites.sh)"
+  echo "    2. Run the app: pnpm dev:all"
   echo ""
 }
 

@@ -2,20 +2,19 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NarrateAI — Setup Prerequisites & Deploy
+# NarrateAI — Setup everything and verify it works
 #
-# Takes a server from zero to a fully running NarrateAI instance.
-# Installs all prerequisites, starts infrastructure, optionally restores
-# from a backup, builds the app, and exposes it via Cloudflare tunnel.
+# Use once to install tools, start infra (Docker Postgres + Redis), build,
+# and optionally restore from backup. After setup, run the app with: pnpm dev:all
 #
 # Usage:
-#   ./scripts/setup_prerequisites.sh                                        # fresh deploy
-#   ./scripts/setup_prerequisites.sh --restore backups/full-backup.tar.gz   # deploy + restore
-#   ./scripts/setup_prerequisites.sh --skip-prereqs                         # skip installs
-#   ./scripts/setup_prerequisites.sh --skip-prereqs --restore backup.tar.gz
-#   ./scripts/setup_prerequisites.sh --stop                                 # stop all services
-#   ./scripts/setup_prerequisites.sh --status                               # show running status
+#   ./scripts/setup_prerequisites.sh                      # full setup + deploy
+#   ./scripts/setup_prerequisites.sh --restore backup.tar.gz  # setup + restore
+#   ./scripts/setup_prerequisites.sh --skip-prereqs       # skip tool installs
+#   ./scripts/setup_prerequisites.sh --stop               # stop all services
+#   ./scripts/setup_prerequisites.sh --status             # show status
 #
+# Run the app: pnpm dev:all   |   Backup/restore only: scripts/backup-restore.sh
 # Supports: Ubuntu/Debian (apt), macOS (brew)
 # ─────────────────────────────────────────────────────────────────────────────
 

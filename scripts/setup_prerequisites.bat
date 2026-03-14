@@ -1,14 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: NarrateAI — Setup Prerequisites and Deploy (Windows)
+:: NarrateAI — Setup everything and verify it works (Windows)
+::
+:: Use this once to install tools, start infra, build, and optionally restore.
+:: To run the app afterward, use: pnpm dev:all
 ::
 :: Usage:
-::   scripts\setup_prerequisites.bat                                  Fresh deploy
-::   scripts\setup_prerequisites.bat --restore backups\backup.tar.gz  Deploy + restore
-::   scripts\setup_prerequisites.bat --skip-prereqs                   Skip installs
+::   scripts\setup_prerequisites.bat                                  Full setup + deploy
+::   scripts\setup_prerequisites.bat --restore backups\backup.tar.gz   Setup + restore backup
+::   scripts\setup_prerequisites.bat --skip-prereqs                   Skip tool installs
 ::   scripts\setup_prerequisites.bat --stop                           Stop services
-::   scripts\setup_prerequisites.bat --status                         Show status
+::   scripts\setup_prerequisites.bat --status                          Show status
 
 set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%.."
@@ -40,14 +43,17 @@ goto :do_deploy
 
 :show_help
 echo.
-echo NarrateAI Setup Prerequisites and Deploy - Windows
+echo NarrateAI - Setup everything and verify it works
 echo.
 echo Usage:
-echo   %~nx0                                       Fresh deployment
-echo   %~nx0 --restore backup.tar.gz               Deploy and restore from backup
-echo   %~nx0 --skip-prereqs                         Skip prerequisite installation
-echo   %~nx0 --stop                                 Stop all NarrateAI services
-echo   %~nx0 --status                               Show running status
+echo   %~nx0                       Full setup: install tools, start infra, build
+echo   %~nx0 --restore file.tar.gz Setup and restore from backup
+echo   %~nx0 --skip-prereqs       Skip tool installation
+echo   %~nx0 --stop               Stop all services
+echo   %~nx0 --status             Show status
+echo.
+echo After setup, run the app with:  pnpm dev:all
+echo Backup/restore only:            scripts\backup-restore.bat
 echo.
 exit /b 0
 
