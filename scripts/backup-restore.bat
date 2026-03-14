@@ -101,6 +101,7 @@ where tar >nul 2>nul || set "_MISSING=!_MISSING! tar"
 if not "!_MISSING!"=="" (
     echo [ERROR] Missing tools:!_MISSING!
     echo   Install PostgreSQL client: https://www.postgresql.org/download/windows/
+    echo   To create empty tables without restoring, run: pnpm db:push
     exit /b 1
 )
 goto :eof
@@ -317,8 +318,12 @@ if exist "%WORK%\prisma\schema.prisma" (
 
 echo [INFO]  Syncing schema...
 pushd "%PROJECT_DIR%"
-call npx prisma db push --accept-data-loss >nul 2>nul
-echo [ OK ]  Schema synced
+call npx prisma db push --accept-data-loss
+if errorlevel 1 (
+    echo [WARN]  Schema sync failed. Run manually: pnpm db:push
+) else (
+    echo [ OK ]  Schema synced
+)
 popd
 
 echo.

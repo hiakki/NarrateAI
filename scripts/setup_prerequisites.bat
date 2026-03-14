@@ -306,7 +306,12 @@ call pnpm db:generate
 echo [ OK ]  Prisma client generated
 
 echo [INFO]  Pushing database schema...
-call pnpm db:push >nul 2>nul
+call pnpm db:push
+if errorlevel 1 (
+    echo [ERR ]  Database schema push failed. Check DATABASE_URL and that PostgreSQL is running.
+    popd
+    exit /b 1
+)
 echo [ OK ]  Database schema synced
 
 echo [INFO]  Building Next.js application...
@@ -463,7 +468,16 @@ if errorlevel 1 exit /b 1
 call :setup_env
 if errorlevel 1 exit /b 1
 
-if not "%RESTORE_FILE%"=="" call :restore_backup
+if not "%RESTORE_FILE%"=="" (
+    call :restore_backup
+    if errorlevel 1 (
+        echo [WARN]  Restore failed or skipped. Ensure PostgreSQL client is installed for restore.
+        echo [WARN]  Videos, DB data, and other backup contents were NOT restored.
+        echo [INFO]  To restore later: install PostgreSQL client, then run:
+        echo         scripts\backup-restore.bat restore "%RESTORE_FILE%"
+        echo [INFO]  Continuing: schema will be pushed so the app can run.
+    )
+)
 
 call :build_app
 if errorlevel 1 exit /b 1

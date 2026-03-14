@@ -307,7 +307,10 @@ build_app() {
   ok "Prisma client generated"
 
   info "Pushing database schema..."
-  pnpm db:push 2>/dev/null || warn "Schema push had warnings (may already be up to date)"
+  if ! pnpm db:push; then
+    err "Database schema push failed. Check DATABASE_URL and that PostgreSQL is running."
+    exit 1
+  fi
   ok "Database schema synced"
 
   info "Building Next.js application..."
@@ -522,7 +525,13 @@ main() {
 
   # 4. Restore from backup if provided
   if [[ -n "$restore_file" ]]; then
-    restore_backup "$restore_file"
+    if ! restore_backup "$restore_file"; then
+      warn "Restore failed or skipped. Ensure PostgreSQL client is installed for restore."
+      warn "Videos, DB data, and other backup contents were NOT restored."
+      info "To restore later: install PostgreSQL client, then run:"
+      echo "    scripts/backup-restore.sh restore $restore_file"
+      info "Continuing: schema will be pushed so the app can run."
+    fi
   fi
 
   # 5. Build

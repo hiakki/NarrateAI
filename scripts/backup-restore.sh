@@ -82,6 +82,8 @@ check_tools() {
     echo "Install PostgreSQL client tools:"
     echo "  macOS:   brew install postgresql@15"
     echo "  Ubuntu:  sudo apt-get install postgresql-client-15"
+    echo ""
+    echo "To create empty tables without restoring, run: pnpm db:push"
     exit 1
   fi
 }
