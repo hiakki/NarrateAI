@@ -6,9 +6,11 @@ import { createReadStream } from "fs";
 import { createLogger } from "@/lib/logger";
 import {
   getImageToVideoProvider,
+  type ImageToVideoProviderInfo,
 } from "@/config/image-to-video-providers";
 import { getLocalBackendUrl, wrapLocalBackendFetchError } from "@/lib/local-backend";
 import { requireHuggingFaceToken } from "@/lib/huggingface";
+import { getKeyRotator, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS } from "@/lib/api-key-rotation";
 
 const log = createLogger("ImageToVideo");
 
@@ -28,9 +30,84 @@ export interface ImageToVideoResult {
   tmpDir: string;
 }
 
+const RETRYABLE_STATUS_RE = /\b(402|429|503)\b/;
+
+function isRetryableI2VError(err: Error): boolean {
+  return RETRYABLE_STATUS_RE.test(err.message);
+}
+
+const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik"]);
+
+const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
+  POLLINATIONS_GROK_VIDEO: "Pollinations",
+  KLING_FREEPIK: "Kling (Freepik)",
+  HF_LTX_VIDEO: "HuggingFace LTX-Video",
+  HF_WAN_I2V: "HuggingFace Wan I2V",
+  SVD_REPLICATE: "Replicate SVD",
+  LOCAL_BACKEND: "Local Backend",
+};
+
+function userFriendlyI2VError(providerId: string, err: Error): Error {
+  const name = PROVIDER_FRIENDLY_NAMES[providerId] ?? providerId;
+  const msg = err.message;
+
+  if (msg.includes("402"))
+    return new Error(`${name} free quota exhausted. Add more API keys in Settings or switch to a different I2V provider.`);
+  if (msg.includes("429"))
+    return new Error(`${name} rate limit reached. Wait a few minutes or add more API keys to rotate.`);
+  if (msg.includes("503"))
+    return new Error(`${name} is temporarily unavailable. Try again later.`);
+  if (msg.includes("not configured"))
+    return new Error(`${name} API key is not configured. Add it in your .env file.`);
+
+  return new Error(`${name} video generation failed: ${msg.slice(0, 200)}`);
+}
+
+async function dispatchToProvider(
+  provider: ImageToVideoProviderInfo,
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  options: { prompt?: string; durationSec?: number; aspectRatio?: "9:16" | "16:9" },
+  apiKey?: string,
+): Promise<ImageToVideoResult> {
+  const dur = options.durationSec ?? 5;
+  if (provider.type === "local") {
+    return generateClipViaLocalBackend(
+      imagePath, outputPath, tmpDir,
+      provider.localBaseUrl ?? getLocalBackendUrl(), options.prompt, dur,
+    );
+  }
+  if (provider.type === "huggingface" && provider.hfModelId) {
+    const token = apiKey ?? requireHuggingFaceToken("Hugging Face image-to-video");
+    return generateClipViaHuggingFace(
+      imagePath, outputPath, tmpDir, provider.hfModelId, token, options.prompt, dur,
+    );
+  }
+  if (provider.type === "replicate" && provider.replicateModel) {
+    return generateClipViaReplicate(imagePath, outputPath, tmpDir, provider.replicateModel, dur);
+  }
+  if (provider.type === "pollinations" && provider.pollinationsModel) {
+    const key = apiKey ?? process.env.POLLINATIONS_API_KEY;
+    if (!key) throw new Error("POLLINATIONS_API_KEY is not configured");
+    return generateClipViaPollinations(
+      imagePath, outputPath, tmpDir, provider.pollinationsModel, key,
+      options.prompt, dur, options.aspectRatio ?? "9:16",
+    );
+  }
+  if (provider.type === "freepik" && provider.freepikModel) {
+    const key = apiKey ?? process.env.FREEPIK_API_KEY;
+    if (!key) throw new Error("FREEPIK_API_KEY is not configured");
+    return generateClipViaFreepik(
+      imagePath, outputPath, tmpDir, provider.freepikModel, key, options.prompt, dur,
+    );
+  }
+  throw new Error(`Missing config for image-to-video provider: ${provider.id}`);
+}
+
 /**
- * Generate a short video clip (typically 4–10s) from a single image using the given provider.
- * Supports Replicate (SVD), Hugging Face Inference (LTX-Video, Wan I2V), and Pollinations (Grok Video, Wan 2.6, Seedance).
+ * Generate a short video clip from a single image.
+ * Uses the specified provider with per-provider API key rotation.
  */
 export async function generateClipFromImage(
   imagePath: string,
@@ -47,65 +124,58 @@ export async function generateClipFromImage(
   const providerId = options.providerId ?? "SVD_REPLICATE";
   const provider = getImageToVideoProvider(providerId);
   if (!provider) {
-    throw new Error(`Unsupported image-to-video provider: ${providerId}`);
+    throw new Error(`Unknown I2V provider "${providerId}". Check your automation settings.`);
+  }
+
+  if (KEY_ROTATABLE_TYPES.has(provider.type) && provider.envVar) {
+    const rotator = getKeyRotator(provider.envVar);
+    if (!rotator.hasKeys) {
+      throw userFriendlyI2VError(providerId, new Error(`${provider.envVar} is not configured`));
+    }
+
+    let lastKeyError: Error | null = null;
+    while (true) {
+      const key = rotator.getNextKey();
+      if (!key) {
+        throw userFriendlyI2VError(
+          providerId,
+          lastKeyError ?? new Error("All API keys exhausted (402/429)"),
+        );
+      }
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-i2v-"));
+      const outputPath = path.join(tmpDir, "clip.mp4");
+      try {
+        const result = await dispatchToProvider(provider, imagePath, outputPath, tmpDir, options, key);
+        log.log(`[I2V]`, `${providerId} succeeded`);
+        return result;
+      } catch (err) {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        lastKeyError = err instanceof Error ? err : new Error(String(err));
+        if (isRetryableI2VError(lastKeyError)) {
+          const ttl = lastKeyError.message.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
+          rotator.markExhausted(key, ttl, lastKeyError.message.slice(0, 100));
+          continue;
+        }
+        throw userFriendlyI2VError(providerId, lastKeyError);
+      }
+    }
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-i2v-"));
   const outputPath = path.join(tmpDir, "clip.mp4");
-
   try {
-    if (provider.type === "local") {
-      return await generateClipViaLocalBackend(
-        imagePath,
-        outputPath,
-        tmpDir,
-        provider.localBaseUrl ?? getLocalBackendUrl(),
-        options.prompt,
-        options.durationSec ?? 5,
-      );
-    }
-    if (provider.type === "huggingface" && provider.hfModelId) {
-      return await generateClipViaHuggingFace(
-        imagePath,
-        outputPath,
-        tmpDir,
-        provider.hfModelId,
-        options.prompt,
-        options.durationSec ?? 5,
-      );
-    }
-    if (provider.type === "replicate" && provider.replicateModel) {
-      return await generateClipViaReplicate(
-        imagePath,
-        outputPath,
-        tmpDir,
-        provider.replicateModel,
-        options.durationSec ?? 5,
-      );
-    }
-    if (provider.type === "pollinations" && provider.pollinationsModel) {
-      return await generateClipViaPollinations(
-        imagePath,
-        outputPath,
-        tmpDir,
-        provider.pollinationsModel,
-        options.prompt,
-        options.durationSec ?? 5,
-        options.aspectRatio ?? "9:16",
-      );
-    }
-    throw new Error(`Missing config for image-to-video provider: ${providerId}`);
+    const result = await dispatchToProvider(provider, imagePath, outputPath, tmpDir, options);
+    log.log(`[I2V]`, `${providerId} succeeded`);
+    return result;
   } catch (err) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    throw err;
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    throw userFriendlyI2VError(providerId, wrapped);
   }
 }
 
 const HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models";
-
-function getHfToken(): string {
-  return requireHuggingFaceToken("Hugging Face image-to-video");
-}
 
 /**
  * Local backend video API contract:
@@ -186,10 +256,10 @@ async function generateClipViaHuggingFace(
   outputPath: string,
   tmpDir: string,
   modelId: string,
+  token: string,
   prompt?: string,
   durationSec: number = 5,
 ): Promise<ImageToVideoResult> {
-  const token = getHfToken();
   const imageBuffer = await fs.readFile(imagePath);
   const isPng = imagePath.toLowerCase().endsWith(".png");
   const contentType = isPng ? "image/png" : "image/jpeg";
@@ -291,21 +361,115 @@ export async function isValidMp4File(filePath: string): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Freepik (Kling v2) — async submit + poll
+// ---------------------------------------------------------------------------
+
+const FREEPIK_API_BASE = "https://api.freepik.com/v1/ai/image-to-video";
+
+async function generateClipViaFreepik(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  freepikModel: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+): Promise<ImageToVideoResult> {
+  const imageBuffer = await fs.readFile(imagePath);
+  const base64Image = imageBuffer.toString("base64");
+
+  const submitUrl = `${FREEPIK_API_BASE}/${freepikModel}`;
+  log.debug(`POST ${submitUrl} (Freepik ${freepikModel}, ${durationSec}s)`);
+
+  const submitRes = await fetch(submitUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-freepik-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      image: `data:image/jpeg;base64,${base64Image}`,
+      prompt: (prompt ?? "cinematic subtle motion").slice(0, 500),
+      duration: String(Math.min(durationSec, 10)),
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (!submitRes.ok) {
+    const errText = await submitRes.text().catch(() => "");
+    throw new Error(`Freepik ${freepikModel} ${submitRes.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const submitJson = (await submitRes.json()) as {
+    data?: { task_id?: string; status?: string };
+  };
+  const taskId = submitJson.data?.task_id;
+  if (!taskId) {
+    throw new Error(`Freepik ${freepikModel} submit returned no task_id: ${JSON.stringify(submitJson).slice(0, 200)}`);
+  }
+  log.debug(`Freepik task submitted: ${taskId}`);
+
+  const pollUrl = `${FREEPIK_API_BASE}/${freepikModel}/${taskId}`;
+  const maxPollMs = 5 * 60 * 1000;
+  const pollIntervalMs = 5_000;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxPollMs) {
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+
+    const pollRes = await fetch(pollUrl, {
+      headers: { "x-freepik-api-key": apiKey },
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!pollRes.ok) {
+      const errText = await pollRes.text().catch(() => "");
+      throw new Error(`Freepik poll ${pollRes.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const pollJson = (await pollRes.json()) as {
+      data?: {
+        status?: string;
+        generated?: string[];
+        error?: string;
+      };
+    };
+    const status = pollJson.data?.status;
+    log.debug(`Freepik task ${taskId} status: ${status}`);
+
+    if (status === "COMPLETED") {
+      const videoUrl = pollJson.data?.generated?.[0];
+      if (!videoUrl) {
+        throw new Error("Freepik COMPLETED but no video URL in response");
+      }
+      const dlRes = await fetch(videoUrl, { signal: AbortSignal.timeout(120_000) });
+      if (!dlRes.ok) {
+        throw new Error(`Failed to download Freepik video: ${dlRes.status}`);
+      }
+      const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+      validateVideoBuffer(videoBuffer, "Freepik");
+      await fs.writeFile(outputPath, videoBuffer);
+      log.debug(`Freepik clip saved: ${outputPath} (${(videoBuffer.length / 1024).toFixed(0)}KB)`);
+      return { videoPath: outputPath, tmpDir };
+    }
+
+    if (status === "FAILED" || status === "ERROR") {
+      throw new Error(`Freepik task ${taskId} failed: ${pollJson.data?.error ?? "unknown error"}`);
+    }
+  }
+
+  throw new Error(`Freepik task ${taskId} timed out after ${maxPollMs / 1000}s`);
+}
+
+// ---------------------------------------------------------------------------
+// Pollinations
+// ---------------------------------------------------------------------------
+
 const POLLINATIONS_API_URL = "https://gen.pollinations.ai";
 const POLLINATIONS_MEDIA_URL = "https://media.pollinations.ai";
 
-function getPollinationsApiKey(): string {
-  const key = process.env.POLLINATIONS_API_KEY;
-  if (!key) {
-    throw new Error(
-      "POLLINATIONS_API_KEY is not configured. Get a free key at https://enter.pollinations.ai",
-    );
-  }
-  return key;
-}
-
-async function uploadImageToPollinations(imagePath: string): Promise<string> {
-  const apiKey = getPollinationsApiKey();
+async function uploadImageToPollinations(imagePath: string, apiKey: string): Promise<string> {
   const imageBuffer = await fs.readFile(imagePath);
   const ext = path.extname(imagePath).toLowerCase();
   const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
@@ -350,11 +514,11 @@ async function generateClipViaPollinations(
   outputPath: string,
   tmpDir: string,
   model: string,
+  apiKey: string,
   prompt?: string,
   durationSec: number = 5,
   aspectRatio: "9:16" | "16:9" = "9:16",
 ): Promise<ImageToVideoResult> {
-  const apiKey = getPollinationsApiKey();
   const maxAttempts = 5;
 
   const encodedPrompt = encodeURIComponent(
@@ -367,9 +531,8 @@ async function generateClipViaPollinations(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      // Upload (or re-upload) image on first attempt and after every failure
       if (!imageUrl || attempt > 0) {
-        imageUrl = await uploadImageToPollinations(imagePath);
+        imageUrl = await uploadImageToPollinations(imagePath, apiKey);
       }
 
       const params = new URLSearchParams({
@@ -424,10 +587,11 @@ async function generateClipViaPollinations(
       break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (RETRYABLE_STATUS_RE.test(msg)) throw err;
       lastError = msg;
       log.warn(`Pollinations video attempt ${attempt + 1}/${maxAttempts} failed: ${msg.slice(0, 200)}`);
       videoBuffer = null;
-      imageUrl = null; // force re-upload on next attempt
+      imageUrl = null;
       if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 10_000 + attempt * 5_000));
     }
   }
@@ -484,8 +648,6 @@ async function generateClipViaReplicate(
   log.debug(`Image-to-video clip saved: ${outputPath} (${(buf.length / 1024).toFixed(0)}KB)`);
   return { videoPath: outputPath, tmpDir };
 }
-
-const I2V_CONCURRENCY = 3;
 
 /**
  * Generate clips for multiple scene images (parallel, concurrency-limited).

@@ -17,7 +17,7 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
   localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
@@ -28,6 +28,8 @@ export interface ImageToVideoProviderInfo {
   externalUrl?: string;
   /** Pollinations video model name (e.g. "grok-video", "wan") when type === "pollinations" */
   pollinationsModel?: string;
+  /** Freepik model path (e.g. "kling-v2") when type === "freepik" */
+  freepikModel?: string;
   costEstimate?: string;
   envVar: string;
 }
@@ -78,6 +80,15 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     costEstimate: "Free (tier balance)",
     envVar: "POLLINATIONS_API_KEY",
   },
+  KLING_FREEPIK: {
+    id: "KLING_FREEPIK",
+    name: "Kling v2 (Freepik)",
+    description: "Kling v2 image-to-video via Freepik API. Async (submit + poll). 5 EUR free trial credits (~15-25 clips).",
+    type: "freepik",
+    freepikModel: "kling-v2",
+    costEstimate: "Free 5 EUR credits",
+    envVar: "FREEPIK_API_KEY",
+  },
 };
 
 /** Recommended external Spaces (image + text → video) for manual or future API use. */
@@ -126,6 +137,7 @@ export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] 
     if (!p.envVar) return true;
     if (p.envVar === "HUGGINGFACE_API_KEY") return isHuggingFaceConfigured();
     if (p.envVar === "POLLINATIONS_API_KEY") return !!process.env.POLLINATIONS_API_KEY;
+    if (p.envVar === "FREEPIK_API_KEY") return !!process.env.FREEPIK_API_KEY;
     return !!process.env[p.envVar];
   });
 }
