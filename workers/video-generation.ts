@@ -3,6 +3,7 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import { getTtsProvider, getImageProvider } from "../src/services/providers/factory";
+import { TTS_PROVIDERS, IMAGE_PROVIDERS } from "../src/config/providers";
 import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
 import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File } from "../src/services/image-to-video";
@@ -17,6 +18,9 @@ import {
 } from "../src/lib/video-paths";
 import { buildPrompt, getSceneCount } from "../src/services/providers/llm/prompt";
 import { generateScript } from "../src/services/script-generator";
+import { generateBGM } from "../src/services/providers/audio/musicgen";
+import { generateAllSFX } from "../src/services/providers/audio/audiogen";
+import { createSfxTrack } from "../src/services/providers/audio/sfx-mixer";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
@@ -43,6 +47,10 @@ interface Checkpoint {
   relDir?: string;
   stageTimings?: Record<string, { startedAt: number; completedAt: number; durationMs: number }>;
   imageToVideoProvider?: string;
+  generatedBgmPath?: string;
+  sfxTrackPath?: string;
+  /** Tracks the providers that actually generated each component (may differ from selected due to fallback). */
+  usedProviders?: { tts?: string; image?: string; i2v?: string; bgm?: string; sfx?: string };
 }
 
 async function updateStage(videoId: string, stage: string) {
@@ -127,7 +135,7 @@ const worker = new Worker<VideoJobData>(
     const checkpoint = await loadCheckpoint(videoId);
     const completed = new Set(checkpoint.completedStages ?? []);
 
-    if (imageToVideoProvider && !checkpoint.imageToVideoProvider) {
+    if (imageToVideoProvider && checkpoint.imageToVideoProvider !== imageToVideoProvider) {
       checkpoint.imageToVideoProvider = imageToVideoProvider;
       await saveCheckpoint(videoId, checkpoint);
     }
@@ -198,6 +206,11 @@ const worker = new Worker<VideoJobData>(
 
     log.log(`[START]`, `LLM=${llmProvider} TTS=${ttsProvider} IMG=${imageProvider} | scenes=${scenes.length} resumed=[${[...completed].join(",")}]`);
     log.log(`[START]`, `${isResume ? "RESUME" : "CREATED"} dir: public/${relDir}/`);
+
+    checkpoint.usedProviders = {
+      tts: TTS_PROVIDERS[ttsProvider]?.name ?? ttsProvider,
+      image: IMAGE_PROVIDERS[imageProvider]?.name ?? imageProvider,
+    };
 
     let audioPath = checkpoint.audioPath;
     let durationMs = checkpoint.durationMs;
@@ -386,7 +399,7 @@ const worker = new Worker<VideoJobData>(
         const prompts = imageSlots.map((s, i) =>
           buildImageToVideoPrompt(s.visualDescription, i, imageSlots.length),
         );
-        const { results: clipResults, ctxLines: i2vCtx } = await generateClipsFromImages(imagePaths!, {
+        const { results: clipResults, ctxLines: i2vCtx, actualI2VProvider } = await generateClipsFromImages(imagePaths!, {
           providerId: imageToVideoProvider,
           prompts,
           durationSec: 5,
@@ -395,6 +408,9 @@ const worker = new Worker<VideoJobData>(
           aspectRatio,
         });
         ctxSection("3.5 · IMAGE-TO-VIDEO", ...i2vCtx);
+        if (actualI2VProvider) {
+          checkpoint.usedProviders = { ...checkpoint.usedProviders, i2v: actualI2VProvider };
+        }
 
         sceneInputs = [];
         for (let i = 0; i < imagePaths!.length; i++) {
@@ -414,19 +430,91 @@ const worker = new Worker<VideoJobData>(
         recordStageEnd(checkpoint, "I2V");
       }
 
+      // ── Audio FX (AI BGM + per-scene SFX) ──
+      let generatedBgmPath = checkpoint.generatedBgmPath;
+      let sfxTrackPath = checkpoint.sfxTrackPath;
+
+      const bgmAlreadyDone = generatedBgmPath && await fileExists(generatedBgmPath);
+      const sfxAlreadyDone = sfxTrackPath && await fileExists(sfxTrackPath);
+
+      if (!bgmAlreadyDone || !sfxAlreadyDone) {
+        log.log(`[AUDIO_FX]`, `Generating AI audio (BGM=${bgmAlreadyDone ? "cached" : "new"}, SFX=${sfxAlreadyDone ? "cached" : "new"})`);
+
+        const [bgmResult, sfxResult] = await Promise.all([
+          bgmAlreadyDone
+            ? Promise.resolve(null)
+            : generateBGM({
+                tone: tone ?? "dramatic",
+                niche: niche ?? "",
+                durationSec: Math.min(20, Math.max(10, Math.round((durationMs ?? 30000) / 2000))),
+                outputPath: path.join(scDir, "bgm-generated.flac"),
+              }).catch((err) => {
+                log.warn(`[AUDIO_FX]`, `BGM generation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+                return null;
+              }),
+          sfxAlreadyDone
+            ? Promise.resolve(null)
+            : (async () => {
+                const { paths: sfxPaths, sfxProvider } = await generateAllSFX(
+                  imageSlots,
+                  expandedTimings,
+                  scDir,
+                  tone,
+                  2,
+                );
+                if (sfxProvider) {
+                  checkpoint.usedProviders = { ...checkpoint.usedProviders, sfx: sfxProvider };
+                }
+                const mixedTrack = await createSfxTrack({
+                  sfxPaths,
+                  sceneTimings: expandedTimings,
+                  totalDurationMs: durationMs!,
+                  outputPath: path.join(scDir, "sfx-track.m4a"),
+                });
+                return mixedTrack;
+              })().catch((err) => {
+                log.warn(`[AUDIO_FX]`, `SFX generation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+                return null;
+              }),
+        ]);
+
+        if (bgmResult && !bgmAlreadyDone) {
+          generatedBgmPath = bgmResult.path;
+          checkpoint.usedProviders = { ...checkpoint.usedProviders, bgm: bgmResult.provider };
+        }
+        if (sfxResult && !sfxAlreadyDone) sfxTrackPath = sfxResult;
+
+        checkpoint.generatedBgmPath = generatedBgmPath;
+        checkpoint.sfxTrackPath = sfxTrackPath;
+        await saveCheckpoint(videoId, { ...checkpoint });
+
+        const bgmStatus = generatedBgmPath ? "AI-generated" : "static fallback";
+        const sfxStatus = sfxTrackPath ? `${imageSlots.length} scenes` : "skipped";
+        log.log(`[AUDIO_FX]`, `Done — BGM: ${bgmStatus}, SFX: ${sfxStatus}`);
+      }
+
       // ── Assembly ──
       recordStageStart(checkpoint, "ASSEMBLY");
       await updateStage(videoId, "ASSEMBLY");
       const outputPath = videoAbsPath(relDir);
 
+      // BGM: prefer AI-generated, fall back to static niche track
       let resolvedMusicPath: string | undefined;
-      if (musicPath) {
+      if (generatedBgmPath && await fileExists(generatedBgmPath)) {
+        resolvedMusicPath = generatedBgmPath;
+      } else if (musicPath) {
         const fullMusicPath = path.join(process.cwd(), "public", "music", `${musicPath}.mp3`);
         if (await fileExists(fullMusicPath)) resolvedMusicPath = fullMusicPath;
       }
 
+      // SFX track
+      let resolvedSfxPath: string | undefined;
+      if (sfxTrackPath && await fileExists(sfxTrackPath)) {
+        resolvedSfxPath = sfxTrackPath;
+      }
+
       ctxSection("4 · VIDEO ASSEMBLY",
-        `Images: ${imagePaths!.length}  Audio: ${(durationMs! / 1000).toFixed(1)}s  Music: ${resolvedMusicPath ? musicPath : "none"}${sceneInputs ? "  Clips: " + sceneInputs.filter((s) => s.type === "video").length : ""}`,
+        `Images: ${imagePaths!.length}  Audio: ${(durationMs! / 1000).toFixed(1)}s  Music: ${resolvedMusicPath ? (generatedBgmPath ? "AI-generated" : musicPath!) : "none"}  SFX: ${resolvedSfxPath ? "yes" : "none"}${sceneInputs ? "  Clips: " + sceneInputs.filter((s) => s.type === "video").length : ""}`,
         `Output: video.mp4`,
       );
 
@@ -439,6 +527,7 @@ const worker = new Worker<VideoJobData>(
         captionScenes: scenes,
         captionTimings: sceneTimings!,
         musicPath: resolvedMusicPath,
+        sfxTrackPath: resolvedSfxPath,
         outputPath,
         tone: tone ?? "dramatic",
         niche: niche ?? "",
@@ -517,7 +606,7 @@ const worker = new Worker<VideoJobData>(
     concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10),
     lockDuration: 600_000,
     lockRenewTime: 300_000,
-    stalledInterval: 600_000,
+    stalledInterval: 120_000,
   }
 );
 

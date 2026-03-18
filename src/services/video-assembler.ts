@@ -19,6 +19,8 @@ export interface AssemblyInput {
   captionScenes?: { text: string }[];
   captionTimings?: { startMs: number; endMs: number }[];
   musicPath?: string;
+  /** Pre-mixed SFX track (single audio file with per-scene effects time-aligned). */
+  sfxTrackPath?: string;
   outputPath: string;
   tone?: string;
   niche?: string;
@@ -194,6 +196,7 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     captionScenes,
     captionTimings,
     musicPath,
+    sfxTrackPath,
     outputPath,
     tone,
     niche,
@@ -252,6 +255,14 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     args.push("-i", musicPath);
   }
 
+  const includeSfx = sfxTrackPath ? await hasAudioStream(sfxTrackPath) : false;
+  let sfxIdx = -1;
+  if (sfxTrackPath && includeSfx) {
+    sfxIdx = (musicIdx >= 0 ? musicIdx : audioIdx) + 1;
+    args.push("-i", sfxTrackPath);
+    log.log(`SFX track included: ${sfxTrackPath}`);
+  }
+
   const FPS = 30;
   const filterParts: string[] = [];
   const concatInputs: string[] = [];
@@ -300,13 +311,31 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   );
 
   let audioMap: string;
-  if (musicPath && includeMusic) {
-    // ffmpeg 8+ forbids using the same filter pad as input to multiple filters.
-    // Use asplit to fan the voice stream into two copies.
+  const hasBgm = musicPath && includeMusic;
+  const hasSfx = sfxTrackPath && includeSfx;
+
+  if (hasBgm && hasSfx) {
+    // Voice + BGM (ducked) + SFX
+    filterParts.push(`[${audioIdx}:a]volume=1.0,asplit=3[va][vb][vc]`);
+    filterParts.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[bgm]`);
+    filterParts.push(`[bgm][vb]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=220:makeup=1[ducked]`);
+    filterParts.push(`[${sfxIdx}:a]volume=0.45[sfxvol]`);
+    filterParts.push(`[sfxvol][vc]sidechaincompress=threshold=0.08:ratio=6:attack=15:release=200:makeup=1[sfxducked]`);
+    filterParts.push(`[va][ducked][sfxducked]amix=inputs=3:duration=first:dropout_transition=0[aout]`);
+    audioMap = "[aout]";
+  } else if (hasBgm) {
+    // Voice + BGM (ducked), no SFX
     filterParts.push(`[${audioIdx}:a]volume=1.0,asplit=2[va][vb]`);
     filterParts.push(`[${musicIdx}:a]aloop=loop=-1:size=2e+09,volume=${musicVol.toFixed(2)},afade=t=in:st=0:d=2[bgm]`);
     filterParts.push(`[bgm][vb]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=220:makeup=1[ducked]`);
     filterParts.push(`[va][ducked]amix=inputs=2:duration=first:dropout_transition=0[aout]`);
+    audioMap = "[aout]";
+  } else if (hasSfx) {
+    // Voice + SFX (ducked under voice), no BGM
+    filterParts.push(`[${audioIdx}:a]volume=1.0,asplit=2[va][vb]`);
+    filterParts.push(`[${sfxIdx}:a]volume=0.50[sfxvol]`);
+    filterParts.push(`[sfxvol][vb]sidechaincompress=threshold=0.08:ratio=6:attack=15:release=200:makeup=1[sfxducked]`);
+    filterParts.push(`[va][sfxducked]amix=inputs=2:duration=first:dropout_transition=0[aout]`);
     audioMap = "[aout]";
   } else {
     audioMap = `${audioIdx}:a:0`;

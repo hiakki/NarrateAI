@@ -17,19 +17,31 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
   localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
   replicateModel?: string;
   /** Hugging Face model ID (e.g. "Lightricks/LTX-Video-0.9.7-distilled") when type === "huggingface" */
   hfModelId?: string;
+  /** HF Router inference provider (e.g. "fal-ai", "hf-inference"). Default "hf-inference". */
+  hfProvider?: string;
   /** URL to Hugging Face Space or similar when type === "external" */
   externalUrl?: string;
   /** Pollinations video model name (e.g. "grok-video", "wan") when type === "pollinations" */
   pollinationsModel?: string;
   /** Freepik model path (e.g. "kling-v2") when type === "freepik" */
   freepikModel?: string;
+  /** Gradio Space subdomain (e.g. "lightricks-ltx-video-distilled") for gradio-space type */
+  gradioSpaceId?: string;
+  /** Gradio API endpoint name (e.g. "image_to_video") */
+  gradioApiName?: string;
+  /** WaveSpeed model ID via HF Router (e.g. "wavespeed-ai/wan-2.1/i2v-480p") */
+  wavespeedModelId?: string;
+  /** fal.ai model path (e.g. "fal-ai/minimax/hailuo-02/standard/image-to-video") */
+  falModelId?: string;
+  /** fal.ai resolution param (e.g. "768p", "512p") */
+  falResolution?: string;
   costEstimate?: string;
   envVar: string;
 }
@@ -48,20 +60,70 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
   HF_LTX_VIDEO: {
     id: "HF_LTX_VIDEO",
     name: "LTX-Video (Hugging Face)",
-    description: "Lightricks LTX-Video distilled — fast image/text-to-video. Free tier (HF rate limits). Enable in HF Inference Providers.",
+    description: "Lightricks LTX-Video — fast image-to-video. Free $0.10/mo credits via hf-inference.",
     type: "huggingface",
-    hfModelId: "Lightricks/LTX-Video-0.9.7-distilled",
+    hfModelId: "Lightricks/LTX-Video",
+    hfProvider: "hf-inference",
     costEstimate: "Free (HF)",
     envVar: "HUGGINGFACE_API_KEY",
   },
   HF_WAN_I2V: {
     id: "HF_WAN_I2V",
-    name: "Wan 2.2 I2V (Hugging Face)",
-    description: "Wan-AI image-to-video (e.g. 5B). Free tier (HF rate limits). Enable in HF Inference Providers.",
+    name: "Wan 2.1 I2V (Hugging Face)",
+    description: "Wan-AI image-to-video (14B-480P). Free $0.10/mo credits via hf-inference.",
     type: "huggingface",
-    hfModelId: "Wan-AI/Wan2.2-TI2V-5B",
+    hfModelId: "Wan-AI/Wan2.1-I2V-14B-480P",
+    hfProvider: "hf-inference",
     costEstimate: "Free (HF)",
     envVar: "HUGGINGFACE_API_KEY",
+  },
+  WAVESPEED_WAN_480P: {
+    id: "WAVESPEED_WAN_480P",
+    name: "Wan 2.1 I2V 480p (WaveSpeed)",
+    description: "Wan-AI I2V via WaveSpeed through HF Router. ~5s clips, 464×768 portrait. Uses HF free $0.10/mo credits.",
+    type: "wavespeed",
+    wavespeedModelId: "wavespeed-ai/wan-2.1/i2v-480p",
+    costEstimate: "Free (HF credits)",
+    envVar: "HUGGINGFACE_API_KEY",
+  },
+  WAVESPEED_WAN_720P: {
+    id: "WAVESPEED_WAN_720P",
+    name: "Wan 2.1 I2V 720p (WaveSpeed)",
+    description: "Wan-AI I2V 720p via WaveSpeed through HF Router. Higher quality, uses more credits per clip.",
+    type: "wavespeed",
+    wavespeedModelId: "wavespeed-ai/wan-2.1/i2v-720p",
+    costEstimate: "Free (HF credits)",
+    envVar: "HUGGINGFACE_API_KEY",
+  },
+  GRADIO_LTX_VIDEO: {
+    id: "GRADIO_LTX_VIDEO",
+    name: "LTX-Video Distilled (HF Space)",
+    description: "Lightricks LTX-Video via free HF Space (ZeroGPU). 4 min/account GPU time. Best free I2V option.",
+    type: "gradio-space",
+    gradioSpaceId: "Lightricks-LTX-Video-Distilled",
+    gradioApiName: "image_to_video",
+    costEstimate: "Free (ZeroGPU)",
+    envVar: "HUGGINGFACE_API_KEY",
+  },
+  FAL_HAILUO_768P: {
+    id: "FAL_HAILUO_768P",
+    name: "Hailuo 02 768p (fal.ai)",
+    description: "MiniMax Hailuo 02 via fal.ai. Great quality, ~$0.27/clip. $10 free credits on signup.",
+    type: "fal",
+    falModelId: "fal-ai/minimax/hailuo-02/standard/image-to-video",
+    falResolution: "768p",
+    costEstimate: "~$0.27/clip",
+    envVar: "FAL_API_KEY",
+  },
+  FAL_HAILUO_512P: {
+    id: "FAL_HAILUO_512P",
+    name: "Hailuo 02 512p (fal.ai)",
+    description: "MiniMax Hailuo 02 via fal.ai. Good quality at lowest cost, ~$0.10/clip. $10 free credits on signup.",
+    type: "fal",
+    falModelId: "fal-ai/minimax/hailuo-02/standard/image-to-video",
+    falResolution: "512p",
+    costEstimate: "~$0.10/clip",
+    envVar: "FAL_API_KEY",
   },
   LOCAL_BACKEND: {
     id: "LOCAL_BACKEND",
@@ -74,10 +136,10 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
   POLLINATIONS_GROK_VIDEO: {
     id: "POLLINATIONS_GROK_VIDEO",
     name: "Grok Video (Pollinations)",
-    description: "xAI Grok video generation via Pollinations — the only model available on the free tier. ~5s clips, ~40s generation time.",
+    description: "xAI Grok video generation via Pollinations. ~5s clips, costs ~0.015 pollen/request.",
     type: "pollinations",
     pollinationsModel: "grok-video",
-    costEstimate: "Free (tier balance)",
+    costEstimate: "Free (pollen balance)",
     envVar: "POLLINATIONS_API_KEY",
   },
   KLING_FREEPIK: {
@@ -138,6 +200,7 @@ export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] 
     if (p.envVar === "HUGGINGFACE_API_KEY") return isHuggingFaceConfigured();
     if (p.envVar === "POLLINATIONS_API_KEY") return !!process.env.POLLINATIONS_API_KEY;
     if (p.envVar === "FREEPIK_API_KEY") return !!process.env.FREEPIK_API_KEY;
+    if (p.envVar === "FAL_API_KEY") return !!process.env.FAL_API_KEY;
     return !!process.env[p.envVar];
   });
 }

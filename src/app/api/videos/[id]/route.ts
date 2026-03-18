@@ -67,7 +67,7 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const sceneImages = await countSceneImages(video.videoUrl, id);
-    const checkpoint = video.checkpointData as { totalImageCount?: number; imagePrompts?: string[]; stageTimings?: Record<string, { startedAt: number; completedAt: number; durationMs: number }>; imageToVideoProvider?: string } | null;
+    const checkpoint = video.checkpointData as { totalImageCount?: number; imagePrompts?: string[]; stageTimings?: Record<string, { startedAt: number; completedAt: number; durationMs: number }>; imageToVideoProvider?: string; usedProviders?: { tts?: string; image?: string; i2v?: string; bgm?: string; sfx?: string } } | null;
     const scenesJson = video.scenesJson as { text: string; visualDescription: string }[] | null;
     const totalScenes = checkpoint?.totalImageCount ?? scenesJson?.length ?? 0;
     const stageTimings = video.stageTimings ?? checkpoint?.stageTimings ?? null;
@@ -82,6 +82,7 @@ export async function GET(
         imagePrompts: video.status === "REVIEW" ? (checkpoint?.imagePrompts ?? []) : undefined,
         stageTimings,
         imageToVideoProvider: checkpoint?.imageToVideoProvider ?? null,
+        usedProviders: checkpoint?.usedProviders ?? null,
       },
     }, {
       headers: { "Cache-Control": "no-store, max-age=0" },

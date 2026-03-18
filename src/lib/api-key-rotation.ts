@@ -18,21 +18,27 @@ interface ExhaustionRecord {
 
 export class KeyRotator {
   private readonly envVar: string;
+  private readonly aliases: string[];
   private keys: string[];
   private exhausted = new Map<string, ExhaustionRecord>();
   private roundRobinIdx = 0;
 
-  constructor(envVar: string) {
+  constructor(envVar: string, aliases?: string[]) {
     this.envVar = envVar;
+    this.aliases = aliases ?? [];
     this.keys = this.loadKeys();
   }
 
   private loadKeys(): string[] {
-    const raw = process.env[this.envVar] ?? "";
-    return raw
-      .split(",")
-      .map((k) => k.trim())
-      .filter(Boolean);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const v of [this.envVar, ...this.aliases]) {
+      const raw = process.env[v] ?? "";
+      for (const k of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+        if (!seen.has(k)) { seen.add(k); result.push(k); }
+      }
+    }
+    return result;
   }
 
   /** Reload keys from env (useful if env changed at runtime). */
@@ -115,14 +121,27 @@ export class KeyRotator {
 
 const rotators = new Map<string, KeyRotator>();
 
-/** Get or create a singleton KeyRotator for a given env var name. */
-export function getKeyRotator(envVar: string): KeyRotator {
+/** Get or create a singleton KeyRotator for a given env var name (+ optional aliases). */
+export function getKeyRotator(envVar: string, aliases?: string[]): KeyRotator {
   let r = rotators.get(envVar);
   if (!r) {
-    r = new KeyRotator(envVar);
+    r = new KeyRotator(envVar, aliases ?? ENV_ALIASES[envVar]);
     rotators.set(envVar, r);
   }
   return r;
+}
+
+/**
+ * Well-known env var alias groups.
+ * When a KeyRotator is created for any of these primary vars, it also checks the aliases.
+ */
+const ENV_ALIASES: Record<string, string[]> = {
+  HUGGINGFACE_API_KEY: ["HUGGINGFACE_API_TOKEN", "HF_TOKEN"],
+};
+
+/** Resolves known aliases for an env var name. */
+export function envAliases(envVar: string): string[] | undefined {
+  return ENV_ALIASES[envVar];
 }
 
 export { DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS };

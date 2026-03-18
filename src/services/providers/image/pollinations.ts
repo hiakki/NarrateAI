@@ -119,7 +119,11 @@ export class PollinationsImageProvider implements ImageProviderInterface {
           lastError = msg;
 
           if (KEY_EXHAUSTION_RE.test(msg)) {
-            const ttl = msg.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
+            const lower = msg.toLowerCase();
+            const isDailyLimit = lower.includes("daily limit") || lower.includes("daily quota");
+            const ttl = isDailyLimit
+              ? 6 * 60 * 60 * 1000
+              : msg.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
             rotator.markExhausted(apiKey, ttl, msg.slice(0, 100));
             break;
           }

@@ -1098,6 +1098,27 @@ export default function VideoDetailPage() {
                     );
                   })}
                 </div>
+                {(() => {
+                  const used = (video as { usedProviders?: { tts?: string; image?: string; i2v?: string; bgm?: string; sfx?: string } }).usedProviders;
+                  if (!used) return null;
+                  const parts: { label: string; value: string }[] = [];
+                  if (used.tts) parts.push({ label: "TTS", value: used.tts });
+                  if (used.image) parts.push({ label: "Image", value: used.image });
+                  if (used.i2v) parts.push({ label: "I2V", value: used.i2v });
+                  if (used.bgm) parts.push({ label: "BGM", value: used.bgm });
+                  if (used.sfx) parts.push({ label: "SFX", value: used.sfx });
+                  if (parts.length === 0) return null;
+                  return (
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-green-700/80">
+                      <span className="text-muted-foreground font-medium">Built with</span>
+                      {parts.map((p) => (
+                        <span key={p.label} className="bg-green-100/60 px-1.5 py-0.5 rounded text-green-800">
+                          <span className="font-medium">{p.label}:</span> {p.value}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </Card>

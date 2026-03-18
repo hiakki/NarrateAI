@@ -71,8 +71,9 @@ export async function enqueueVideoGeneration(data: VideoJobData): Promise<string
         await existing.remove();
         log.log(`Removed stale ${state} job ${jobId} before re-enqueue`);
       } else if (state === "active") {
-        log.warn(`Job ${jobId} already active in queue, skipping duplicate enqueue`);
-        return jobId;
+        log.warn(`Job ${jobId} is active — force-removing for re-enqueue (stale lock from dead worker?)`);
+        await existing.moveToFailed(new Error("Replaced by retry"), "0", true);
+        await existing.remove();
       } else if (state === "waiting" || state === "delayed") {
         await existing.remove();
         log.log(`Removed ${state} job ${jobId} so it can be re-enqueued immediately (retry or stuck)`);
