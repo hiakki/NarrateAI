@@ -10,7 +10,7 @@ import {
   Bot, Plus, Clock, Loader2, Instagram, Youtube, Facebook,
   Trash2, Film, Zap, AlertCircle, CheckCircle2, XCircle, RefreshCw, Send,
   Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff, Share2, Smartphone,
-  BarChart2, Eye, Heart, Search,
+  BarChart2, Eye, Heart, Search, ChevronDown, ChevronRight,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -193,10 +193,23 @@ function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<string, Plat
   return map;
 }
 
+function normalizePlatforms(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* not JSON */ }
+  }
+  return [];
+}
+
 export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeCollapsed, setActiveCollapsed] = useState(false);
+  const [pausedCollapsed, setPausedCollapsed] = useState(false);
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
   const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
   const [postingKey, setPostingKey] = useState<string | null>(null);
@@ -255,7 +268,14 @@ export default function AutomationsPage() {
     try {
       const res = await fetch("/api/automations", { cache: "no-store" });
       const json = await res.json();
-      if (json.data) setAutomations(json.data);
+      if (json.data) {
+        setAutomations(
+          (json.data as Automation[]).map((a) => ({
+            ...a,
+            targetPlatforms: normalizePlatforms(a.targetPlatforms),
+          })),
+        );
+      }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
@@ -454,6 +474,29 @@ export default function AutomationsPage() {
     () => sortedAutomations.filter((a) => !a.enabled),
     [sortedAutomations],
   );
+
+  const platformDailyVideos = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of enabledAutomations) {
+      const slots = a.postTime.split(",").filter((t) => t.trim()).length || 1;
+      const freqMultiplier = a.frequency === "daily" ? 1 : a.frequency === "every_other_day" ? 0.5 : 1 / 7;
+      const perDay = slots * freqMultiplier;
+      for (const p of a.targetPlatforms) {
+        counts[p] = (counts[p] ?? 0) + perDay;
+      }
+    }
+    return counts;
+  }, [enabledAutomations]);
+
+  const uniqueDailyVideos = useMemo(() => {
+    let total = 0;
+    for (const a of enabledAutomations) {
+      const slots = a.postTime.split(",").filter((t) => t.trim()).length || 1;
+      const freqMultiplier = a.frequency === "daily" ? 1 : a.frequency === "every_other_day" ? 0.5 : 1 / 7;
+      total += slots * freqMultiplier;
+    }
+    return total;
+  }, [enabledAutomations]);
 
   const automationsWithFailedVideo = useMemo(
     () => sortedAutomations.filter((a) => a.series?.lastVideo?.status === "FAILED"),
@@ -1227,42 +1270,82 @@ export default function AutomationsPage() {
           <p className="text-sm">No automations match &quot;{searchQuery}&quot;</p>
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {/* Active Automations Section */}
           {activeFiltered.length > 0 && (
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-green-500" />
-                  <h2 className="text-sm font-semibold text-foreground">Active</h2>
-                </div>
+              <button
+                onClick={() => setActiveCollapsed(!activeCollapsed)}
+                className="w-full flex items-center gap-2 mb-4 group cursor-pointer"
+              >
+                {activeCollapsed
+                  ? <ChevronRight className="h-4 w-4 text-green-500 transition-transform" />
+                  : <ChevronDown className="h-4 w-4 text-green-500 transition-transform" />
+                }
+                <div className="h-2 w-2 rounded-full bg-green-500" />
+                <h2 className="text-sm font-semibold text-foreground">Active</h2>
                 <span className="text-xs text-muted-foreground">({activeFiltered.length})</span>
+
+                {/* Platform daily breakdown */}
+                {Object.keys(platformDailyVideos).length > 0 && (
+                  <div className="flex items-center gap-2.5 ml-2 text-[10px]">
+                    <span className="text-muted-foreground/60">·</span>
+                    {Object.entries(platformDailyVideos)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([platform, count]) => {
+                        const cfg = PLATFORM_CFG[platform];
+                        if (!cfg) return null;
+                        const Icon = cfg.icon;
+                        const display = Number.isInteger(count) ? String(count) : count.toFixed(1);
+                        return (
+                          <span key={platform} className="inline-flex items-center gap-0.5 text-muted-foreground" title={`${display} videos/day posted to ${cfg.label}`}>
+                            <Icon className={`h-3 w-3 ${cfg.color}`} />
+                            <span className="font-medium">{display}/day</span>
+                          </span>
+                        );
+                      })}
+                    <span className="text-muted-foreground/60">·</span>
+                    <span className="text-muted-foreground/70 font-medium" title="Unique videos generated per day across all automations">
+                      {Number.isInteger(uniqueDailyVideos) ? uniqueDailyVideos : uniqueDailyVideos.toFixed(1)} videos/day
+                    </span>
+                  </div>
+                )}
+
                 <div className="flex-1 h-px bg-border" />
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
-                {activeFiltered.map((auto) => {
-                  return renderAutomationCard(auto);
-                })}
-              </div>
+              </button>
+              {!activeCollapsed && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
+                  {activeFiltered.map((auto) => {
+                    return renderAutomationCard(auto);
+                  })}
+                </div>
+              )}
             </div>
           )}
 
           {/* Paused Automations Section */}
           {pausedFiltered.length > 0 && (
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-muted-foreground/40" />
-                  <h2 className="text-sm font-semibold text-muted-foreground">Paused</h2>
-                </div>
+              <button
+                onClick={() => setPausedCollapsed(!pausedCollapsed)}
+                className="w-full flex items-center gap-2 mb-4 group cursor-pointer"
+              >
+                {pausedCollapsed
+                  ? <ChevronRight className="h-4 w-4 text-muted-foreground/40 transition-transform" />
+                  : <ChevronDown className="h-4 w-4 text-muted-foreground/40 transition-transform" />
+                }
+                <div className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+                <h2 className="text-sm font-semibold text-muted-foreground">Paused</h2>
                 <span className="text-xs text-muted-foreground">({pausedFiltered.length})</span>
                 <div className="flex-1 h-px bg-border" />
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
-                {pausedFiltered.map((auto) => {
-                  return renderAutomationCard(auto);
-                })}
-              </div>
+              </button>
+              {!pausedCollapsed && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
+                  {pausedFiltered.map((auto) => {
+                    return renderAutomationCard(auto);
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
