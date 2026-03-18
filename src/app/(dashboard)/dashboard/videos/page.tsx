@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
 import {
   Plus, Film, Trash2, Loader2, X,
   Instagram, Youtube, Facebook, CloudOff, Star, EyeOff, Share2, Smartphone,
-  BarChart2, Eye, Heart,
+  BarChart2, Eye, Heart, Search, XCircle,
 } from "lucide-react";
 
 interface PostedEntry {
@@ -52,6 +52,7 @@ export default function VideosPage() {
   const router = useRouter();
   const [series, setSeries] = useState<SeriesItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showConfirm, setShowConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -67,8 +68,18 @@ export default function VideosPage() {
 
   useEffect(() => { fetchSeries(); }, [fetchSeries]);
 
+  const filteredSeries = useMemo(() => {
+    if (!searchQuery.trim()) return series;
+    const q = searchQuery.toLowerCase();
+    return series.filter((s) =>
+      s.name.toLowerCase().includes(q) ||
+      s.niche.toLowerCase().includes(q) ||
+      s.artStyle.toLowerCase().includes(q)
+    );
+  }, [series, searchQuery]);
+
   const selectMode = selected.size > 0;
-  const allSelected = series.length > 0 && selected.size === series.length;
+  const allSelected = filteredSeries.length > 0 && selected.size === filteredSeries.length;
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -83,7 +94,7 @@ export default function VideosPage() {
     if (allSelected) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(series.map((s) => s.id)));
+      setSelected(new Set(filteredSeries.map((s) => s.id)));
     }
   }
 
@@ -143,8 +154,30 @@ export default function VideosPage() {
         </div>
       </div>
 
+      {/* Search bar */}
       {series.length > 0 && (
-        <div className="mt-4 flex items-center gap-3">
+        <div className="relative mt-4">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search videos by name, niche, or art style…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-lg border bg-background pl-10 pr-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-muted-foreground/60"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {series.length > 0 && (
+        <div className="mt-3 flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
             <Checkbox
               checked={allSelected}
@@ -154,7 +187,12 @@ export default function VideosPage() {
           </label>
           {selectMode && (
             <span className="text-xs text-muted-foreground">
-              {selected.size} of {series.length} selected
+              {selected.size} of {filteredSeries.length} selected
+            </span>
+          )}
+          {searchQuery && (
+            <span className="text-xs text-muted-foreground">
+              Showing {filteredSeries.length} of {series.length}
             </span>
           )}
         </div>
@@ -175,9 +213,14 @@ export default function VideosPage() {
             </Button>
           </CardContent>
         </Card>
+      ) : filteredSeries.length === 0 ? (
+        <div className="flex flex-col items-center py-12 text-muted-foreground">
+          <Search className="h-10 w-10 mb-3 opacity-40" />
+          <p className="text-sm">No videos match &quot;{searchQuery}&quot;</p>
+        </div>
       ) : (
         <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {series.map((s) => {
+          {filteredSeries.map((s) => {
             const latestVideo = s.videos[0];
             const vs = latestVideo
               ? statusDisplay[latestVideo.status] ?? statusDisplay.QUEUED

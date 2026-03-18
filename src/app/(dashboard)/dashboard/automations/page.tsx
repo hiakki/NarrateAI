@@ -10,7 +10,7 @@ import {
   Bot, Plus, Clock, Loader2, Instagram, Youtube, Facebook,
   Trash2, Film, Zap, AlertCircle, CheckCircle2, XCircle, RefreshCw, Send,
   Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff, Share2, Smartphone,
-  BarChart2, Eye, Heart,
+  BarChart2, Eye, Heart, Search,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -196,6 +196,7 @@ function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<string, Plat
 export default function AutomationsPage() {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
   const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
   const [postingKey, setPostingKey] = useState<string | null>(null);
@@ -410,6 +411,21 @@ export default function AutomationsPage() {
     }),
     [automations],
   );
+
+  const filteredAutomations = useMemo(() => {
+    if (!searchQuery.trim()) return sortedAutomations;
+    const q = searchQuery.toLowerCase();
+    return sortedAutomations.filter((a) =>
+      a.name.toLowerCase().includes(q) ||
+      a.niche.toLowerCase().includes(q) ||
+      a.tone.toLowerCase().includes(q) ||
+      a.targetPlatforms.some((p) => p.toLowerCase().includes(q)) ||
+      (a.series?.lastVideo?.title?.toLowerCase().includes(q) ?? false)
+    );
+  }, [sortedAutomations, searchQuery]);
+
+  const activeFiltered = useMemo(() => filteredAutomations.filter((a) => a.enabled), [filteredAutomations]);
+  const pausedFiltered = useMemo(() => filteredAutomations.filter((a) => !a.enabled), [filteredAutomations]);
 
   const missedAutomations = useMemo(
     () => sortedAutomations.filter((a) => {
@@ -1168,6 +1184,28 @@ export default function AutomationsPage() {
         </div>
       )}
 
+      {/* Search bar */}
+      {sortedAutomations.length > 0 && (
+        <div className="relative mb-6">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search automations by name, niche, tone, or platform…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-lg border bg-background pl-10 pr-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-muted-foreground/60"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
+
       {sortedAutomations.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center py-16 text-muted-foreground">
@@ -1183,20 +1221,69 @@ export default function AutomationsPage() {
             </Button>
           </CardContent>
         </Card>
+      ) : filteredAutomations.length === 0 ? (
+        <div className="flex flex-col items-center py-12 text-muted-foreground">
+          <Search className="h-10 w-10 mb-3 opacity-40" />
+          <p className="text-sm">No automations match &quot;{searchQuery}&quot;</p>
+        </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
-          {sortedAutomations.map((auto) => {
-            const lv = auto.series?.lastVideo ?? null;
-            const lvStatus = lv ? (STATUS_CFG[lv.status] ?? STATUS_CFG.QUEUED) : null;
-            const platformMap = lv ? parsePlatformEntries(lv.postedPlatforms ?? []) : new Map<string, PlatformEntry>();
+        <div className="space-y-8">
+          {/* Active Automations Section */}
+          {activeFiltered.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-green-500" />
+                  <h2 className="text-sm font-semibold text-foreground">Active</h2>
+                </div>
+                <span className="text-xs text-muted-foreground">({activeFiltered.length})</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
+                {activeFiltered.map((auto) => {
+                  return renderAutomationCard(auto);
+                })}
+              </div>
+            </div>
+          )}
 
-            return (
-              <Card
-                key={auto.id}
-                className={`flex flex-col h-full transition-colors hover:border-primary/50 ${
-                  selectedIds.has(auto.id) ? "ring-2 ring-primary/40 border-primary/50" : ""
-                }`}
-              >
+          {/* Paused Automations Section */}
+          {pausedFiltered.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+                  <h2 className="text-sm font-semibold text-muted-foreground">Paused</h2>
+                </div>
+                <span className="text-xs text-muted-foreground">({pausedFiltered.length})</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-stretch">
+                {pausedFiltered.map((auto) => {
+                  return renderAutomationCard(auto);
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  function renderAutomationCard(auto: Automation) {
+    const lv = auto.series?.lastVideo ?? null;
+    const lvStatus = lv ? (STATUS_CFG[lv.status] ?? STATUS_CFG.QUEUED) : null;
+    const platformMap = lv ? parsePlatformEntries(lv.postedPlatforms ?? []) : new Map<string, PlatformEntry>();
+
+    return (
+      <Card
+        key={auto.id}
+        className={`flex flex-col h-full transition-colors hover:border-primary/50 ${
+          !auto.enabled ? "opacity-60" : ""
+        } ${
+          selectedIds.has(auto.id) ? "ring-2 ring-primary/40 border-primary/50" : ""
+        }`}
+      >
                 <CardHeader className="pb-3 shrink-0">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1555,11 +1642,7 @@ export default function AutomationsPage() {
                     </AlertDialogContent>
                   </AlertDialog>
                 </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+      </Card>
+    );
+  }
 }
