@@ -225,6 +225,66 @@ const EN_SCHEDULES: Record<string, NicheSchedule> = {
     ],
     reason: "Satisfying content performs best during downtime — lunch scroll, afternoon slump, and the pre-sleep relaxation window.",
   },
+  "moral-stories": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "07:00", label: "Morning wisdom" },
+      { time: "19:00", label: "Family evening" },
+      { time: "12:00", label: "Lunch break" },
+    ],
+    reason: "Moral stories resonate with family audiences in morning and evening. Parents share these during family screen time.",
+  },
+  stoicism: {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "06:00", label: "Discipline morning" },
+      { time: "07:30", label: "Commute mindset" },
+      { time: "21:30", label: "Night reflection" },
+    ],
+    reason: "Stoicism content peaks early morning (discipline audience) and late night (self-improvement reflection). Massive save rates on IG.",
+  },
+  "reddit-stories": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "12:00", label: "Lunch drama" },
+      { time: "20:00", label: "Evening binge" },
+      { time: "22:30", label: "Late night scroll" },
+    ],
+    reason: "Reddit story content thrives at lunch (office gossip energy) and late evening (the binge-scroll window). Highest comment rates of any niche.",
+  },
+  "country-comparison": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "12:00", label: "Lunch debate" },
+      { time: "18:00", label: "After work" },
+      { time: "20:00", label: "Prime time" },
+    ],
+    reason: "Country comparison content drives debates and comments. Peaks during lunch and prime time when people are engaged and argumentative.",
+  },
+  "quiz-challenge": {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "12:00", label: "Lunch brain game" },
+      { time: "17:00", label: "Post-work challenge" },
+      { time: "20:00", label: "Evening fun" },
+    ],
+    reason: "Quiz content drives massive engagement (comments, shares). Lunch and post-work when people want quick dopamine and social interaction.",
+  },
+  brainrot: {
+    viewerTimezone: US_EAST,
+    viewerRegion: "US (East Coast)",
+    slots: [
+      { time: "12:00", label: "Lunch scroll" },
+      { time: "16:00", label: "After school" },
+      { time: "22:00", label: "Late night zone" },
+    ],
+    reason: "Brainrot content targets Gen Z — after school (4 PM) and late night scroll sessions. Lunch is universal. Highest replay rate of any niche.",
+  },
 };
 
 // ─── Hindi (India-centric) ───────────────────────────────────────────
@@ -429,6 +489,66 @@ const HI_SCHEDULES: Record<string, NicheSchedule> = {
       { time: "16:00", label: "Afternoon chill" },
     ],
     reason: "Satisfying content in India trends during afternoon downtime and the pre-sleep scrolling window — calming, addictive loops.",
+  },
+  "moral-stories": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "06:30", label: "Subah ki seekh" },
+      { time: "20:00", label: "Family time" },
+      { time: "13:00", label: "Dopahar ka scroll" },
+    ],
+    reason: "Hindi moral stories go viral in family WhatsApp groups. Morning devotional window and evening family screen time dominate.",
+  },
+  stoicism: {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "05:30", label: "Subah ki discipline" },
+      { time: "07:00", label: "Commute mindset" },
+      { time: "22:00", label: "Raat ka chintan" },
+    ],
+    reason: "Stoicism in Hindi targets self-improvement audience — early risers and late-night thinkers. Growing fast on Indian Instagram.",
+  },
+  "reddit-stories": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "13:00", label: "Lunch ka drama" },
+      { time: "21:00", label: "Raat ka gossip" },
+      { time: "22:30", label: "Late night binge" },
+    ],
+    reason: "Reddit-style stories in Hindi are exploding on Reels. Lunch and late-night gossip windows drive the most engagement.",
+  },
+  "country-comparison": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "13:00", label: "Lunch ka debate" },
+      { time: "19:00", label: "Shaam ka comparison" },
+      { time: "21:00", label: "Prime time" },
+    ],
+    reason: "India vs Pakistan, India vs China content is massive. Evening and lunch drive debates and comment wars.",
+  },
+  "quiz-challenge": {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "13:00", label: "Lunch ka quiz" },
+      { time: "16:00", label: "School ke baad" },
+      { time: "20:00", label: "Family challenge" },
+    ],
+    reason: "Quiz content in Hindi targets students and families. After-school and family evening windows drive the highest comment rates.",
+  },
+  brainrot: {
+    viewerTimezone: INDIA,
+    viewerRegion: "India",
+    slots: [
+      { time: "13:00", label: "Lunch ka scroll" },
+      { time: "16:00", label: "College ke baad" },
+      { time: "23:00", label: "Raat ka zone" },
+    ],
+    reason: "Hindi brainrot content targets Gen Z India — post-college hours and late night. Highest replay and share rate on Indian Instagram.",
   },
 };
 

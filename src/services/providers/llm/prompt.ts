@@ -179,10 +179,13 @@ Return ONLY valid JSON:
 
 Generate exactly ${sceneCount} scenes. Every scene must be visually DISTINCT — different camera angle, different color temperature, different subject focus. ESCALATE visual intensity with the story.
 Intensity curve guidance:
-- Scene 1: Hook (high curiosity/shock)
-- Scenes 2-${Math.max(2, sceneCount - 2)}: Build tension and stakes with progressively stronger visual/action beats
-- Scene ${Math.max(2, sceneCount - 1)}: Peak intensity / climax frame
-- Scene ${sceneCount}: Resolution — closure, payoff, or clear takeaway. The viewer must feel the story is DONE, not that it was cut short. No cliffhangers.
+- Scene 1: Hook (high curiosity/shock) — this decides whether the viewer keeps watching. Make it IMPOSSIBLE to scroll past.
+- Scenes 2-${Math.max(2, Math.floor(sceneCount * 0.4))}: Build tension — introduce the situation, set up expectations, create investment.
+- Scene ${Math.max(2, Math.ceil(sceneCount * 0.4))}: ★ MID-VIDEO TWIST (~40% mark) — drop a reveal, reversal, or surprising fact that recontextualizes everything. This is where casual viewers become committed viewers.
+- Scenes ${Math.min(sceneCount - 2, Math.ceil(sceneCount * 0.4) + 1)}-${Math.max(3, Math.ceil(sceneCount * 0.7) - 1)}: Escalate stakes — things get more intense, more personal, more consequential.
+- Scene ${Math.max(3, Math.ceil(sceneCount * 0.7))}: ★ STAKES RAISE (~70% mark) — the highest tension point. "No turning back." The viewer MUST see how this ends.
+- Scene ${Math.max(2, sceneCount - 1)}: Peak intensity / climax frame — deliver on the promise of the hook.
+- Scene ${sceneCount}: Resolution + LOOP HOOK — give closure (payoff, moral, answer) BUT the final visual or line should subtly mirror or callback to Scene 1, creating a feeling of "wait, I need to rewatch this." This drives replay and boosts watch time.
 
 FINAL CHECK — Ask yourself for EACH scene:
 1. Does the image show EXACTLY what the narration describes? (If text says "he ran", does the image show running?)

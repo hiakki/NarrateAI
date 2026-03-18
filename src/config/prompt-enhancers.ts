@@ -394,8 +394,10 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
         "Present wealth secrets as forbidden knowledge: 'Here's what they'll never teach you in school about money'",
         "Use specific numbers — '$47 billion', '3:45 AM wake-up' — precision creates credibility",
         "Contrast the rich and the average: show what's different about their THINKING, not their stuff",
-        "End with an actionable mindset shift the viewer can apply TODAY",
+        "End with an actionable mindset shift the viewer can apply TODAY — give a specific tactic, not vague motivation",
         "Make it aspirational but grounded — not 'get rich quick' but 'think differently about money'",
+        "ROTATE topics: compound interest, passive income streams, negotiation psychology, historical wealth transfers, bankruptcy-to-billions stories, investing mistakes, tax strategies of the ultra-rich, the psychology of spending — never repeat the same angle",
+        "Name real people, companies, and events — 'Warren Buffett's Rule #1', 'the 2008 play that made Paulson $15B' — specificity drives saves and shares",
       ],
       visualStyleGuide: [
         "HOOK: Opulent wealth made visual — a penthouse overlooking a glittering city skyline at night, a hand placing a chess piece on a board made of gold and crystal, stacks of cash in a vault with dramatic lighting — rich warm gold and deep black, shallow depth of field on the luxury object, cinematic noir-meets-luxury aesthetic",
@@ -416,6 +418,8 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
         "Use specific, visual humor — describe exactly what went wrong, not just 'it was funny'",
         "End with the biggest laugh saved for last — the callback or the escalation that tops everything",
         "Write like telling the story to a friend at a bar: natural, punchy, with comedic pauses built in",
+        "VARY comedy styles across videos: slapstick, ironic observation, deadpan, escalating absurdity, relatable cringe, dark humor, self-deprecating, miscommunication comedy — never default to the same type",
+        "Include at least one 'pause for effect' beat — a short sentence after a setup that lets the joke land before the next line",
       ],
       visualStyleGuide: [
         "HOOK: A hilariously exaggerated facial expression — eyes comically wide, jaw dropped to the floor, a coffee mug frozen mid-spill in a brightly lit cartoon-like kitchen, vibrant warm colors, soft shadows, Pixar-quality 3D rendering with playful bounce lighting — bright saturated palette, comedic timing frozen in a single frame",
@@ -427,10 +431,11 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
     },
     casual: {
       storytellingRules: [
-        "Tell it like a friend sharing a hilarious thing that just happened",
+        "Tell it like a friend sharing a hilarious thing that just happened — use natural speech patterns, pauses, and 'bro you won't believe this'",
         "Use conversational language — 'so this guy' not 'a gentleman proceeded to'",
-        "Build the joke with increasingly absurd details",
-        "End with a mic-drop punchline or ironic twist",
+        "Build the joke with increasingly absurd details — each scene more unhinged than the last",
+        "End with a mic-drop punchline or ironic twist that makes the viewer want to share it immediately",
+        "Include a moment where the narrator reacts to their own story — 'I wish I was making this up'",
       ],
       visualStyleGuide: [
         "HOOK: A bright, cheerful scene with one comically wrong detail — a giant rubber duck in a swimming pool filled with spaghetti, a cat wearing a tiny business suit — saturated warm colors, playful soft lighting, slight fish-eye lens distortion for comedic exaggeration",
@@ -465,10 +470,11 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
       storytellingRules: [
         "Open with the most instantly satisfying visual — no buildup needed, hook them in 1 second",
         "Narrate what's happening with calm, almost ASMR-like pacing — describe textures, sounds, sensations",
+        "Each scene MUST describe the PRIMARY SOUND: the crunch, drip, slice, pop, sizzle, or click — this drives SFX generation",
         "Each scene should be a new type of satisfaction: visual symmetry, perfect cuts, smooth flows, impossible precision",
         "Build variety — alternate between cutting, pouring, rolling, pressing, peeling, aligning",
         "End with the most satisfying moment of all — the grand finale that makes viewers replay the video",
-        "Keep narration minimal and smooth — let the visuals do 90% of the work",
+        "Keep narration minimal and smooth — let the visuals and sounds do 90% of the work",
       ],
       visualStyleGuide: [
         "HOOK: Extreme close-up of a razor-sharp blade slicing through a perfectly smooth block of colored kinetic sand, each layer revealed in a different pastel color, fine particles falling in slow motion — bright diffused studio lighting from above, macro lens detail showing every grain, clean white background, soft pastel color palette",
@@ -477,7 +483,133 @@ const ENHANCERS: Record<string, Record<string, PromptEnhancer>> = {
         "PEAK: The ultimate oddly satisfying moment — a hydraulic press slowly flattening a perfectly round sphere into a flawless disc, or a cake being frosted in one impossibly smooth motion, or dominoes falling in a perfect spiral pattern — bright even lighting, extreme macro detail, slow motion capturing every millisecond of the transformation, clean minimal background",
         "FINALE: The completed result in perfect stillness — a row of perfectly aligned objects, a flawlessly organized color gradient, or a sculpture of sliced objects arranged in impossible precision — clean bright studio lighting, white or soft gradient background, maximum visual symmetry, the frame itself feels balanced and complete",
       ],
-      moodKeywords: "oddly satisfying, ASMR visual, clean precision, smooth perfection, calm zen, slow motion beauty, tactile pleasure, the feeling of everything being exactly right",
+      moodKeywords: "oddly satisfying, ASMR visual, clean precision, smooth perfection, calm zen, slow motion beauty, tactile pleasure, the feeling of everything being exactly right, crunchy slicing sounds, dripping liquid, perfect click",
+    },
+  },
+  "moral-stories": {
+    educational: {
+      storytellingRules: [
+        "The story MUST feature EXACTLY TWO named characters with distinct personalities (e.g. a wise turtle and an arrogant hare)",
+        "Open by introducing both characters and establishing their contrasting traits in scene 1",
+        "Use simple, dialogue-heavy narration — characters SPEAK to each other. Include direct quotes.",
+        "Build conflict between the two characters: one makes a wise choice, the other makes a foolish one",
+        "Keep vocabulary simple and universal — this must work across all cultures and age groups",
+        "The final scene MUST state the moral lesson explicitly (e.g. 'And so, slow and steady wins the race')",
+        "Make the lesson feel earned, not preachy — show consequences through the story, then name the moral",
+      ],
+      visualStyleGuide: [
+        "HOOK: Two contrasting characters side by side in a colorful storybook setting — one confident and tall, one humble and small, bright clean daylight, soft rounded shapes, warm inviting colors like a children's book illustration, friendly facial expressions, medium shot showing both characters",
+        "BUILD: The two characters in their environment — a forest path, a river crossing, a village market — one character taking action while the other watches or reacts, warm golden light, lush green and warm earth tones, gentle depth of field, eye-level shot capturing their interaction",
+        "CONFLICT: The pivotal moment — one character struggling or failing due to their flaw, dramatic camera angle showing their frustration, slightly cooler lighting to mark the shift, the other character in the background making a different choice, emotional contrast between the two",
+        "CLIMAX: The consequence revealed — the wise character succeeding or helping, the foolish one realizing their mistake, warm light returning, close-up on their expressions showing the emotional turning point, soft background blur focusing on the key moment",
+        "MORAL: Both characters together again, reconciled or transformed — warm sunset or sunrise lighting, wide peaceful shot of the setting, both characters facing the viewer, gentle smile on the wise character, thoughtful expression on the reformed one, storybook-ending composition",
+      ],
+      moodKeywords: "warm fable, gentle wisdom, storybook charm, childlike wonder, timeless lesson, friendly characters, moral clarity, universal parable",
+    },
+  },
+  "stoicism": {
+    dramatic: {
+      storytellingRules: [
+        "Open with a powerful quote from a real Stoic philosopher (Marcus Aurelius, Seneca, Epictetus) — attribute it clearly",
+        "Use second-person direct address throughout: 'You wake up. You face the chaos. You choose calm.'",
+        "Every sentence must feel like carved stone — short, declarative, authoritative. No filler words.",
+        "Structure: ancient wisdom → modern application → actionable principle. Bridge 2000 years in 60 seconds.",
+        "Imagery must evoke solitary strength: a man walking through a storm, a mountain standing while waves crash, a lone figure at dawn",
+        "End with a single actionable principle the viewer can use TODAY — not vague inspiration, a specific practice",
+        "Never sound preachy or superior — sound like a battle-tested mentor sharing hard-won truth",
+      ],
+      visualStyleGuide: [
+        "HOOK: A solitary silhouette of a powerful figure standing on a cliff edge at dawn, wind whipping their cloak, overlooking a vast stormy sea below — dramatic low angle, deep indigo and molten gold sky, volumetric god rays breaking through storm clouds, sharp rim lighting outlining the figure against the sky",
+        "BUILD: An ancient marble bust of a philosopher in a dark study, candle flames reflected in polished stone, old leather-bound books and scrolls surrounding it, dust particles floating in a single beam of warm light — intimate close-up, chiaroscuro lighting with deep shadows, muted warm palette of umber and gold against charcoal black",
+        "CHALLENGE: A modern man walking alone through pouring rain on an empty city street at night, posture upright and unbothered, neon reflections on wet asphalt, everyone else running for cover — wide shot emphasizing isolation vs chaos, cold blue-teal city light mixing with warm amber from storefronts, cinematic shallow depth of field",
+        "STRENGTH: Extreme close-up of clenched hands slowly releasing their grip and opening into calm surrender, veins visible on weathered skin, soft golden morning light warming the fingers — macro lens detail, transition from tension to peace, warm amber tones replacing cold shadows",
+        "PRINCIPLE: A lone figure meditating at the summit of a mountain at sunrise, perfectly still while clouds swirl below, warm orange light painting the peaks gold — epic wide shot showing scale of nature vs smallness of person, clean symmetrical composition, atmospheric haze creating layers of depth",
+      ],
+      moodKeywords: "stoic resolve, quiet power, disciplined calm, ancient wisdom, solitary strength, mental fortress, unshakable composure, the eye of the storm, sigma energy, silent confidence",
+    },
+  },
+  "reddit-stories": {
+    casual: {
+      storytellingRules: [
+        "FIRST-PERSON POV is MANDATORY — the narrator IS the main character telling their own story",
+        "Open with the subreddit-style hook: 'So this just happened...' or 'Am I wrong for...' or 'I never told anyone this but...'",
+        "Establish the stakes immediately in scene 1 — who wronged whom, what's the conflict, why should we care",
+        "Build conflict with a clear antagonist: a roommate, boss, parent, partner, neighbor — make them specific and memorable",
+        "Include ONE moment of 'I couldn't believe what happened next' that flips the story",
+        "End with a moral dilemma or unresolved question that FORCES viewers to comment their opinion",
+        "Write like real people talk — contractions, mild disbelief, 'honestly I was shaking', not formal prose",
+      ],
+      visualStyleGuide: [
+        "HOOK: A stressed person in a realistic everyday setting — sitting on a couch staring at their phone in disbelief, or standing at a front door with a shocked expression — warm indoor tungsten lighting, slightly messy lived-in room, eye-level medium shot like a friend telling you the story, naturalistic colors",
+        "BUILD: The scene of the conflict — two people in a kitchen argument, an office confrontation, a text message being read — warm-to-cool lighting shift showing tension rising, over-shoulder shot perspective, suburban/urban everyday environment, slightly desaturated tones",
+        "ESCALATION: The moment things go wrong — someone storming out of a room, a message being shown to others, a public scene — dramatic camera angle (low or dutch), lighting contrast increasing, cool blue-grey palette with warm highlights on faces showing emotion",
+        "CONFRONTATION: The climactic face-off — two people eye to eye in a doorway, a gathering of friends taking sides, a phone call with someone on speaker — close-up cutting between faces, split lighting warm/cool on opposing sides, tension visible in body language and expression",
+        "AFTERMATH: The narrator alone reflecting — sitting in a car in a parking lot, lying on a bed staring at the ceiling, walking alone down a quiet street at dusk — soft melancholic golden hour light, wide personal space around the figure, muted warm tones, contemplative solitude",
+      ],
+      moodKeywords: "real-life drama, confessional honesty, relatable conflict, everyday tension, moral gray area, 'what would you do?', authentic frustration, the moment everything changed",
+    },
+  },
+  "country-comparison": {
+    educational: {
+      storytellingRules: [
+        "Open with the matchup framed as a dramatic question: 'If these two nations went head to head, who would win?'",
+        "Compare in SPECIFIC CATEGORIES with real numbers: military personnel, GDP, nuclear warheads, technology index, land area",
+        "Use a scorecard structure: Country A wins Round 1 (Military), Country B wins Round 2 (Economy), building suspense",
+        "Include at least one surprising fact that flips expectations: 'But here's what most people don't know...'",
+        "Build to a final verdict — never leave it unresolved. State a clear winner with reasoning.",
+        "End with a twist: 'But there's ONE factor that changes everything...' (drives comments and rewatches)",
+        "Keep it respectful and data-driven — no nationalism, just fascinating comparison",
+      ],
+      visualStyleGuide: [
+        "HOOK: Two national flags side by side with a dramatic lightning bolt or VS symbol between them, each flag lit from its own side — one warm-toned, one cool-toned — dark dramatic background, bold symmetrical composition, electric energy between the two sides, text-overlay-ready negative space at top",
+        "ROUND 1: Military imagery split-screen style — tanks, jets, aircraft carriers — one country's assets on the left in warm amber tones, the other on the right in cool steel blue, dramatic low-angle shots of hardware, cinematic depth of field, numerical data feeling with clean infographic energy",
+        "ROUND 2: Economic and technological comparison — city skylines, factories, space programs, tech headquarters — aerial views showing scale, golden hour light on one side vs cool modern LED lighting on the other, wide establishing shots showing industrial and technological might",
+        "TWIST: A dramatic visual metaphor for the surprising factor — a tiny nation on a map glowing bright against larger dark neighbors, or a single advanced weapon system isolated against a dark background — spotlight effect, high contrast, single focal point against dramatic negative space",
+        "VERDICT: Both countries represented by their iconic landmarks side by side with one subtly more illuminated — dramatic golden hour lighting on the 'winner' side, both shown with respect, epic wide composition like a movie poster, atmospheric haze and lens flare suggesting scale and power",
+      ],
+      moodKeywords: "geopolitical tension, data-driven drama, national pride, competitive energy, surprising revelations, who-would-win suspense, strategic analysis, global power dynamics",
+    },
+  },
+  "quiz-challenge": {
+    casual: {
+      storytellingRules: [
+        "Each scene = ONE question or dilemma posed directly to the viewer. No multi-question scenes.",
+        "Address the viewer in second person: 'You have to choose...', 'Which would YOU pick?', 'Can you figure this out?'",
+        "Frame each question with visual representation of BOTH options — the viewer must see what they're choosing between",
+        "Use a countdown or escalation structure: easy → medium → hard → IMPOSSIBLE. The last question must feel genuinely difficult.",
+        "Include a brief 'answer reveal' beat for trivia questions — a satisfying 'here's why' moment",
+        "End with the HARDEST question and DON'T answer it — force viewers to comment their answer",
+        "Keep pacing snappy: pose question → brief pause beat → next question. No long explanations.",
+      ],
+      visualStyleGuide: [
+        "HOOK: A bold colorful split-screen showing two wildly different options — one side warm and inviting, the other cool and mysterious — bright saturated colors, clean graphic design feel, playful 3D rendered objects representing each choice, top-down or slightly angled camera, white or gradient background",
+        "OPTION A: The first choice visualized in rich detail — a fantastical version of the option brought to life with exaggerated scale and color, warm inviting lighting, whimsical Pixar-style rendering, the object/scenario filling the frame with personality and appeal",
+        "OPTION B: The second choice in contrasting visual style — different color temperature than Option A, equally appealing but in a different way, cooler or warmer tones to create clear visual distinction, same framing style for easy comparison",
+        "ESCALATION: The difficult dilemma — darker, more dramatic framing as the stakes rise, split lighting with both options visible but more ominous, deeper shadows, the two choices now feeling equally weighted and consequential",
+        "IMPOSSIBLE: The final impossible question — extreme close-up of a mysterious door, box, or fork in a path, dramatic single-source lighting creating deep shadows, the viewer positioned AT the decision point, tension in the composition, cool-to-warm gradient suggesting both danger and reward",
+      ],
+      moodKeywords: "playful challenge, brain-teaser energy, colorful dilemma, interactive suspense, choose-your-own-adventure, competitive fun, the itch to answer, 'I have to comment my choice'",
+    },
+  },
+  "brainrot": {
+    casual: {
+      storytellingRules: [
+        "EVERY sentence must be a standalone mind-blowing fact — no setup sentences, no transitions, just rapid-fire impact",
+        "Use Gen Z conversational tone: 'bro', 'literally', 'no way', 'that's actually insane', 'hear me out'",
+        "Each scene = ONE fact. No scene should contain two facts. Keep it machine-gun paced.",
+        "Open with the most unbelievable fact FIRST — the one that makes people stop scrolling immediately",
+        "No slow buildup, no context, no 'let me explain'. Fact → reaction → next fact. Pure dopamine.",
+        "Every single sentence must be shareable on its own — if someone screenshots one frame, it should work as a standalone post",
+        "End abruptly on the wildest fact — no conclusion, no wrap-up. The video just STOPS and the viewer replays it.",
+      ],
+      visualStyleGuide: [
+        "HOOK: An impossibly bizarre real-world image rendered in hyper-vivid detail — a banana next to a strawberry with a 'BERRY / NOT A BERRY' energy, or a country-shaped hole in a map, or an illegal food item on a dramatic plate — extreme close-up, punchy oversaturated colors, clean bright studio lighting, pop-art energy with dark background for contrast",
+        "FACT 1: A surreal visualization of the mind-blowing fact — exaggerated scale comparison, impossible juxtaposition, or a 'diagram from an alternate universe' feel — bright flat colors with bold outlines, graphic design energy, top-down or straight-on angle, clean white or vivid gradient background",
+        "FACT 2: A completely different visual register — if the last fact was macro, this is micro; if last was natural, this is urban; if last was food, this is space — contrasting color palette from previous scene, same punchy lighting but different mood, wide-to-close alternation keeping the eye engaged",
+        "FACT 3: The weirdest visual yet — something that shouldn't exist rendered as if it does, hyperreal detail on a surreal subject, dramatic single-source side lighting creating long shadows, vivid accent color against a dark moody background, the image that makes you do a double-take",
+        "FINALE: The most unbelievable fact visualized at maximum impact — extreme close-up or extreme wide shot (no middle ground), the most saturated and dramatic image of the sequence, a frame so striking the viewer screenshots it — bold composition, every pixel designed to stop the scroll",
+      ],
+      moodKeywords: "dopamine hit, mind-blown, rapid fire, scroll-stopping, gen Z energy, chaotic knowledge, unhinged facts, the 'wait WHAT' reaction, brain-melting, shareable screenshot",
     },
   },
 };

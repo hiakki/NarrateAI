@@ -31,6 +31,12 @@ const NICHE_PLATFORM_BASE: Record<string, Record<PlatformKey, number>> = {
   "zero-to-hero": { FACEBOOK: 78, YOUTUBE: 76, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
   "character-storytelling": { FACEBOOK: 78, YOUTUBE: 82, INSTAGRAM: 84, SHARECHAT: 82, MOJ: 82 },
   satisfying: { FACEBOOK: 70, YOUTUBE: 82, INSTAGRAM: 90, SHARECHAT: 88, MOJ: 88 },
+  "moral-stories": { FACEBOOK: 84, YOUTUBE: 78, INSTAGRAM: 80, SHARECHAT: 88, MOJ: 88 },
+  stoicism: { FACEBOOK: 82, YOUTUBE: 84, INSTAGRAM: 88, SHARECHAT: 76, MOJ: 76 },
+  "reddit-stories": { FACEBOOK: 86, YOUTUBE: 82, INSTAGRAM: 84, SHARECHAT: 72, MOJ: 72 },
+  "country-comparison": { FACEBOOK: 80, YOUTUBE: 86, INSTAGRAM: 78, SHARECHAT: 82, MOJ: 82 },
+  "quiz-challenge": { FACEBOOK: 84, YOUTUBE: 80, INSTAGRAM: 90, SHARECHAT: 86, MOJ: 86 },
+  brainrot: { FACEBOOK: 78, YOUTUBE: 86, INSTAGRAM: 92, SHARECHAT: 84, MOJ: 84 },
 };
 
 function clamp(n: number, lo = 0, hi = 100): number {

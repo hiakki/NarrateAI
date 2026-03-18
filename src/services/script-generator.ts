@@ -65,9 +65,42 @@ function shuffleWithSeed<T>(arr: T[], seed: number): T[] {
   return out;
 }
 
+const NICHE_HOOKS: Record<string, string[]> = {
+  "moral-stories": [
+    "the tale of", "a lesson about", "the fable of", "what happened when",
+    "the story of", "the wisdom behind",
+  ],
+  "stoicism": [
+    "Marcus Aurelius once said about", "the Stoic way to handle",
+    "Seneca's rule for", "why Stoics never worry about",
+    "Epictetus on the truth about", "the ancient solution to",
+  ],
+  "reddit-stories": [
+    "AITA for", "my [person] just", "TIFU by",
+    "I finally confronted my", "I can't believe my",
+    "I secretly discovered my",
+  ],
+  "country-comparison": [
+    "who would win:", "the real difference between",
+    "why everyone underestimates", "the surprising truth about",
+    "head to head:", "which country dominates in",
+  ],
+  "quiz-challenge": [
+    "only 1% get this right about", "can you guess",
+    "would you rather", "the impossible question about",
+    "pick one:", "which would you choose:",
+  ],
+  "brainrot": [
+    "things that make no sense about", "nobody talks about",
+    "the most insane fact about", "bro literally",
+    "how is this even real:", "facts that feel illegal about",
+  ],
+};
+
 function buildTopicCandidates(input: ScriptInput): string[] {
   const niche = getNicheById(input.niche);
-  const hooks = [
+  const nicheSpecificHooks = NICHE_HOOKS[input.niche];
+  const hooks = nicheSpecificHooks ?? [
     "the untold truth behind",
     "what nobody tells you about",
     "the dark side of",
@@ -143,18 +176,21 @@ function scoreScript(script: GeneratedScript, targetScenes: number): number {
 
   const s1 = scenes[0]?.text?.toLowerCase() ?? "";
   const hookSignals = [
-    "wait",
-    "imagine",
-    "what if",
-    "you won’t believe",
-    "nobody knows",
-    "shocking",
-    "suddenly",
-    "then",
-    "?",
-    "!",
+    "wait", "imagine", "what if", "you won’t believe", "nobody knows",
+    "shocking", "suddenly", "?", "!",
+    "you ", "your ", "here’s why", "the truth", "the one thing",
+    "most people", "everyone gets", "never ", "always ",
+    "secret", "hidden", "actually", "literally",
+    "right now", "today",
+    "5 ", "3 ", "7 ", "10 ",
+    "unpopular opinion", "no one talks", "hear me out",
+    "am i wrong", "aita", "tifu",
+    "would you rather", "can you guess",
+    "who would win", " vs ",
+    "bro ", "no way",
   ];
-  const hookScore = hookSignals.some((h) => s1.includes(h)) ? 20 : 8;
+  const matchCount = hookSignals.filter((h) => s1.includes(h)).length;
+  const hookScore = matchCount >= 3 ? 25 : matchCount >= 1 ? 20 : 8;
 
   const sceneCountScore = Math.max(0, 20 - Math.abs(targetScenes - scenes.length) * 4);
 
@@ -178,7 +214,17 @@ function scoreScript(script: GeneratedScript, targetScenes: number): number {
 
   const titleScore = script.title && script.title.length >= 20 && script.title.length <= 70 ? 8 : 4;
 
-  return hookScore + sceneCountScore + narrationPaceScore + visualRichness + titleScore;
+  const lastScene = scenes[scenes.length - 1]?.text?.toLowerCase() ?? "";
+  const endingSignals = [
+    "lesson", "moral", "remember", "never forget", "that's why",
+    "and so", "in the end", "from that day", "the truth is",
+    "always ", "think twice", "choose wisely", "would you",
+    "what would you", "comment", "share", "follow",
+  ];
+  const endingHits = endingSignals.filter((e) => lastScene.includes(e)).length;
+  const endingScore = endingHits >= 2 ? 10 : endingHits === 1 ? 6 : 2;
+
+  return hookScore + sceneCountScore + narrationPaceScore + visualRichness + titleScore + endingScore;
 }
 
 export async function generateScript(
