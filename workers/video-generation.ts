@@ -403,7 +403,7 @@ const worker = new Worker<VideoJobData>(
           providerId: imageToVideoProvider,
           prompts,
           durationSec: 5,
-          noFallback: true,
+          noFallback: process.env.I2V_FALLBACK_ENABLED === "false",
           existingClips,
           aspectRatio,
         });
@@ -412,21 +412,29 @@ const worker = new Worker<VideoJobData>(
           checkpoint.usedProviders = { ...checkpoint.usedProviders, i2v: actualI2VProvider };
         }
 
+        let i2vSuccess = 0;
+        let i2vFallback = 0;
         sceneInputs = [];
         for (let i = 0; i < imagePaths!.length; i++) {
           const clipPath = clipResults[i];
-          if (!clipPath) {
-            throw new Error(`scene-${i.toString().padStart(3, "0")} I2V produced no clip (no fallback)`);
-          }
-          if (!existingClips.has(i)) {
-            const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
-            await fs.copyFile(clipPath, dest);
-            sceneInputs.push({ type: "video", path: dest });
+          if (clipPath) {
+            if (!existingClips.has(i)) {
+              const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
+              await fs.copyFile(clipPath, dest);
+              sceneInputs.push({ type: "video", path: dest });
+            } else {
+              sceneInputs.push({ type: "video", path: clipPath });
+            }
+            i2vSuccess++;
           } else {
-            sceneInputs.push({ type: "video", path: clipPath });
+            sceneInputs.push({ type: "image", path: imagePaths![i] });
+            i2vFallback++;
           }
         }
-        log.log(`[I2V]`, `IMAGE-TO-VIDEO done: ${sceneInputs.length}/${sceneInputs.length} clips`);
+        if (i2vFallback > 0) {
+          log.warn(`[I2V]`, `${i2vFallback}/${imagePaths!.length} scenes fell back to static images (providers exhausted)`);
+        }
+        log.log(`[I2V]`, `IMAGE-TO-VIDEO done: ${i2vSuccess} clips + ${i2vFallback} static = ${sceneInputs.length} total`);
         recordStageEnd(checkpoint, "I2V");
       }
 
