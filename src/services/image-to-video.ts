@@ -39,10 +39,12 @@ function isRetryableI2VError(err: Error): boolean {
   return RETRYABLE_STATUS_RE.test(err.message);
 }
 
-const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal"]);
+const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal", "siliconflow", "deapi"]);
 
 const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
-  POLLINATIONS_GROK_VIDEO: "Pollinations",
+  POLLINATIONS_SEEDANCE: "Seedance (Pollinations)",
+  POLLINATIONS_WAN: "Wan (Pollinations)",
+  POLLINATIONS_GROK_VIDEO: "Grok Video (Pollinations)",
   KLING_FREEPIK: "Kling (Freepik)",
   HF_LTX_VIDEO: "HuggingFace LTX-Video",
   HF_WAN_I2V: "HuggingFace Wan I2V",
@@ -52,6 +54,8 @@ const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
   SVD_REPLICATE: "Replicate SVD",
   FAL_HAILUO_768P: "Hailuo 768p (fal.ai)",
   FAL_HAILUO_512P: "Hailuo 512p (fal.ai)",
+  SILICONFLOW_WAN: "Wan I2V (SiliconFlow)",
+  DEAPI_LTX: "LTX-2.3 (deAPI)",
   LOCAL_BACKEND: "Local Backend",
 };
 
@@ -139,6 +143,22 @@ async function dispatchToProvider(
       provider.falResolution ?? "768p", options.prompt, dur,
     );
   }
+  if (provider.type === "siliconflow") {
+    const key = apiKey ?? process.env.SILICONFLOW_API_KEY;
+    if (!key) throw new Error("SILICONFLOW_API_KEY is not configured");
+    return generateClipViaSiliconFlow(
+      imagePath, outputPath, tmpDir, key, options.prompt, dur,
+      options.aspectRatio ?? "9:16",
+    );
+  }
+  if (provider.type === "deapi") {
+    const key = apiKey ?? process.env.DEAPI_API_KEY;
+    if (!key) throw new Error("DEAPI_API_KEY is not configured");
+    return generateClipViaDeApi(
+      imagePath, outputPath, tmpDir, key, options.prompt, dur,
+      options.aspectRatio ?? "9:16",
+    );
+  }
   throw new Error(`Missing config for image-to-video provider: ${provider.id}`);
 }
 
@@ -197,12 +217,26 @@ async function tryProviderWithRotation(
 
 /**
  * Build a prioritized fallback order. The user-selected provider goes first,
- * then all other available providers (excluding "local" and non-configured).
+ * then all other available providers (excluding "local" and non-configured),
+ * sorted so providers on independent credit pools come before shared-pool ones.
  */
+const PROVIDER_PRIORITY: Record<string, number> = {
+  huggingface: 1,
+  wavespeed: 2,
+  "gradio-space": 3,
+  pollinations: 4,
+  siliconflow: 5,
+  deapi: 6,
+  fal: 7,
+  freepik: 8,
+  replicate: 9,
+};
+
 function buildFallbackChain(primaryId: string): ImageToVideoProviderInfo[] {
   const primary = getImageToVideoProvider(primaryId);
   const available = getAvailableImageToVideoProviders()
-    .filter((p) => p.type !== "local" && p.id !== primaryId);
+    .filter((p) => p.type !== "local" && p.id !== primaryId)
+    .sort((a, b) => (PROVIDER_PRIORITY[a.type] ?? 99) - (PROVIDER_PRIORITY[b.type] ?? 99));
   const chain: ImageToVideoProviderInfo[] = [];
   if (primary) chain.push(primary);
   chain.push(...available);
@@ -1117,6 +1151,162 @@ async function generateClipViaReplicate(
   const buf = Buffer.from(await resp.arrayBuffer());
   await fs.writeFile(outputPath, buf);
   log.debug(`Image-to-video clip saved: ${outputPath} (${(buf.length / 1024).toFixed(0)}KB)`);
+  return { videoPath: outputPath, tmpDir };
+}
+
+// ---------------------------------------------------------------------------
+// SiliconFlow – Wan2.2-I2V-A14B (async submit → poll)
+// ---------------------------------------------------------------------------
+async function generateClipViaSiliconFlow(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+  aspectRatio: "9:16" | "16:9" = "9:16",
+): Promise<ImageToVideoResult> {
+  const imageData = await fs.readFile(imagePath);
+  const base64 = `data:image/png;base64,${imageData.toString("base64")}`;
+  const imageSize = aspectRatio === "9:16" ? "720x1280" : "1280x720";
+
+  const submitRes = await fetch("https://api.siliconflow.cn/v1/video/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: "Wan-AI/Wan2.2-I2V-A14B",
+      prompt: prompt ?? "Smooth cinematic motion, gentle camera movement",
+      image: base64,
+      image_size: imageSize,
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => "");
+    throw new Error(`SiliconFlow submit ${submitRes.status}: ${body.slice(0, 300)}`);
+  }
+  const { requestId } = (await submitRes.json()) as { requestId: string };
+  log.debug(`SiliconFlow job submitted: ${requestId}`);
+
+  const maxPollMs = Math.max(durationSec * 60_000, 300_000);
+  const start = Date.now();
+  let videoUrl = "";
+  while (Date.now() - start < maxPollMs) {
+    await new Promise((r) => setTimeout(r, 8_000));
+    const statusRes = await fetch("https://api.siliconflow.cn/v1/video/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ requestId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!statusRes.ok) {
+      const body = await statusRes.text().catch(() => "");
+      if (RETRYABLE_STATUS_RE.test(String(statusRes.status))) throw new Error(`SiliconFlow status ${statusRes.status}: ${body.slice(0, 200)}`);
+      log.warn(`SiliconFlow poll non-OK ${statusRes.status}, retrying...`);
+      continue;
+    }
+    const data = (await statusRes.json()) as {
+      status: string;
+      reason?: string;
+      results?: { videos?: { url: string }[] };
+    };
+    if (data.status === "Failed") throw new Error(`SiliconFlow generation failed: ${data.reason ?? "unknown"}`);
+    if (data.status === "Succeed" && data.results?.videos?.[0]?.url) {
+      videoUrl = data.results.videos[0].url;
+      break;
+    }
+  }
+  if (!videoUrl) throw new Error(`SiliconFlow timed out after ${(maxPollMs / 1000).toFixed(0)}s`);
+
+  const dlRes = await fetch(videoUrl, { signal: AbortSignal.timeout(60_000) });
+  if (!dlRes.ok) throw new Error(`SiliconFlow download ${dlRes.status}`);
+  const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+  validateVideoBuffer(videoBuffer, "SiliconFlow");
+  await fs.writeFile(outputPath, videoBuffer);
+  log.debug(`SiliconFlow clip saved: ${outputPath} (${(videoBuffer.length / 1024).toFixed(0)}KB)`);
+  return { videoPath: outputPath, tmpDir };
+}
+
+// ---------------------------------------------------------------------------
+// deAPI.ai – LTX-2.3 (multipart submit → poll)
+// ---------------------------------------------------------------------------
+async function generateClipViaDeApi(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+  aspectRatio: "9:16" | "16:9" = "9:16",
+): Promise<ImageToVideoResult> {
+  const [width, height] = aspectRatio === "9:16" ? [512, 768] : [768, 512];
+  const frames = Math.min(Math.max(Math.round(durationSec * 24), 24), 97);
+
+  const imageData = await fs.readFile(imagePath);
+  const blob = new Blob([imageData], { type: "image/png" });
+
+  const form = new FormData();
+  form.append("prompt", prompt ?? "Smooth cinematic motion, gentle camera movement");
+  form.append("first_frame_image", blob, "frame.png");
+  form.append("model", "Ltxv_13B_0_9_8_Distilled_FP8");
+  form.append("width", String(width));
+  form.append("height", String(height));
+  form.append("guidance", "7.5");
+  form.append("steps", "20");
+  form.append("frames", String(frames));
+  form.append("fps", "24");
+  form.append("seed", String(Math.floor(Math.random() * 2147483647)));
+
+  const submitRes = await fetch("https://api.deapi.ai/api/v1/client/img2video", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    body: form,
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => "");
+    throw new Error(`deAPI submit ${submitRes.status}: ${body.slice(0, 300)}`);
+  }
+  const submitData = (await submitRes.json()) as { data?: { request_id?: string } };
+  const requestId = submitData?.data?.request_id;
+  if (!requestId) throw new Error(`deAPI returned no request_id: ${JSON.stringify(submitData).slice(0, 200)}`);
+  log.debug(`deAPI job submitted: ${requestId}`);
+
+  const maxPollMs = Math.max(durationSec * 60_000, 300_000);
+  const start = Date.now();
+  let resultUrl = "";
+  while (Date.now() - start < maxPollMs) {
+    await new Promise((r) => setTimeout(r, 8_000));
+    const statusRes = await fetch(`https://api.deapi.ai/api/v1/client/request-status/${requestId}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!statusRes.ok) {
+      const body = await statusRes.text().catch(() => "");
+      if (RETRYABLE_STATUS_RE.test(String(statusRes.status))) throw new Error(`deAPI status ${statusRes.status}: ${body.slice(0, 200)}`);
+      log.warn(`deAPI poll non-OK ${statusRes.status}, retrying...`);
+      continue;
+    }
+    const data = (await statusRes.json()) as {
+      status: string;
+      result_url?: string | null;
+    };
+    if (data.status === "error") throw new Error("deAPI generation failed");
+    if (data.status === "done" && data.result_url) {
+      resultUrl = data.result_url;
+      break;
+    }
+  }
+  if (!resultUrl) throw new Error(`deAPI timed out after ${(maxPollMs / 1000).toFixed(0)}s`);
+
+  const dlRes = await fetch(resultUrl, { signal: AbortSignal.timeout(60_000) });
+  if (!dlRes.ok) throw new Error(`deAPI download ${dlRes.status}`);
+  const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+  validateVideoBuffer(videoBuffer, "deAPI");
+  await fs.writeFile(outputPath, videoBuffer);
+  log.debug(`deAPI clip saved: ${outputPath} (${(videoBuffer.length / 1024).toFixed(0)}KB)`);
   return { videoPath: outputPath, tmpDir };
 }
 

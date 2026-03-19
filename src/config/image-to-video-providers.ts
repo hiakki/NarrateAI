@@ -17,7 +17,7 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
   localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
@@ -125,6 +125,22 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     costEstimate: "~$0.10/clip",
     envVar: "FAL_API_KEY",
   },
+  SILICONFLOW_WAN: {
+    id: "SILICONFLOW_WAN",
+    name: "Wan 2.2 I2V (SiliconFlow)",
+    description: "Wan-AI/Wan2.2-I2V-A14B via SiliconFlow. $1 free signup credits (~3 clips). 720×1280 portrait.",
+    type: "siliconflow",
+    costEstimate: "~$0.29/clip ($1 free)",
+    envVar: "SILICONFLOW_API_KEY",
+  },
+  DEAPI_LTX: {
+    id: "DEAPI_LTX",
+    name: "LTX-2.3 (deAPI)",
+    description: "LTX-Video distilled via deAPI decentralized network. $5 free signup credits (~100 clips). Fast.",
+    type: "deapi",
+    costEstimate: "~$0.05/clip ($5 free)",
+    envVar: "DEAPI_API_KEY",
+  },
   LOCAL_BACKEND: {
     id: "LOCAL_BACKEND",
     name: "Local Backend (I2V)",
@@ -132,6 +148,24 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     type: "local",
     costEstimate: "Free",
     envVar: "",
+  },
+  POLLINATIONS_SEEDANCE: {
+    id: "POLLINATIONS_SEEDANCE",
+    name: "Seedance (Pollinations)",
+    description: "BytePlus Seedance I2V via Pollinations. Good quality, cheapest video model (~0.007 pollen/s).",
+    type: "pollinations",
+    pollinationsModel: "seedance",
+    costEstimate: "Free (pollen balance)",
+    envVar: "POLLINATIONS_API_KEY",
+  },
+  POLLINATIONS_WAN: {
+    id: "POLLINATIONS_WAN",
+    name: "Wan (Pollinations)",
+    description: "Wan video generation via Pollinations. ~5s clips with audio support.",
+    type: "pollinations",
+    pollinationsModel: "wan",
+    costEstimate: "Free (pollen balance)",
+    envVar: "POLLINATIONS_API_KEY",
   },
   POLLINATIONS_GROK_VIDEO: {
     id: "POLLINATIONS_GROK_VIDEO",
@@ -201,6 +235,8 @@ export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] 
     if (p.envVar === "POLLINATIONS_API_KEY") return !!process.env.POLLINATIONS_API_KEY;
     if (p.envVar === "FREEPIK_API_KEY") return !!process.env.FREEPIK_API_KEY;
     if (p.envVar === "FAL_API_KEY") return !!process.env.FAL_API_KEY;
+    if (p.envVar === "SILICONFLOW_API_KEY") return !!process.env.SILICONFLOW_API_KEY;
+    if (p.envVar === "DEAPI_API_KEY") return !!process.env.DEAPI_API_KEY;
     return !!process.env[p.envVar];
   });
 }
