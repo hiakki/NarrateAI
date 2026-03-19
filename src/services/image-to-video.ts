@@ -33,7 +33,7 @@ export interface ImageToVideoResult {
   actualProvider?: string;
 }
 
-const RETRYABLE_STATUS_RE = /\b(401|402|404|429|503)\b/;
+const RETRYABLE_STATUS_RE = /\b(401|402|403|404|429|503)\b/;
 
 function isRetryableI2VError(err: Error): boolean {
   return RETRYABLE_STATUS_RE.test(err.message);
@@ -1251,7 +1251,7 @@ async function generateClipViaDeApi(
   aspectRatio: "9:16" | "16:9" = "9:16",
 ): Promise<ImageToVideoResult> {
   const [width, height] = aspectRatio === "9:16" ? [512, 768] : [768, 512];
-  const frames = Math.min(Math.max(Math.round(durationSec * 24), 24), 97);
+  const frames = Math.min(Math.max(Math.round(durationSec * 30), 30), 97);
 
   const imageData = await fs.readFile(imagePath);
   const blob = new Blob([imageData], { type: "image/png" });
@@ -1265,7 +1265,7 @@ async function generateClipViaDeApi(
   form.append("guidance", "7.5");
   form.append("steps", "20");
   form.append("frames", String(frames));
-  form.append("fps", "24");
+  form.append("fps", "30");
   form.append("seed", String(Math.floor(Math.random() * 2147483647)));
 
   const submitRes = await fetch("https://api.deapi.ai/api/v1/client/img2video", {
@@ -1379,7 +1379,9 @@ async function generateClipViaPixVerse(
   }
   const genData = (await genRes.json()) as { ErrCode: number; ErrMsg: string; Resp?: { video_id: number } };
   if (genData.ErrCode !== 0 || !genData.Resp?.video_id) {
-    throw new Error(`PixVerse generate error: ${genData.ErrMsg ?? JSON.stringify(genData).slice(0, 200)}`);
+    const msg = genData.ErrMsg ?? JSON.stringify(genData).slice(0, 200);
+    const isBalance = /insufficient balance|unable to generate|no credits/i.test(msg);
+    throw new Error(`PixVerse ${isBalance ? "402" : "generate error"}: ${msg}`);
   }
   const videoId = genData.Resp.video_id;
   log.debug(`PixVerse job submitted: video_id=${videoId}`);
