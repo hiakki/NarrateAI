@@ -152,7 +152,7 @@ const worker = new Worker<VideoJobData>(
         ? await db.video.findMany({
             where: { seriesId, id: { not: videoId }, title: { not: null } },
             orderBy: { createdAt: "desc" },
-            take: 8,
+            take: 20,
             select: { title: true, scriptText: true },
           })
         : [];

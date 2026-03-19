@@ -95,7 +95,80 @@ const NICHE_HOOKS: Record<string, string[]> = {
     "the most insane fact about", "bro literally",
     "how is this even real:", "facts that feel illegal about",
   ],
+  "animal-kingdom": [
+    "the incredible truth about", "you won't believe what",
+    "why scientists are baffled by", "the creature known as",
+    "nature's wildest secret:", "the animal that defies all logic:",
+  ],
+  "dark-psychology": [
+    "the manipulation tactic called", "your brain is tricked by",
+    "the psychology behind", "why people fall for",
+    "the cognitive bias known as", "the behavioral trap of",
+  ],
+  "space-cosmos": [
+    "the cosmic mystery of", "what astronomers found about",
+    "the terrifying truth about", "beyond our galaxy:",
+    "the phenomenon known as", "the universe's strangest",
+  ],
+  "survival": [
+    "how to survive", "the person who lived through",
+    "the survival rule for", "what saved them from",
+    "the technique that beats", "the real way to escape",
+  ],
+  "money-wealth": [
+    "the financial principle of", "how the wealthy exploit",
+    "the money rule called", "the investing truth about",
+    "the spending habit that", "the wealth strategy behind",
+  ],
+  "funny-stories": [
+    "the time someone", "the hilarious moment when",
+    "the comedy of", "what happened at",
+    "the ridiculous story of", "the accidental",
+  ],
+  "zero-to-hero": [
+    "the comeback story of", "from rock bottom:",
+    "the impossible journey of", "nobody believed",
+    "against all odds:", "the person who turned",
+  ],
+  "satisfying": [
+    "the art of", "perfectly", "the mesmerizing process of",
+    "the transformation of", "watch this", "the precision of",
+  ],
+  "scary-stories": [
+    "the night they heard", "the unexplained case of",
+    "the door that", "what lurks in",
+    "the signal from", "the recording that captured",
+  ],
+  "conspiracy-theories": [
+    "the classified file on", "the cover-up behind",
+    "the evidence for", "what they hid about",
+    "the theory that explains", "the declassified truth about",
+  ],
+  "what-if": [
+    "what would happen if", "imagine a world where",
+    "the day everything changed because", "the scenario where",
+    "picture this:", "what if suddenly",
+  ],
+  "true-crime": [
+    "the unsolved case of", "the criminal who",
+    "the investigation into", "the forensic breakthrough in",
+    "the cold case of", "the double life of",
+  ],
 };
+
+function topicOverlapsAvoid(topic: string, avoidThemes: string[]): boolean {
+  if (avoidThemes.length === 0) return false;
+  const norm = topic.toLowerCase().replace(/[^a-z0-9\s]/g, "");
+  const words = norm.split(/\s+/).filter((w) => w.length > 4);
+  for (const avoid of avoidThemes) {
+    if (avoid.startsWith("Opening line:")) continue;
+    const avoidNorm = avoid.toLowerCase().replace(/[^a-z0-9\s]/g, "");
+    const avoidWords = new Set(avoidNorm.split(/\s+/).filter((w) => w.length > 4));
+    const overlap = words.filter((w) => avoidWords.has(w)).length;
+    if (overlap >= 3 || (words.length > 0 && overlap / words.length >= 0.5)) return true;
+  }
+  return false;
+}
 
 function buildTopicCandidates(input: ScriptInput): string[] {
   const niche = getNicheById(input.niche);
@@ -119,6 +192,7 @@ function buildTopicCandidates(input: ScriptInput): string[] {
     "",
     "",
   ];
+  const avoid = input.avoidThemes ?? [];
   const base = input.topic?.trim();
 
   if (base) {
@@ -135,18 +209,22 @@ function buildTopicCandidates(input: ScriptInput): string[] {
   const samples = rawSamples.length > 0 ? rawSamples : [input.niche.replace(/-/g, " ")];
   const seed = seedFromVarietySeed(input.varietySeed);
   const shuffledSamples = shuffleWithSeed([...samples], seed);
+
+  const freshSamples = shuffledSamples.filter((s) => !topicOverlapsAvoid(s, avoid));
+  const pool = freshSamples.length > 0 ? freshSamples : shuffledSamples;
+
   const shuffledHooks = shuffleWithSeed([...hooks], seed + 1);
 
   const out: string[] = [];
-  for (let i = 0; i < shuffledSamples.length && out.length < TWO_PASS_CANDIDATES; i++) {
+  for (let i = 0; i < pool.length && out.length < TWO_PASS_CANDIDATES; i++) {
     const angle = angles[(seed + i) % angles.length];
-    out.push(`${shuffledHooks[i % shuffledHooks.length]} ${shuffledSamples[i]}${angle}`);
+    out.push(`${shuffledHooks[i % shuffledHooks.length]} ${pool[i]}${angle}`);
   }
-  while (out.length < TWO_PASS_CANDIDATES && shuffledSamples.length > 0) {
-    const i = out.length % shuffledSamples.length;
+  while (out.length < TWO_PASS_CANDIDATES && pool.length > 0) {
+    const i = out.length % pool.length;
     const h = shuffledHooks[out.length % shuffledHooks.length];
     const angle = angles[(seed + out.length) % angles.length];
-    out.push(`${h} ${shuffledSamples[i]}${angle}`);
+    out.push(`${h} ${pool[i]}${angle}`);
   }
   if (out.length === 0) {
     out.push(

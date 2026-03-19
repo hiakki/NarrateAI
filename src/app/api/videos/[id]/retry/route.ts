@@ -69,7 +69,7 @@ export async function POST(
       const recentTitles = await db.video.findMany({
         where: { seriesId: video.seriesId, id: { not: id }, title: { not: null } },
         orderBy: { createdAt: "desc" },
-        take: 6,
+        take: 20,
         select: { title: true },
       });
       const avoidThemes = recentTitles.map((v) => v.title).filter(Boolean) as string[];
