@@ -105,12 +105,26 @@ ${input.avoidThemes?.length
     ? `\nAVOID THESE THEMES/PREMISES AND OPENING LINES (do NOT repeat or closely mimic ANY of these):\n${input.avoidThemes.map(t => `  ✗ ${t}`).join("\n")}`
     : ""}
 ${characterBlock}
+═══ VIRAL TITLE FORMULA (CRITICAL — titles determine 80% of views) ═══
+- Title MUST name a SPECIFIC subject (a person, animal, place, object, concept) — NEVER a vague phrase.
+  BAD TITLES (vague, poetic, zero curiosity): "The Silent Echo", "Nature's Superheroes", "The Hidden Truth", "The Unseen Realm", "Unveiled Shadows"
+  GOOD TITLES (specific, concrete, curiosity-triggering): "Mercury: Hot Enough to Melt Metal, Cold Enough to Freeze", "The Pistol Shrimp Snaps So Hard It Creates Light", "Why Lottery Winners Go Broke in 5 Years", "The Elevator Free-Fall Survival Technique"
+- Title formula: [SPECIFIC SUBJECT] + [EXTREME/SURPRISING CLAIM] — optionally with a question or contrast.
+- NEVER use these overused vague words in titles: "Hidden", "Untold", "Unveiled", "Silent", "Unseen", "Secret", "Dark Side", "The Truth About", "Nature's [anything]".
+
+═══ VIRAL HOOK FORMULA (first 2 seconds = stay or scroll) ═══
+- Scene 1 text MUST follow this pattern: SPECIFIC SURPRISING FACT → then OPEN-LOOP QUESTION.
+- The opening line must contain a CONCRETE claim with a number, comparison, or extreme (e.g. "430°C during the day, -180°C at night", "80% hunt success rate", "can regrow its entire brain").
+- Then immediately pose a SPECIFIC question the viewer must watch to answer (e.g. "So why can't we land there?", "But here's what nobody tells you...", "The reason will change how you think about...").
+- NEVER open with vague dramatic statements like "In the depths of...", "There exists a...", "Imagine a world where...".
+
 ═══ UNIQUENESS (CRITICAL — EVERY VIDEO MUST BE DIFFERENT) ═══
 - Create a UNIQUE story. Do NOT reuse the same premise, twist, or concept. Pick a FRESH angle, an unexpected interpretation, or a rarely-told aspect.
 - THE OPENING LINE IS THE MOST IMPORTANT THING TO VARY. Never start two videos the same way. If the avoid list above contains opening lines, your first sentence MUST be completely different in structure, topic, and phrasing.
 - Avoid overused tropes and clichés for this niche (e.g. for dark-psychology: NOT "you're being manipulated" every time — vary with specific studies, historical events, real scenarios, unusual angles).
 - If no specific topic was given, actively choose something DISTINCT from typical viral repeats. Surprise the viewer with a premise they haven't seen before.
 - Each script must feel like a different episode: different hook, different conflict, different payoff. Never output the "default" or most obvious idea for the niche.
+- FOCUS on ONE specific subject — go deep, not broad. A video about ONE animal, ONE event, ONE principle always outperforms "5 facts about...".
 ${input.varietySeed ? `- This run (seed: ${input.varietySeed}) must produce a story that feels different from any other — use the seed as a mental nudge to pick a non-obvious premise.` : ""}
 ${getNarrativeVarietyConstraint(input.varietySeed)}
 
@@ -130,7 +144,9 @@ ${visualGuideBlock}
   * Per scene: ${minWordsPerScene}–${maxWordsPerScene} words each — 3-5 full sentences, not one.
   * Common mistake: writing a single 8-12 word sentence per scene. That produces a 20-second video instead of ${input.duration}s.
 - Use short, punchy sentences. Every word must earn its place.
-- Scene 1 MUST open with a strong hook in the first 2 seconds (surprise, conflict, shocking fact, or emotional trigger).
+- Scene 1 MUST open with a SPECIFIC CONCRETE FACT in the first sentence (a number, a comparison, an extreme — not a vague statement). Then immediately pose the central question the video will answer. This is non-negotiable.
+  GOOD: "Mercury can reach 430 degrees during the day — then plunge to negative 180 at night. So why haven't we ever landed there?"
+  BAD: "In the vast emptiness of space, a mysterious force awaits..."
 - Build emotional intensity across scenes — never repeat the same energy level
 - COMPLETE STORY (CRITICAL): The story must feel finished, not cut off. Structure: (1) Hook/setup, (2) Rising tension or conflict, (3) Climax, (4) Clear resolution or payoff. The final scene MUST deliver closure — answer the hook, resolve the conflict, or give a satisfying takeaway. Never end on a cliffhanger or mid-thought; the viewer should feel the story is complete.
 - Keep pacing tight for reels/shorts but ensure EACH scene has enough dialogue to fill ~${(input.duration / sceneCount).toFixed(0)} seconds when spoken.
@@ -166,8 +182,8 @@ Image: "Extreme close-up of a pale hand with cracked fingernails gripping a trem
 
 Return ONLY valid JSON:
 {
-  "title": "catchy title under 60 chars",
-  "description": "1-2 sentence hook for social media",
+  "title": "SPECIFIC subject + surprising claim (under 60 chars, NO vague words)",
+  "description": "1-2 sentence teaser ending with '...' — pose a question, do NOT summarize the video",
   "hashtags": ["relevant", "trending", "hashtags"],
   "scenes": [
     {

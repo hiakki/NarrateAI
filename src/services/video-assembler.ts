@@ -113,7 +113,7 @@ function resolveFont(language?: string, sampleText?: string): string {
   if (hasDevanagari) {
     return "Noto Sans Devanagari";
   }
-  return "Noto Sans";
+  return "Montserrat ExtraBold";
 }
 
 interface CaptionStyle {
@@ -137,31 +137,31 @@ function getCaptionStyle(tone?: string, niche?: string, language?: string, sampl
 
   if (isHorror) {
     return {
-      fontName, fontSize: 28, bold: true, spacing: 1,
+      fontName, fontSize: 46, bold: true, spacing: 1,
       primaryColor: "&H00FFFFFF",
       outlineColor: "&H00000000",
-      backColor: "&HA0000000",
-      outline: 4, shadow: 0, marginV: 80,
-      borderStyle: 4,
+      backColor: "&H00000000",
+      outline: 5, shadow: 2, marginV: 20,
+      borderStyle: 1,
     };
   }
   if (isDramatic) {
     return {
-      fontName, fontSize: 26, bold: true, spacing: 1,
+      fontName, fontSize: 44, bold: true, spacing: 1,
       primaryColor: "&H00FFFFFF",
       outlineColor: "&H00000000",
-      backColor: "&H90000000",
-      outline: 4, shadow: 0, marginV: 85,
-      borderStyle: 4,
+      backColor: "&H00000000",
+      outline: 5, shadow: 2, marginV: 20,
+      borderStyle: 1,
     };
   }
   return {
-    fontName, fontSize: 24, bold: true, spacing: 0,
+    fontName, fontSize: 42, bold: true, spacing: 0,
     primaryColor: "&H00FFFFFF",
     outlineColor: "&H00000000",
-    backColor: "&H80000000",
-    outline: 3, shadow: 0, marginV: 90,
-    borderStyle: 4,
+    backColor: "&H00000000",
+    outline: 4, shadow: 2, marginV: 20,
+    borderStyle: 1,
   };
 }
 
@@ -174,10 +174,10 @@ function styleToAss(s: CaptionStyle): string {
     `BackColour=${s.backColor}`,
     `Outline=${s.outline}`,
     `Shadow=${s.shadow}`,
-    `Alignment=2`,
+    `Alignment=5`,
     `MarginV=${s.marginV}`,
-    `MarginL=40`,
-    `MarginR=40`,
+    `MarginL=30`,
+    `MarginR=30`,
     `Bold=${s.bold ? 1 : 0}`,
     `Spacing=${s.spacing}`,
     `BorderStyle=${s.borderStyle}`,
@@ -510,7 +510,7 @@ async function writeWordChunkSRT(
       cursor = end;
       lines.push(`${counter}`);
       lines.push(`${fmtTime(start)} --> ${fmtTime(end)}`);
-      lines.push(chunks[c]);
+      lines.push(chunks[c].toUpperCase());
       lines.push("");
       counter++;
     }

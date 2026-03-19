@@ -290,7 +290,12 @@ function scoreScript(script: GeneratedScript, targetScenes: number): number {
     return acc + score;
   }, 0);
 
-  const titleScore = script.title && script.title.length >= 20 && script.title.length <= 70 ? 8 : 4;
+  const VAGUE_TITLE_WORDS = /\b(hidden|untold|unveiled|silent|unseen|secret|nature's|the dark side|the truth about|shadow|mysterious)\b/i;
+  const titleLen = script.title?.length ?? 0;
+  const titleLenOk = titleLen >= 20 && titleLen <= 70;
+  const titleIsVague = VAGUE_TITLE_WORDS.test(script.title ?? "");
+  const titleHasSpecific = /\d|°|%|vs|:/.test(script.title ?? "");
+  const titleScore = (titleLenOk ? 6 : 2) + (titleIsVague ? -4 : 0) + (titleHasSpecific ? 4 : 0);
 
   const lastScene = scenes[scenes.length - 1]?.text?.toLowerCase() ?? "";
   const endingSignals = [
