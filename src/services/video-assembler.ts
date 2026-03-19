@@ -137,51 +137,36 @@ function getCaptionStyle(tone?: string, niche?: string, language?: string, sampl
 
   if (isHorror) {
     return {
-      fontName, fontSize: 42, bold: true, spacing: 1,
+      fontName, fontSize: 64, bold: true, spacing: 1,
       primaryColor: "&H0000D7FF",
       outlineColor: "&H00000000",
       backColor: "&H00000000",
-      outline: 5, shadow: 2, marginV: 550,
+      outline: 5, shadow: 3, marginV: 550,
       borderStyle: 1,
     };
   }
   if (isDramatic) {
     return {
-      fontName, fontSize: 40, bold: true, spacing: 1,
+      fontName, fontSize: 62, bold: true, spacing: 1,
       primaryColor: "&H0000D7FF",
       outlineColor: "&H00000000",
       backColor: "&H00000000",
-      outline: 5, shadow: 2, marginV: 550,
+      outline: 5, shadow: 3, marginV: 550,
       borderStyle: 1,
     };
   }
   return {
-    fontName, fontSize: 38, bold: true, spacing: 0,
+    fontName, fontSize: 58, bold: true, spacing: 0,
     primaryColor: "&H0000D7FF",
     outlineColor: "&H00000000",
     backColor: "&H00000000",
-    outline: 4, shadow: 2, marginV: 550,
+    outline: 4, shadow: 3, marginV: 550,
     borderStyle: 1,
   };
 }
 
-function styleToAss(s: CaptionStyle): string {
-  return [
-    `FontName=${s.fontName}`,
-    `FontSize=${s.fontSize}`,
-    `PrimaryColour=${s.primaryColor}`,
-    `OutlineColour=${s.outlineColor}`,
-    `BackColour=${s.backColor}`,
-    `Outline=${s.outline}`,
-    `Shadow=${s.shadow}`,
-    `Alignment=2`,
-    `MarginV=${s.marginV}`,
-    `MarginL=40`,
-    `MarginR=40`,
-    `Bold=${s.bold ? 1 : 0}`,
-    `Spacing=${s.spacing}`,
-    `BorderStyle=${s.borderStyle}`,
-  ].join(",");
+function buildAssStyle(s: CaptionStyle): string {
+  return `Style: Default,${s.fontName},${s.fontSize},${s.primaryColor},&H000000FF,${s.outlineColor},${s.backColor},${s.bold ? 1 : 0},0,0,0,100,100,${s.spacing},0,${s.borderStyle},${s.outline},${s.shadow},2,40,40,${s.marginV},1`;
 }
 
 // ─── Assembly ─────────────────────────────────────────────────────
@@ -215,19 +200,18 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
   );
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-asm-"));
-  const srtPath = path.join(tmpDir, "captions.srt");
-  const srtScenes = captionScenes ?? scenes;
-  const srtTimings = captionTimings ?? sceneTimings;
+  const assPath = path.join(tmpDir, "captions.ass");
+  const capScenes = captionScenes ?? scenes;
+  const capTimings = captionTimings ?? sceneTimings;
 
-  const sampleText = srtScenes.map((s) => s.text).join(" ");
-  await writeWordChunkSRT(srtScenes, srtTimings, srtPath, language);
+  const sampleText = capScenes.map((s) => s.text).join(" ");
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
   const isDramatic = DRAMATIC_TONES.has(tone ?? "");
   const musicVol = MUSIC_VOLUME[tone ?? ""] ?? 0.20;
   const captionStyleObj = getCaptionStyle(tone, niche, language, sampleText);
-  const captionStyle = styleToAss(captionStyleObj);
+  await writeWordChunkASS(capScenes, capTimings, assPath, captionStyleObj, outW, outH, language);
 
   const args: string[] = ["-y"];
 
@@ -304,10 +288,10 @@ export async function assembleVideo(input: AssemblyInput): Promise<string> {
     `${concatInputs.join("")}concat=n=${sceneInputs.length}:v=1:a=0[vraw]`
   );
 
-  const escapedSrt = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  const escapedAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const escapedFontsDir = FONTS_DIR.replace(/\\/g, "/").replace(/:/g, "\\:");
   filterParts.push(
-    `[vraw]subtitles='${escapedSrt}':fontsdir='${escapedFontsDir}':force_style='${captionStyle}'[vout]`
+    `[vraw]ass='${escapedAss}':fontsdir='${escapedFontsDir}'[vout]`
   );
 
   let audioMap: string;
@@ -443,7 +427,7 @@ export async function isValidAudioFile(audioPath: string): Promise<boolean> {
   }
 }
 
-// ─── SRT generation ───────────────────────────────────────────────
+// ─── ASS subtitle generation ──────────────────────────────────────
 
 function getChunkSize(language?: string): number {
   if (language === "hi") return 3;
@@ -458,10 +442,6 @@ const HIGHLIGHT_SKIP = new Set([
   "that", "with", "from", "than", "into", "what", "when", "how",
 ]);
 
-/**
- * Wrap the most impactful word in a subtitle chunk with a bright white
- * ASS override tag so it "pops" against the default gold primary color.
- */
 function highlightKeyWord(chunk: string): string {
   const words = chunk.split(/\s+/);
   if (words.length <= 1) return chunk;
@@ -494,14 +474,31 @@ function capitalizeChunk(chunk: string): string {
   return chunk.charAt(0).toUpperCase() + chunk.slice(1);
 }
 
-async function writeWordChunkSRT(
+async function writeWordChunkASS(
   scenes: { text: string }[],
   timings: { startMs: number; endMs: number }[],
   outputPath: string,
+  style: CaptionStyle,
+  outW: number,
+  outH: number,
   language?: string,
 ): Promise<void> {
-  const lines: string[] = [];
-  let counter = 1;
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    `PlayResX: ${outW}`,
+    `PlayResY: ${outH}`,
+    "WrapStyle: 0",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    buildAssStyle(style),
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ];
+
+  const events: string[] = [];
   const maxChunk = getChunkSize(language);
   const minChunkMs = 500;
   const maxChunkMs = 2200;
@@ -550,21 +547,18 @@ async function writeWordChunkSRT(
         ? sceneStart + sceneDur
         : Math.min(sceneStart + sceneDur, cursor + dur);
       cursor = end;
-      lines.push(`${counter}`);
-      lines.push(`${fmtTime(start)} --> ${fmtTime(end)}`);
-      lines.push(highlightKeyWord(capitalizeChunk(chunks[c])));
-      lines.push("");
-      counter++;
+      const styledText = highlightKeyWord(capitalizeChunk(chunks[c]));
+      events.push(`Dialogue: 0,${fmtAssTime(start)},${fmtAssTime(end)},Default,,0,0,0,,${styledText}`);
     }
   }
 
-  await fs.writeFile(outputPath, lines.join("\n"), "utf-8");
+  await fs.writeFile(outputPath, [...header, ...events, ""].join("\n"), "utf-8");
 }
 
-function fmtTime(ms: number): string {
+function fmtAssTime(ms: number): string {
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   const s = Math.floor((ms % 60000) / 1000);
-  const ml = ms % 1000;
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")},${ml.toString().padStart(3, "0")}`;
+  const cs = Math.floor((ms % 1000) / 10);
+  return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }
