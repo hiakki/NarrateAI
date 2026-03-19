@@ -1262,8 +1262,8 @@ async function generateClipViaDeApi(
   form.append("model", "Ltxv_13B_0_9_8_Distilled_FP8");
   form.append("width", String(width));
   form.append("height", String(height));
-  form.append("guidance", "7.5");
-  form.append("steps", "20");
+  form.append("guidance", "1");
+  form.append("steps", "1");
   form.append("frames", String(frames));
   form.append("fps", "30");
   form.append("seed", String(Math.floor(Math.random() * 2147483647)));
