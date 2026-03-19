@@ -137,30 +137,30 @@ function getCaptionStyle(tone?: string, niche?: string, language?: string, sampl
 
   if (isHorror) {
     return {
-      fontName, fontSize: 46, bold: true, spacing: 1,
-      primaryColor: "&H00FFFFFF",
+      fontName, fontSize: 42, bold: true, spacing: 1,
+      primaryColor: "&H0000D7FF",
       outlineColor: "&H00000000",
       backColor: "&H00000000",
-      outline: 5, shadow: 2, marginV: 20,
+      outline: 5, shadow: 2, marginV: 550,
       borderStyle: 1,
     };
   }
   if (isDramatic) {
     return {
-      fontName, fontSize: 44, bold: true, spacing: 1,
-      primaryColor: "&H00FFFFFF",
+      fontName, fontSize: 40, bold: true, spacing: 1,
+      primaryColor: "&H0000D7FF",
       outlineColor: "&H00000000",
       backColor: "&H00000000",
-      outline: 5, shadow: 2, marginV: 20,
+      outline: 5, shadow: 2, marginV: 550,
       borderStyle: 1,
     };
   }
   return {
-    fontName, fontSize: 42, bold: true, spacing: 0,
-    primaryColor: "&H00FFFFFF",
+    fontName, fontSize: 38, bold: true, spacing: 0,
+    primaryColor: "&H0000D7FF",
     outlineColor: "&H00000000",
     backColor: "&H00000000",
-    outline: 4, shadow: 2, marginV: 20,
+    outline: 4, shadow: 2, marginV: 550,
     borderStyle: 1,
   };
 }
@@ -174,10 +174,10 @@ function styleToAss(s: CaptionStyle): string {
     `BackColour=${s.backColor}`,
     `Outline=${s.outline}`,
     `Shadow=${s.shadow}`,
-    `Alignment=5`,
+    `Alignment=2`,
     `MarginV=${s.marginV}`,
-    `MarginL=30`,
-    `MarginR=30`,
+    `MarginL=40`,
+    `MarginR=40`,
     `Bold=${s.bold ? 1 : 0}`,
     `Spacing=${s.spacing}`,
     `BorderStyle=${s.borderStyle}`,
@@ -450,6 +450,50 @@ function getChunkSize(language?: string): number {
   return 3;
 }
 
+const HIGHLIGHT_SKIP = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "of", "to", "in",
+  "on", "at", "it", "so", "by", "as", "or", "no", "if", "do", "be",
+  "and", "but", "for", "not", "you", "all", "can", "had", "her",
+  "his", "its", "our", "has", "he", "she", "we", "they", "this",
+  "that", "with", "from", "than", "into", "what", "when", "how",
+]);
+
+/**
+ * Wrap the most impactful word in a subtitle chunk with a bright white
+ * ASS override tag so it "pops" against the default gold primary color.
+ */
+function highlightKeyWord(chunk: string): string {
+  const words = chunk.split(/\s+/);
+  if (words.length <= 1) return chunk;
+
+  let bestIdx = -1;
+  let bestScore = 0;
+
+  for (let i = 0; i < words.length; i++) {
+    const clean = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (HIGHLIGHT_SKIP.has(clean) || clean.length <= 1) continue;
+
+    let score = clean.length;
+    if (/\d/.test(clean)) score += 10;
+    if (clean.length >= 6) score += 3;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx < 0) return chunk;
+
+  words[bestIdx] = `{\\c&H00FFFFFF&}${words[bestIdx]}{\\r}`;
+  return words.join(" ");
+}
+
+function capitalizeChunk(chunk: string): string {
+  if (!chunk) return chunk;
+  return chunk.charAt(0).toUpperCase() + chunk.slice(1);
+}
+
 async function writeWordChunkSRT(
   scenes: { text: string }[],
   timings: { startMs: number; endMs: number }[],
@@ -471,7 +515,6 @@ async function writeWordChunkSRT(
     const sceneDur = timings[i].endMs - timings[i].startMs;
     const chunks: string[] = [];
 
-    // Prefer phrase boundaries first; fallback to word chunking.
     const phraseCandidates = text
       .split(/(?<=[,.;:!?])\s+/)
       .map((s) => s.trim())
@@ -495,7 +538,6 @@ async function writeWordChunkSRT(
       }
     }
 
-    // Allocate chunk duration proportionally by character length for tighter sync.
     const lengths = chunks.map((c) => Math.max(1, c.replace(/\s+/g, "").length));
     const totalLen = lengths.reduce((a, b) => a + b, 0);
     let cursor = sceneStart;
@@ -510,7 +552,7 @@ async function writeWordChunkSRT(
       cursor = end;
       lines.push(`${counter}`);
       lines.push(`${fmtTime(start)} --> ${fmtTime(end)}`);
-      lines.push(chunks[c].toUpperCase());
+      lines.push(highlightKeyWord(capitalizeChunk(chunks[c])));
       lines.push("");
       counter++;
     }
