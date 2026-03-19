@@ -101,3 +101,18 @@ export function getImageProvider(provider: string): ImageProviderInterface {
   }
   return factory();
 }
+
+/**
+ * Build a prioritized fallback list of image provider IDs.
+ * Primary provider first, then all other configured providers.
+ */
+export function getImageProviderFallbackChain(primaryId: string): string[] {
+  const { getAvailableProviders } = require("@/config/providers") as typeof import("@/config/providers");
+  const available = getAvailableProviders("image")
+    .map((p) => p.id)
+    .filter((id) => id !== primaryId && IMAGE_MAP[id]);
+  const chain: string[] = [];
+  if (IMAGE_MAP[primaryId]) chain.push(primaryId);
+  chain.push(...available);
+  return chain;
+}

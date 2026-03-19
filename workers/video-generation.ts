@@ -2,7 +2,7 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
-import { getTtsProvider, getImageProvider } from "../src/services/providers/factory";
+import { getTtsProvider, getImageProvider, getImageProviderFallbackChain } from "../src/services/providers/factory";
 import { TTS_PROVIDERS, IMAGE_PROVIDERS } from "../src/config/providers";
 import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
@@ -335,13 +335,35 @@ const worker = new Worker<VideoJobData>(
 
         log.log(`[IMG]`, `IMAGES generating ${targetImageCount} (${imageProvider})`);
 
-        const img = getImageProvider(imageProvider);
-        const imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
-          const ext = path.extname(srcPath) || ".png";
-          const dest = path.join(scDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
-          await fs.copyFile(srcPath, dest);
-        }, { aspectRatio });
+        const imageChain = getImageProviderFallbackChain(imageProvider);
+        let imgResult: { imagePaths: string[] } | null = null;
+        let actualImageProvider = imageProvider;
+        for (const providerId of imageChain) {
+          try {
+            const img = getImageProvider(providerId);
+            imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
+              const ext = path.extname(srcPath) || ".png";
+              const dest = path.join(scDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
+              await fs.copyFile(srcPath, dest);
+            }, { aspectRatio });
+            actualImageProvider = providerId;
+            if (providerId !== imageProvider) {
+              log.log(`[IMG]`, `Fallback: ${providerId} succeeded (primary ${imageProvider} failed)`);
+            }
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const isExhausted = /exhaust|quota|limit|balance|402|429|503/i.test(msg);
+            if (isExhausted && imageChain.indexOf(providerId) < imageChain.length - 1) {
+              log.warn(`[IMG]`, `${providerId} exhausted, trying next image provider... (${msg.slice(0, 120)})`);
+              continue;
+            }
+            throw err;
+          }
+        }
+        if (!imgResult) throw new Error("All image providers exhausted");
         imagePaths = imgResult.imagePaths;
+        checkpoint.usedProviders = { ...checkpoint.usedProviders, image: actualImageProvider };
 
         recordStageEnd(checkpoint, "IMAGES");
         completed.add("IMAGES");
