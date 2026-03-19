@@ -17,7 +17,7 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi" | "pixverse";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
   localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
@@ -141,6 +141,14 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     costEstimate: "~$0.05/clip ($5 free)",
     envVar: "DEAPI_API_KEY",
   },
+  PIXVERSE_V5: {
+    id: "PIXVERSE_V5",
+    name: "PixVerse V5 I2V",
+    description: "PixVerse V5 image-to-video. Good quality, 540p 5s clips. Free plan available, separate credit pool.",
+    type: "pixverse",
+    costEstimate: "~$0.22/clip (free plan available)",
+    envVar: "PIXVERSE_API_KEY",
+  },
   LOCAL_BACKEND: {
     id: "LOCAL_BACKEND",
     name: "Local Backend (I2V)",
@@ -237,6 +245,7 @@ export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] 
     if (p.envVar === "FAL_API_KEY") return !!process.env.FAL_API_KEY;
     if (p.envVar === "SILICONFLOW_API_KEY") return !!process.env.SILICONFLOW_API_KEY;
     if (p.envVar === "DEAPI_API_KEY") return !!process.env.DEAPI_API_KEY;
+    if (p.envVar === "PIXVERSE_API_KEY") return !!process.env.PIXVERSE_API_KEY;
     return !!process.env[p.envVar];
   });
 }

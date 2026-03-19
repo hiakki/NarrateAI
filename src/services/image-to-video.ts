@@ -39,7 +39,7 @@ function isRetryableI2VError(err: Error): boolean {
   return RETRYABLE_STATUS_RE.test(err.message);
 }
 
-const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal", "siliconflow", "deapi"]);
+const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal", "siliconflow", "deapi", "pixverse"]);
 
 const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
   POLLINATIONS_SEEDANCE: "Seedance (Pollinations)",
@@ -56,6 +56,7 @@ const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
   FAL_HAILUO_512P: "Hailuo 512p (fal.ai)",
   SILICONFLOW_WAN: "Wan I2V (SiliconFlow)",
   DEAPI_LTX: "LTX-2.3 (deAPI)",
+  PIXVERSE_V5: "PixVerse V5",
   LOCAL_BACKEND: "Local Backend",
 };
 
@@ -159,6 +160,14 @@ async function dispatchToProvider(
       options.aspectRatio ?? "9:16",
     );
   }
+  if (provider.type === "pixverse") {
+    const key = apiKey ?? process.env.PIXVERSE_API_KEY;
+    if (!key) throw new Error("PIXVERSE_API_KEY is not configured");
+    return generateClipViaPixVerse(
+      imagePath, outputPath, tmpDir, key, options.prompt, dur,
+      options.aspectRatio ?? "9:16",
+    );
+  }
   throw new Error(`Missing config for image-to-video provider: ${provider.id}`);
 }
 
@@ -227,9 +236,10 @@ const PROVIDER_PRIORITY: Record<string, number> = {
   pollinations: 4,
   siliconflow: 5,
   deapi: 6,
-  fal: 7,
-  freepik: 8,
-  replicate: 9,
+  pixverse: 7,
+  fal: 8,
+  freepik: 9,
+  replicate: 10,
 };
 
 function buildFallbackChain(primaryId: string): ImageToVideoProviderInfo[] {
@@ -1307,6 +1317,109 @@ async function generateClipViaDeApi(
   validateVideoBuffer(videoBuffer, "deAPI");
   await fs.writeFile(outputPath, videoBuffer);
   log.debug(`deAPI clip saved: ${outputPath} (${(videoBuffer.length / 1024).toFixed(0)}KB)`);
+  return { videoPath: outputPath, tmpDir };
+}
+
+// ---------------------------------------------------------------------------
+// PixVerse – V5/V5.5 (upload image → submit I2V → poll → download)
+// ---------------------------------------------------------------------------
+async function generateClipViaPixVerse(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+  aspectRatio: "9:16" | "16:9" = "9:16",
+): Promise<ImageToVideoResult> {
+  const PIXVERSE_BASE = "https://app-api.pixverse.ai/openapi/v2";
+
+  const imageData = await fs.readFile(imagePath);
+  const blob = new Blob([imageData], { type: "image/png" });
+  const uploadForm = new FormData();
+  uploadForm.append("image", blob, "frame.png");
+
+  const uploadTraceId = crypto.randomUUID();
+  const uploadRes = await fetch(`${PIXVERSE_BASE}/image/upload`, {
+    method: "POST",
+    headers: { "API-KEY": apiKey, "Ai-trace-id": uploadTraceId },
+    body: uploadForm,
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!uploadRes.ok) {
+    const body = await uploadRes.text().catch(() => "");
+    throw new Error(`PixVerse upload ${uploadRes.status}: ${body.slice(0, 300)}`);
+  }
+  const uploadData = (await uploadRes.json()) as { ErrCode: number; ErrMsg: string; Resp?: { img_id: number } };
+  if (uploadData.ErrCode !== 0 || !uploadData.Resp?.img_id) {
+    throw new Error(`PixVerse upload error: ${uploadData.ErrMsg ?? JSON.stringify(uploadData).slice(0, 200)}`);
+  }
+  const imgId = uploadData.Resp.img_id;
+  log.debug(`PixVerse image uploaded: img_id=${imgId}`);
+
+  const duration = durationSec <= 5 ? 5 : 8;
+  const genTraceId = crypto.randomUUID();
+  const genRes = await fetch(`${PIXVERSE_BASE}/video/img/generate`, {
+    method: "POST",
+    headers: { "API-KEY": apiKey, "Ai-trace-id": genTraceId, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      duration,
+      img_id: imgId,
+      model: "v5",
+      motion_mode: "normal",
+      prompt: prompt ?? "Smooth cinematic motion, gentle camera movement",
+      quality: "540p",
+      seed: Math.floor(Math.random() * 2147483647),
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!genRes.ok) {
+    const body = await genRes.text().catch(() => "");
+    throw new Error(`PixVerse generate ${genRes.status}: ${body.slice(0, 300)}`);
+  }
+  const genData = (await genRes.json()) as { ErrCode: number; ErrMsg: string; Resp?: { video_id: number } };
+  if (genData.ErrCode !== 0 || !genData.Resp?.video_id) {
+    throw new Error(`PixVerse generate error: ${genData.ErrMsg ?? JSON.stringify(genData).slice(0, 200)}`);
+  }
+  const videoId = genData.Resp.video_id;
+  log.debug(`PixVerse job submitted: video_id=${videoId}`);
+
+  const maxPollMs = 300_000;
+  const start = Date.now();
+  let videoUrl = "";
+  while (Date.now() - start < maxPollMs) {
+    await new Promise((r) => setTimeout(r, 8_000));
+    const pollTraceId = crypto.randomUUID();
+    const statusRes = await fetch(`${PIXVERSE_BASE}/video/result/${videoId}`, {
+      headers: { "API-KEY": apiKey, "Ai-trace-id": pollTraceId },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!statusRes.ok) {
+      const body = await statusRes.text().catch(() => "");
+      if (RETRYABLE_STATUS_RE.test(String(statusRes.status))) throw new Error(`PixVerse status ${statusRes.status}: ${body.slice(0, 200)}`);
+      log.warn(`PixVerse poll non-OK ${statusRes.status}, retrying...`);
+      continue;
+    }
+    const data = (await statusRes.json()) as {
+      ErrCode: number;
+      Resp?: { status: number; url?: string };
+    };
+    const st = data.Resp?.status;
+    if (st === 7) throw new Error("PixVerse generation failed: content moderation");
+    if (st === 8) throw new Error("PixVerse generation failed");
+    if (st === 1 && data.Resp?.url) {
+      videoUrl = data.Resp.url;
+      break;
+    }
+  }
+  if (!videoUrl) throw new Error(`PixVerse timed out after ${(maxPollMs / 1000).toFixed(0)}s`);
+
+  const dlRes = await fetch(videoUrl, { signal: AbortSignal.timeout(60_000) });
+  if (!dlRes.ok) throw new Error(`PixVerse download ${dlRes.status}`);
+  const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+  validateVideoBuffer(videoBuffer, "PixVerse");
+  await fs.writeFile(outputPath, videoBuffer);
+  log.debug(`PixVerse clip saved: ${outputPath} (${(videoBuffer.length / 1024).toFixed(0)}KB)`);
   return { videoPath: outputPath, tmpDir };
 }
 
