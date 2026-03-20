@@ -39,7 +39,7 @@ function isRetryableI2VError(err: Error): boolean {
   return RETRYABLE_STATUS_RE.test(err.message);
 }
 
-const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal", "siliconflow", "deapi", "pixverse"]);
+const KEY_ROTATABLE_TYPES = new Set<string>(["pollinations", "huggingface", "freepik", "gradio-space", "wavespeed", "fal", "siliconflow", "deapi", "pixverse", "leonardo", "gemini-veo"]);
 
 const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
   POLLINATIONS_SEEDANCE: "Seedance (Pollinations)",
@@ -57,6 +57,8 @@ const PROVIDER_FRIENDLY_NAMES: Record<string, string> = {
   SILICONFLOW_WAN: "Wan I2V (SiliconFlow)",
   DEAPI_LTX: "LTX-2.3 (deAPI)",
   PIXVERSE_V5: "PixVerse V5",
+  LEONARDO_I2V: "Leonardo AI Motion",
+  GEMINI_VEO: "Veo 3.1 Fast (Gemini)",
   LOCAL_BACKEND: "Local Backend",
 };
 
@@ -168,6 +170,21 @@ async function dispatchToProvider(
       options.aspectRatio ?? "9:16",
     );
   }
+  if (provider.type === "leonardo") {
+    const key = apiKey ?? process.env.LEONARDO_API_KEY;
+    if (!key) throw new Error("LEONARDO_API_KEY is not configured");
+    return generateClipViaLeonardo(
+      imagePath, outputPath, tmpDir, key, options.prompt, dur,
+    );
+  }
+  if (provider.type === "gemini-veo") {
+    const key = apiKey ?? process.env.GEMINI_API_KEY;
+    if (!key) throw new Error("GEMINI_API_KEY is not configured");
+    return generateClipViaGeminiVeo(
+      imagePath, outputPath, tmpDir, key, options.prompt, dur,
+      options.aspectRatio ?? "9:16",
+    );
+  }
   throw new Error(`Missing config for image-to-video provider: ${provider.id}`);
 }
 
@@ -230,16 +247,18 @@ async function tryProviderWithRotation(
  * sorted so providers on independent credit pools come before shared-pool ones.
  */
 const PROVIDER_PRIORITY: Record<string, number> = {
-  huggingface: 1,
-  wavespeed: 2,
-  "gradio-space": 3,
-  pollinations: 4,
-  siliconflow: 5,
-  deapi: 6,
-  pixverse: 7,
-  fal: 8,
-  freepik: 9,
-  replicate: 10,
+  leonardo: 1,
+  deapi: 2,
+  pixverse: 3,
+  siliconflow: 4,
+  pollinations: 5,
+  huggingface: 6,
+  wavespeed: 7,
+  "gradio-space": 8,
+  fal: 9,
+  freepik: 10,
+  replicate: 11,
+  "gemini-veo": 12,
 };
 
 function buildFallbackChain(primaryId: string): ImageToVideoProviderInfo[] {
@@ -1425,10 +1444,287 @@ async function generateClipViaPixVerse(
   return { videoPath: outputPath, tmpDir };
 }
 
+// ---------------------------------------------------------------------------
+// Leonardo AI – Motion 2.0 Fast (upload → generate → poll → download)
+// ---------------------------------------------------------------------------
+const LEONARDO_BASE = "https://cloud.leonardo.ai/api/rest/v1";
+const LEONARDO_MAX_POLL_MS = 5 * 60 * 1000;
+const LEONARDO_POLL_INTERVAL_MS = 4_000;
+
+async function uploadImageToLeonardo(imagePath: string, apiKey: string): Promise<string> {
+  const ext = path.extname(imagePath).toLowerCase().replace(".", "") || "jpg";
+  const extension = ["png", "jpg", "jpeg", "webp"].includes(ext) ? ext : "jpg";
+
+  const initRes = await fetch(`${LEONARDO_BASE}/init-image`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ extension }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!initRes.ok) {
+    const errText = await initRes.text().catch(() => "");
+    throw new Error(`Leonardo init-image ${initRes.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const initData = (await initRes.json()) as {
+    uploadInitImage?: { id?: string; url?: string; fields?: string; key?: string };
+  };
+  const upload = initData.uploadInitImage;
+  if (!upload?.id || !upload.url || !upload.fields) {
+    throw new Error("Leonardo init-image returned incomplete data");
+  }
+
+  const fields = JSON.parse(upload.fields) as Record<string, string>;
+  const imageBuffer = await fs.readFile(imagePath);
+
+  const boundary = `----LeoUpload${Date.now()}`;
+  const parts: Buffer[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`,
+    ));
+  }
+  parts.push(Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.${extension}"\r\nContent-Type: image/${extension === "jpg" ? "jpeg" : extension}\r\n\r\n`,
+  ));
+  parts.push(imageBuffer);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+  const uploadRes = await fetch(upload.url, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body: Buffer.concat(parts),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!uploadRes.ok && uploadRes.status !== 204) {
+    const errText = await uploadRes.text().catch(() => "");
+    throw new Error(`Leonardo S3 upload ${uploadRes.status}: ${errText.slice(0, 200)}`);
+  }
+
+  log.debug(`[Leonardo] Image uploaded: id=${upload.id}`);
+  return upload.id;
+}
+
+async function generateClipViaLeonardo(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+): Promise<ImageToVideoResult> {
+  const imageId = await uploadImageToLeonardo(imagePath, apiKey);
+
+  const genRes = await fetch(`${LEONARDO_BASE}/generations-image-to-video`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      imageId,
+      imageType: "UPLOADED",
+      prompt: (prompt ?? "Smooth cinematic motion, gentle camera movement").slice(0, 500),
+      model: "MOTION2FAST",
+      isPublic: false,
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (!genRes.ok) {
+    const body = await genRes.text().catch(() => "");
+    throw new Error(`Leonardo I2V ${genRes.status}: ${body.slice(0, 300)}`);
+  }
+
+  const genData = (await genRes.json()) as {
+    motionVideoGenerationJob?: { generationId?: string };
+  };
+  const generationId = genData.motionVideoGenerationJob?.generationId;
+  if (!generationId) {
+    throw new Error(`Leonardo I2V returned no generationId: ${JSON.stringify(genData).slice(0, 200)}`);
+  }
+  log.debug(`[Leonardo] I2V job submitted: ${generationId}`);
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < LEONARDO_MAX_POLL_MS) {
+    await new Promise((r) => setTimeout(r, LEONARDO_POLL_INTERVAL_MS));
+
+    const pollRes = await fetch(`${LEONARDO_BASE}/generations/${generationId}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!pollRes.ok) {
+      if (RETRYABLE_STATUS_RE.test(String(pollRes.status))) {
+        throw new Error(`Leonardo poll ${pollRes.status}`);
+      }
+      log.debug(`[Leonardo] Poll non-OK ${pollRes.status}, retrying...`);
+      continue;
+    }
+
+    const pollData = (await pollRes.json()) as {
+      generations_by_pk?: {
+        status?: string;
+        generated_images?: Array<{ url?: string; motionMP4URL?: string }>;
+      };
+    };
+    const gen = pollData.generations_by_pk;
+    const status = gen?.status;
+
+    if (status === "COMPLETE") {
+      const videoUrl =
+        gen?.generated_images?.[0]?.motionMP4URL ??
+        gen?.generated_images?.[0]?.url;
+      if (!videoUrl) {
+        throw new Error("Leonardo I2V COMPLETE but no video URL in response");
+      }
+
+      const dlRes = await fetch(videoUrl, { signal: AbortSignal.timeout(120_000) });
+      if (!dlRes.ok) throw new Error(`Leonardo download ${dlRes.status}`);
+      const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+
+      validateVideoBuffer(videoBuffer, "Leonardo AI");
+      await fs.writeFile(outputPath, videoBuffer);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      log.log(`[Leonardo]`, `Generated ${(videoBuffer.length / 1024).toFixed(0)}KB video in ${elapsed}s`);
+      return { videoPath: outputPath, tmpDir };
+    }
+
+    if (status === "FAILED") {
+      throw new Error("Leonardo I2V generation failed");
+    }
+
+    log.debug(`[Leonardo] Generation ${generationId}: ${status} (${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
+  }
+
+  throw new Error(`Leonardo I2V timed out after ${LEONARDO_MAX_POLL_MS / 1000}s`);
+}
+
+// ---------------------------------------------------------------------------
+// Gemini Veo 3.1 Fast – via @google/genai SDK (submit → poll → download)
+// ---------------------------------------------------------------------------
+const VEO_MAX_POLL_MS = 5 * 60 * 1000;
+const VEO_POLL_INTERVAL_MS = 5_000;
+
+async function generateClipViaGeminiVeo(
+  imagePath: string,
+  outputPath: string,
+  tmpDir: string,
+  apiKey: string,
+  prompt?: string,
+  durationSec: number = 5,
+  aspectRatio: "9:16" | "16:9" = "9:16",
+): Promise<ImageToVideoResult> {
+  const { GoogleGenAI } = await import("@google/genai");
+  const ai = new GoogleGenAI({ apiKey });
+
+  const imageBuffer = await fs.readFile(imagePath);
+  const ext = path.extname(imagePath).toLowerCase();
+  const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
+
+  log.debug(`[Veo] Submitting I2V (${aspectRatio}, ${durationSec}s)`);
+
+  let operation = await ai.models.generateVideos({
+    model: "veo-3.1-fast-generate-preview",
+    prompt: (prompt ?? "Smooth cinematic motion, gentle camera movement").slice(0, 500),
+    image: {
+      imageBytes: imageBuffer.toString("base64"),
+      mimeType,
+    },
+    config: {
+      aspectRatio,
+      numberOfVideos: 1,
+    },
+  });
+
+  log.debug(`[Veo] Job submitted, polling...`);
+
+  const startTime = Date.now();
+  while (!operation.done && Date.now() - startTime < VEO_MAX_POLL_MS) {
+    await new Promise((r) => setTimeout(r, VEO_POLL_INTERVAL_MS));
+    operation = await ai.operations.getVideosOperation({ operation });
+    log.debug(`[Veo] Poll: done=${operation.done} (${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
+  }
+
+  if (!operation.done) {
+    throw new Error(`Veo timed out after ${VEO_MAX_POLL_MS / 1000}s`);
+  }
+
+  if (operation.error) {
+    const errMsg = JSON.stringify(operation.error).slice(0, 300);
+    const isQuota = /quota|limit|429|402|billing/i.test(errMsg);
+    throw new Error(`Veo ${isQuota ? "402" : "generation error"}: ${errMsg}`);
+  }
+
+  const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+  if (!videoUri) {
+    throw new Error("Veo completed but no video URI in response");
+  }
+
+  const dlRes = await fetch(videoUri, {
+    headers: { "x-goog-api-key": apiKey },
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!dlRes.ok) throw new Error(`Veo download ${dlRes.status}`);
+  const videoBuffer = Buffer.from(await dlRes.arrayBuffer());
+
+  validateVideoBuffer(videoBuffer, "Gemini Veo");
+  await fs.writeFile(outputPath, videoBuffer);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  log.log(`[Veo]`, `Generated ${(videoBuffer.length / 1024).toFixed(0)}KB video in ${elapsed}s`);
+  return { videoPath: outputPath, tmpDir };
+}
+
+// ---------------------------------------------------------------------------
+// Daily I2V budget tracker — file-based, resets each calendar day
+// ---------------------------------------------------------------------------
+const BUDGET_FILE = path.join(os.tmpdir(), "narrateai-i2v-daily.json");
+
+interface DailyUsage { date: string; clips: number }
+
+export async function getI2VDailyUsage(): Promise<DailyUsage> {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const raw = await fs.readFile(BUDGET_FILE, "utf-8");
+    const data = JSON.parse(raw) as DailyUsage;
+    if (data.date === today) return data;
+  } catch { /* file missing or corrupt → fresh day */ }
+  return { date: today, clips: 0 };
+}
+
+async function recordI2VClips(count: number): Promise<void> {
+  const usage = await getI2VDailyUsage();
+  usage.clips += count;
+  await fs.writeFile(BUDGET_FILE, JSON.stringify(usage), "utf-8").catch(() => {});
+}
+
+/**
+ * Calculate how many I2V slots this video should use, given the daily budget.
+ * Always reserves at least 1 slot for the hook (scene 0).
+ */
+export function calculateI2VAllocation(totalSlots: number, cachedSlots: number): {
+  maxSlots: number;
+  reason: string;
+} {
+  const perVideo = parseInt(process.env.I2V_MAX_CLIPS_PER_VIDEO ?? "0") || totalSlots;
+  const cap = Math.min(totalSlots, perVideo);
+  const slotsNeeded = Math.max(0, cap - cachedSlots);
+
+  if (slotsNeeded <= 0) return { maxSlots: totalSlots, reason: "all cached" };
+  return { maxSlots: cap, reason: `${cap}/${totalSlots} slots (I2V_MAX_CLIPS_PER_VIDEO=${perVideo})` };
+}
+
 /**
  * Generate clips for multiple scene images (parallel, concurrency-limited).
  * When noFallback is true, any scene failure throws (no static-image fallback).
  * Pass existingClips to reuse already-valid clips and only regenerate missing ones.
+ * `maxSlots` limits how many slots (starting from 0) will attempt I2V; remaining
+ * get null immediately so the caller can use static images for them.
  * Returns { results, ctxLines } — ctxLines are detailed log lines for context.txt.
  */
 export async function generateClipsFromImages(
@@ -1441,6 +1737,7 @@ export async function generateClipsFromImages(
     existingClips?: Map<number, string>;
     concurrency?: number;
     aspectRatio?: "9:16" | "16:9";
+    maxSlots?: number;
   } = {}
 ): Promise<{ results: (string | null)[]; ctxLines: string[]; actualI2VProvider?: string }> {
   const concurrency = options.concurrency ?? 3;
@@ -1448,11 +1745,12 @@ export async function generateClipsFromImages(
   const durationSec = options.durationSec ?? 5;
   const noFallback = options.noFallback === true;
   const existing = options.existingClips;
+  const maxSlots = options.maxSlots ?? imagePaths.length;
   const ctx: string[] = [];
   const providerCounts: Record<string, number> = {};
 
   ctx.push(`Provider : ${options.providerId}`);
-  ctx.push(`Scenes   : ${imagePaths.length}  Concurrency: ${concurrency}  Duration: ${durationSec}s  NoFallback: ${noFallback}`);
+  ctx.push(`Scenes   : ${imagePaths.length}  MaxI2V: ${maxSlots}  Concurrency: ${concurrency}  Duration: ${durationSec}s  NoFallback: ${noFallback}`);
   ctx.push("");
 
   const toGenerate: number[] = [];
@@ -1461,6 +1759,10 @@ export async function generateClipsFromImages(
     if (existing?.has(i)) {
       results[i] = existing.get(i)!;
       ctx.push(`${tag}  CACHED  ${path.basename(existing.get(i)!)}`);
+      continue;
+    }
+    if (i >= maxSlots) {
+      ctx.push(`${tag}  SKIP    budget limit (slot ${i} >= maxSlots ${maxSlots})`);
       continue;
     }
     toGenerate.push(i);
@@ -1527,7 +1829,10 @@ export async function generateClipsFromImages(
     launch();
   });
 
-  const summary = `${doneCount} ok, ${errors.length} failed, ${existing?.size ?? 0} cached`;
+  if (doneCount > 0) await recordI2VClips(doneCount);
+
+  const skipped = imagePaths.length - (toGenerate.length + (existing?.size ?? 0));
+  const summary = `${doneCount} ok, ${errors.length} failed, ${existing?.size ?? 0} cached, ${skipped} skipped (budget)`;
   log.log(`[I2V]`, `Done: ${summary}`);
   ctx.push("");
   ctx.push(`Result: ${summary}`);

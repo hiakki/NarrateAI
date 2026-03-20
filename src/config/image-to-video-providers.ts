@@ -17,7 +17,7 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi" | "pixverse";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi" | "pixverse" | "leonardo" | "gemini-veo";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
   localBaseUrl?: string;
   /** Replicate model (e.g. "owner/name") when type === "replicate" */
@@ -149,6 +149,22 @@ export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> 
     costEstimate: "~$0.22/clip (free plan available)",
     envVar: "PIXVERSE_API_KEY",
   },
+  LEONARDO_I2V: {
+    id: "LEONARDO_I2V",
+    name: "Leonardo AI Motion (I2V)",
+    description: "Leonardo AI Motion 2.0 Fast. 150 daily tokens reset every day (=6 clips). Good quality, reliable.",
+    type: "leonardo",
+    costEstimate: "Free 150 tokens/day (25/clip)",
+    envVar: "LEONARDO_API_KEY",
+  },
+  GEMINI_VEO: {
+    id: "GEMINI_VEO",
+    name: "Veo 3.1 Fast (Gemini)",
+    description: "Google Veo 3.1 Fast via Gemini API. High quality 720p/1080p. Paid: ~$0.75 per 5s clip.",
+    type: "gemini-veo",
+    costEstimate: "~$0.75/5s clip (paid)",
+    envVar: "GEMINI_API_KEY",
+  },
   LOCAL_BACKEND: {
     id: "LOCAL_BACKEND",
     name: "Local Backend (I2V)",
@@ -246,6 +262,8 @@ export function getAvailableImageToVideoProviders(): ImageToVideoProviderInfo[] 
     if (p.envVar === "SILICONFLOW_API_KEY") return !!process.env.SILICONFLOW_API_KEY;
     if (p.envVar === "DEAPI_API_KEY") return !!process.env.DEAPI_API_KEY;
     if (p.envVar === "PIXVERSE_API_KEY") return !!process.env.PIXVERSE_API_KEY;
+    if (p.envVar === "LEONARDO_API_KEY") return !!process.env.LEONARDO_API_KEY;
+    if (p.envVar === "GEMINI_API_KEY") return !!process.env.GEMINI_API_KEY;
     return !!process.env[p.envVar];
   });
 }

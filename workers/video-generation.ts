@@ -6,7 +6,7 @@ import { getTtsProvider, getImageProvider, getImageProviderFallbackChain } from 
 import { TTS_PROVIDERS, IMAGE_PROVIDERS } from "../src/config/providers";
 import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
-import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File } from "../src/services/image-to-video";
+import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File, calculateI2VAllocation } from "../src/services/image-to-video";
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
@@ -415,8 +415,11 @@ const worker = new Worker<VideoJobData>(
           }
         }
 
-        const toGenerate = imagePaths!.length - existingClips.size;
-        log.log(`[I2V]`, `${toGenerate} to generate, ${existingClips.size} cached — ${imageToVideoProvider}`);
+        const { maxSlots, reason: allocReason } = calculateI2VAllocation(
+          imagePaths!.length, existingClips.size,
+        );
+        const toGenerate = Math.min(imagePaths!.length, maxSlots) - existingClips.size;
+        log.log(`[I2V]`, `${toGenerate} to generate, ${existingClips.size} cached, allocation: ${allocReason} — ${imageToVideoProvider}`);
 
         const prompts = imageSlots.map((s, i) =>
           buildImageToVideoPrompt(s.visualDescription, i, imageSlots.length),
@@ -428,6 +431,7 @@ const worker = new Worker<VideoJobData>(
           noFallback: process.env.I2V_FALLBACK_ENABLED === "false",
           existingClips,
           aspectRatio,
+          maxSlots,
         });
         ctxSection("3.5 · IMAGE-TO-VIDEO", ...i2vCtx);
         if (actualI2VProvider) {
