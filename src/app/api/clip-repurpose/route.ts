@@ -72,6 +72,9 @@ export async function POST(req: NextRequest) {
       postTime?: string;
       timezone?: string;
       targetPlatforms?: string[];
+      includeAiTags?: boolean;
+      crossPlatformOnly?: boolean;
+      enableBgm?: boolean;
     };
 
     if (body.action === "stop" && body.automationId) {
@@ -118,6 +121,9 @@ export async function POST(req: NextRequest) {
           ...(body.frequency !== undefined ? { frequency: body.frequency } : {}),
           ...(body.postTime !== undefined ? { postTime: body.postTime } : {}),
           ...(body.timezone !== undefined ? { timezone: body.timezone } : {}),
+          ...(body.includeAiTags !== undefined ? { includeAiTags: body.includeAiTags } : {}),
+          ...(body.crossPlatformOnly !== undefined ? { crossPlatformOnly: body.crossPlatformOnly } : {}),
+          ...(body.enableBgm !== undefined ? { enableBgm: body.enableBgm } : {}),
           clipConfig: updatedClipConfig,
         },
       });
@@ -216,6 +222,7 @@ export async function POST(req: NextRequest) {
           clipDurationSec: (clipConfig.clipDurationSec as number) ?? 45,
           cropMode: (clipConfig.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
           creditOriginal: true,
+          enableBgm: auto.enableBgm,
         },
         targetPlatforms,
       });
@@ -248,6 +255,9 @@ export async function POST(req: NextRequest) {
           creditOriginal: true,
         },
         targetPlatforms: body.targetPlatforms ?? ["FACEBOOK", "YOUTUBE", "INSTAGRAM"],
+        includeAiTags: body.includeAiTags ?? false,
+        crossPlatformOnly: body.crossPlatformOnly ?? false,
+        enableBgm: body.enableBgm ?? true,
         frequency: body.frequency ?? "daily",
         postTime: body.postTime ?? "10:00",
         timezone: body.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,

@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { discoverVideo, type ClipNiche } from "../src/services/clip-repurpose/discovery";
 import { downloadVideoAuto, parseVideoInfo } from "../src/services/clip-repurpose/downloader";
 import { findPeakSegment, findPeakViaTranscript } from "../src/services/clip-repurpose/heatmap";
-import { extractAndCrop, parseVttForSegment, buildAssFile, enhanceClip, detectSpeechSegments, alignCuesToAudio } from "../src/services/clip-repurpose/clip-processor";
+import { extractAndCrop, parseVttForSegment, buildAssFile, enhanceClip, detectSpeechSegments, alignCuesToAudio, SPEED_FACTOR } from "../src/services/clip-repurpose/clip-processor";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath } from "../src/lib/video-paths";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
@@ -271,20 +271,20 @@ const worker = new Worker<ClipRepurposeJobData>(
       let assContent: string;
       if (subsPath) {
         const vttContent = await fs.readFile(subsPath, "utf-8");
-        let cues = parseVttForSegment(vttContent, peak.startSec, peak.endSec);
-        log.log(`[ENHANCE]`, `${cues.length} subtitle cues parsed from VTT`);
+        let cues = parseVttForSegment(vttContent, peak.startSec, peak.endSec, SPEED_FACTOR);
+        log.log(`[ENHANCE]`, `${cues.length} subtitle cues parsed from VTT (speed-adjusted for ${SPEED_FACTOR}x)`);
         if (speechSegments.length > 0 && cues.length > 0) {
           cues = alignCuesToAudio(cues, speechSegments);
           log.log(`[ENHANCE]`, `Cues aligned to audio speech segments`);
         }
-        assContent = buildAssFile(cues, discovered.title.slice(0, 50));
+        assContent = buildAssFile(cues);
       } else {
-        assContent = buildAssFile([], discovered.title.slice(0, 50));
-        log.log(`[ENHANCE]`, `No subtitles available — hook text only`);
+        assContent = buildAssFile([]);
+        log.log(`[ENHANCE]`, `No subtitles available`);
       }
 
       const enhancedPath = path.join(tmpDir, "enhanced.mp4");
-      await enhanceClip(croppedPath, enhancedPath, assContent, tmpDir);
+      await enhanceClip(croppedPath, enhancedPath, assContent, tmpDir, clipConfig.enableBgm ?? false);
 
       // ── Metadata generation (part of enhance stage) ──
       log.log(`[METADATA]`, `Generating title and description...`);

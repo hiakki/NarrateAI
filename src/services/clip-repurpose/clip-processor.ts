@@ -117,37 +117,59 @@ export function alignCuesToAudio(
   });
 }
 
+// Anti-fingerprint transforms applied to every clip-repurpose output.
+// 1.05x speed + hflip + hue shift + contrast nudge break Content ID matching
+// while remaining imperceptible to viewers.
+export const SPEED_FACTOR = 1.05;
+const HUE_SHIFT = 10;         // degrees
+const SAT_FACTOR = 1.05;
+const CONTRAST = 1.03;
+const BRIGHTNESS = 0.02;
+const ANTI_FP_AUDIO = `atempo=${SPEED_FACTOR}`;
+
+function buildAntiFpVideo(hflip: boolean): string {
+  const parts: string[] = [];
+  if (hflip) parts.push("hflip");
+  parts.push(`hue=h=${HUE_SHIFT}:s=${SAT_FACTOR}`);
+  parts.push(`eq=contrast=${CONTRAST}:brightness=${BRIGHTNESS}`);
+  parts.push(`setpts=PTS/${SPEED_FACTOR}`);
+  return parts.join(",");
+}
+
 /**
  * Extract a segment from a video and convert to 9:16 with blur background.
- * Uses -ss after -i for frame-accurate seeking (avoids keyframe drift that
- * causes subtitle timing misalignment).
+ * Applies anti-fingerprint transforms (hue shift, speed change, optional mirror)
+ * to both foreground and background layers to evade Content ID.
  */
 export async function extractAndCrop(
   sourcePath: string,
   outputPath: string,
   segment: PeakSegment,
   cropMode: "blur-bg" | "center-crop" = "blur-bg",
+  hflip = true,
 ): Promise<void> {
   const duration = segment.endSec - segment.startSec;
+  const antiFpVideo = buildAntiFpVideo(hflip);
 
-  let videoFilter: string;
+  let filterComplex: string;
   if (cropMode === "blur-bg") {
-    videoFilter = [
-      `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},boxblur=25:25[bg]`,
-      `[0:v]scale=${OUT_W}:-2:force_original_aspect_ratio=decrease[fg]`,
+    filterComplex = [
+      `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},boxblur=25:25,${antiFpVideo}[bg]`,
+      `[0:v]scale=${OUT_W}:-2:force_original_aspect_ratio=decrease,${antiFpVideo}[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2[vout]`,
+      `[0:a]${ANTI_FP_AUDIO}[aout]`,
     ].join(";");
   } else {
-    videoFilter = `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H}[vout]`;
+    filterComplex = [
+      `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},${antiFpVideo}[vout]`,
+      `[0:a]${ANTI_FP_AUDIO}[aout]`,
+    ].join(";");
   }
 
-  // Use -ss after -i for frame-accurate seeking (slower but no keyframe drift)
-  // For long source videos (>300s), use fast seek to nearby keyframe then accurate trim
   const useFastSeek = segment.startSec > 30;
   const args: string[] = [];
 
   if (useFastSeek) {
-    // Fast seek to ~10s before target, then accurate seek
     const fastSeekPoint = Math.max(0, segment.startSec - 10);
     args.push("-ss", String(fastSeekPoint));
     args.push("-i", sourcePath);
@@ -159,21 +181,22 @@ export async function extractAndCrop(
 
   args.push(
     "-t", String(duration),
-    "-filter_complex", videoFilter,
+    "-filter_complex", filterComplex,
     "-map", "[vout]",
-    "-map", "0:a?",
+    "-map", "[aout]",
     "-c:v", "libx264",
     "-preset", "fast",
     "-crf", "20",
     "-c:a", "aac",
     "-b:a", "192k",
+    "-ar", "44100",
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     "-y",
     outputPath,
   );
 
-  log.log(`Extracting ${segment.startSec}-${segment.endSec}s, mode=${cropMode}, accurate-seek=${useFastSeek ? "hybrid" : "full"}`);
+  log.log(`Extracting ${segment.startSec}-${segment.endSec}s, mode=${cropMode}, anti-fp=on (speed=${SPEED_FACTOR}x, hflip=${hflip}, hue=${HUE_SHIFT}°)`);
   await execFileAsync("ffmpeg", args, { timeout: 180_000 });
 
   const stat = await fs.stat(outputPath);
@@ -197,91 +220,96 @@ function decodeHtmlEntities(s: string): string {
  * Parse VTT subtitles into timed segments for the clipped portion.
  * Uses word-level timestamps from VTT when available (YouTube auto-subs
  * embed `<HH:MM:SS.mmm>` inside cue text for each word).
+ *
+ * speedFactor adjusts all timestamps to compensate for the anti-fingerprint
+ * speed change applied in extractAndCrop. E.g. at 1.05x, a cue at 5000ms
+ * in the original maps to 5000/1.05 ≈ 4762ms in the sped-up clip.
  */
 export function parseVttForSegment(
   vttContent: string,
   segmentStart: number,
   segmentEnd: number,
+  speedFactor = 1.0,
 ): Array<{ startMs: number; endMs: number; text: string }> {
   const cues: Array<{ startMs: number; endMs: number; text: string }> = [];
-  const lines = vttContent.split("\n");
-
-  // Deduplicate: YouTube VTT repeats cues with slight offsets; track seen text+time combos
-  const seen = new Set<string>();
+  const rawLines = vttContent.split("\n");
+  const sf = speedFactor || 1.0;
 
   let i = 0;
-  while (i < lines.length) {
-    const timeLine = lines[i];
+  while (i < rawLines.length) {
+    const timeLine = rawLines[i];
     const timeMatch = timeLine?.match(
       /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/,
     );
 
-    if (timeMatch) {
-      const cueStartSec =
-        parseInt(timeMatch[1]) * 3600 +
-        parseInt(timeMatch[2]) * 60 +
-        parseInt(timeMatch[3]) +
-        parseInt(timeMatch[4]) / 1000;
-      const cueEndSec =
-        parseInt(timeMatch[5]) * 3600 +
-        parseInt(timeMatch[6]) * 60 +
-        parseInt(timeMatch[7]) +
-        parseInt(timeMatch[8]) / 1000;
+    if (!timeMatch) { i++; continue; }
 
-      if (cueStartSec < segmentEnd && cueEndSec > segmentStart) {
-        const textLines: string[] = [];
-        i++;
-        while (i < lines.length && lines[i]?.trim()) {
-          textLines.push(lines[i].trim());
-          i++;
-        }
-        const rawText = textLines.join(" ");
+    const cueStartSec =
+      parseInt(timeMatch[1]) * 3600 +
+      parseInt(timeMatch[2]) * 60 +
+      parseInt(timeMatch[3]) +
+      parseInt(timeMatch[4]) / 1000;
+    const cueEndSec =
+      parseInt(timeMatch[5]) * 3600 +
+      parseInt(timeMatch[6]) * 60 +
+      parseInt(timeMatch[7]) +
+      parseInt(timeMatch[8]) / 1000;
 
-        // Extract word-level timestamps: <01:23:45.678><c> word </c>
-        const wordTimestampRe = /<(\d{2}):(\d{2}):(\d{2})\.(\d{3})>/g;
-        const wordTimestamps: number[] = [];
-        let wm: RegExpExecArray | null;
-        while ((wm = wordTimestampRe.exec(rawText))) {
-          wordTimestamps.push(
-            parseInt(wm[1]) * 3600 + parseInt(wm[2]) * 60 + parseInt(wm[3]) + parseInt(wm[4]) / 1000,
-          );
-        }
+    // Collect text lines for this cue
+    const textLines: string[] = [];
+    i++;
+    while (i < rawLines.length && !rawLines[i]?.trim()) i++;
+    while (i < rawLines.length && rawLines[i]?.trim()) {
+      textLines.push(rawLines[i].trim());
+      i++;
+    }
 
-        // Clean text: strip VTT tags and decode HTML entities
-        const cleanText = decodeHtmlEntities(
-          rawText.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim(),
-        );
+    // Skip 10ms snapshot cues (YouTube duplicates without word timestamps)
+    if (cueEndSec - cueStartSec < 0.05) continue;
+    if (cueStartSec >= segmentEnd || cueEndSec <= segmentStart) continue;
 
-        if (!cleanText) { continue; }
+    // YouTube multi-line cues: line 1 = carry-over (no tags), line 2+ = new words (with <c> tags).
+    // Only use lines that contain `<` (word-timestamp tags) to avoid duplicating carry-over text.
+    const taggedLines = textLines.filter(l => l.includes("<"));
+    const useLines = taggedLines.length > 0 ? taggedLines : textLines;
+    const rawText = useLines.join(" ");
 
-        // Dedup key
-        const dedupKey = `${Math.round(cueStartSec * 10)}:${cleanText.slice(0, 30)}`;
-        if (seen.has(dedupKey)) { continue; }
-        seen.add(dedupKey);
+    const wordTimestampRe = /<(\d{2}):(\d{2}):(\d{2})\.(\d{3})>/g;
+    const wordTimestamps: number[] = [];
+    let wm: RegExpExecArray | null;
+    while ((wm = wordTimestampRe.exec(rawText))) {
+      wordTimestamps.push(
+        parseInt(wm[1]) * 3600 + parseInt(wm[2]) * 60 + parseInt(wm[3]) + parseInt(wm[4]) / 1000,
+      );
+    }
 
-        if (wordTimestamps.length >= 2) {
-          // Word-level timing available — split into per-word cues
-          const words = cleanText.split(/\s+/);
-          const stamps = [cueStartSec, ...wordTimestamps];
-          for (let w = 0; w < words.length; w++) {
-            const wStart = stamps[Math.min(w, stamps.length - 1)];
-            const wEnd = stamps[Math.min(w + 1, stamps.length - 1)] || cueEndSec;
-            if (wStart >= segmentEnd || wEnd <= segmentStart) continue;
-            const adjStart = Math.max(0, (wStart - segmentStart) * 1000);
-            const adjEnd = Math.max(adjStart + 80, (wEnd - segmentStart) * 1000);
-            cues.push({ startMs: Math.round(adjStart), endMs: Math.round(adjEnd), text: words[w] });
-          }
-        } else {
-          // No word-level timing — use cue-level timing
-          const adjStart = Math.max(0, (cueStartSec - segmentStart) * 1000);
-          const adjEnd = Math.max(adjStart + 100, (cueEndSec - segmentStart) * 1000);
-          cues.push({ startMs: Math.round(adjStart), endMs: Math.round(adjEnd), text: cleanText });
-        }
-      } else {
-        i++;
+    let cleanText = rawText.replace(/<[^>]+>/g, "");
+    cleanText = decodeHtmlEntities(cleanText);
+    cleanText = cleanText
+      .replace(/\[music\]/gi, "")
+      .replace(/\[applause\]/gi, "")
+      .replace(/\[laughter\]/gi, "")
+      .replace(/^\s*>>+\s*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleanText) continue;
+
+    if (wordTimestamps.length >= 2) {
+      const words = cleanText.split(/\s+/);
+      const stamps = [cueStartSec, ...wordTimestamps];
+      for (let w = 0; w < words.length; w++) {
+        const wStart = stamps[Math.min(w, stamps.length - 1)];
+        const wEnd = stamps[Math.min(w + 1, stamps.length - 1)] || cueEndSec;
+        if (wStart >= segmentEnd || wEnd <= segmentStart) continue;
+        const adjStart = Math.max(0, ((wStart - segmentStart) * 1000) / sf);
+        const adjEnd = Math.max(adjStart + 80, ((wEnd - segmentStart) * 1000) / sf);
+        cues.push({ startMs: Math.round(adjStart), endMs: Math.round(adjEnd), text: words[w] });
       }
     } else {
-      i++;
+      const adjStart = Math.max(0, ((cueStartSec - segmentStart) * 1000) / sf);
+      const adjEnd = Math.max(adjStart + 100, ((cueEndSec - segmentStart) * 1000) / sf);
+      cues.push({ startMs: Math.round(adjStart), endMs: Math.round(adjEnd), text: cleanText });
     }
   }
 
@@ -329,8 +357,11 @@ export function buildAssFile(
     );
   }
 
-  // Group cues into 3-word chunks, preserving individual word timestamps
+  // Collect raw chunks: 3 words per group
   const WORDS_PER_CHUNK = 3;
+  const MIN_DISPLAY_MS = 600;
+  const rawChunks: Array<{ startMs: number; endMs: number; text: string }> = [];
+
   let chunkWords: string[] = [];
   let chunkStartMs = 0;
   let chunkEndMs = 0;
@@ -344,50 +375,85 @@ export function buildAssFile(
       chunkEndMs = cue.endMs;
 
       if (chunkWords.length >= WORDS_PER_CHUNK) {
-        lines.push(
-          `Dialogue: 0,${formatAssTime(chunkStartMs)},${formatAssTime(chunkEndMs)},Default,,0,0,0,,${chunkWords.join(" ")}`,
-        );
+        rawChunks.push({ startMs: chunkStartMs, endMs: chunkEndMs, text: chunkWords.join(" ") });
         chunkWords = [];
       }
     } else {
-      // Flush any pending word-level chunk
       if (chunkWords.length > 0) {
-        lines.push(
-          `Dialogue: 0,${formatAssTime(chunkStartMs)},${formatAssTime(chunkEndMs)},Default,,0,0,0,,${chunkWords.join(" ")}`,
-        );
+        rawChunks.push({ startMs: chunkStartMs, endMs: chunkEndMs, text: chunkWords.join(" ") });
         chunkWords = [];
       }
-      // Cue-level: split by words and distribute evenly
       const words = cue.text.split(/\s+/);
       const cDur = (cue.endMs - cue.startMs) / Math.ceil(words.length / WORDS_PER_CHUNK);
       for (let w = 0; w < words.length; w += WORDS_PER_CHUNK) {
         const chunk = words.slice(w, w + WORDS_PER_CHUNK).join(" ");
         const cs = cue.startMs + (w / WORDS_PER_CHUNK) * cDur;
         const ce = Math.min(cue.endMs, cs + cDur);
-        lines.push(
-          `Dialogue: 0,${formatAssTime(cs)},${formatAssTime(ce)},Default,,0,0,0,,${chunk}`,
-        );
+        rawChunks.push({ startMs: cs, endMs: ce, text: chunk });
       }
     }
   }
-  // Flush remaining words
   if (chunkWords.length > 0) {
+    rawChunks.push({ startMs: chunkStartMs, endMs: chunkEndMs, text: chunkWords.join(" ") });
+  }
+
+  // Each chunk stays visible until the next chunk starts (or min display time)
+  for (let ci = 0; ci < rawChunks.length; ci++) {
+    const c = rawChunks[ci];
+    const nextStart = rawChunks[ci + 1]?.startMs;
+    const displayEnd = nextStart != null
+      ? Math.max(c.startMs + MIN_DISPLAY_MS, nextStart)
+      : Math.max(c.endMs, c.startMs + MIN_DISPLAY_MS);
     lines.push(
-      `Dialogue: 0,${formatAssTime(chunkStartMs)},${formatAssTime(chunkEndMs)},Default,,0,0,0,,${chunkWords.join(" ")}`,
+      `Dialogue: 0,${formatAssTime(c.startMs)},${formatAssTime(displayEnd)},Default,,0,0,0,,${c.text}`,
     );
   }
 
   return lines.join("\n");
 }
 
+// Pitch shift: ~-1 semitone (2^(-1/12) ≈ 0.9439).
+// asetrate changes pitch but also stretches duration; atempo compensates
+// to keep audio in sync with the video track.
+const PITCH_FACTOR = 0.9439;
+const PITCH_TEMPO_COMPENSATION = (1 / PITCH_FACTOR).toFixed(5);
+const PITCH_AF = `asetrate=44100*${PITCH_FACTOR},aresample=44100,atempo=${PITCH_TEMPO_COMPENSATION}`;
+
+const BGM_DIR = path.join(process.cwd(), "assets", "music");
+const BGM_ORIGINAL_VOL = 0.80;
+const BGM_MIX_VOL = 0.20;
+const BGM_FADE_SEC = 2;
+
+async function pickRandomBgm(): Promise<string | null> {
+  try {
+    const files = (await fs.readdir(BGM_DIR)).filter((f) => /\.(mp3|aac|m4a|ogg|wav)$/i.test(f));
+    if (files.length === 0) return null;
+    return path.join(BGM_DIR, files[Math.floor(Math.random() * files.length)]);
+  } catch {
+    return null;
+  }
+}
+
+async function getAudioDuration(filePath: string): Promise<number> {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", filePath,
+  ], { timeout: 10_000 });
+  return parseFloat(stdout.trim()) || 0;
+}
+
 /**
- * Apply captions and optional hook text overlay to a clip via FFmpeg.
+ * Apply captions, hook text overlay, audio pitch shift, and optional BGM mix.
+ * When enableBgm is true, a random royalty-free track from assets/music/ is
+ * mixed underneath the original audio at low volume to further break the
+ * audio fingerprint while keeping dialog clearly audible.
  */
 export async function enhanceClip(
   inputPath: string,
   outputPath: string,
   assContent: string,
   tmpDir: string,
+  enableBgm = false,
 ): Promise<void> {
   const assPath = path.join(tmpDir, "captions.ass");
   await fs.writeFile(assPath, assContent, "utf-8");
@@ -395,21 +461,60 @@ export async function enhanceClip(
   const escapedAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const escapedFonts = FONTS_DIR.replace(/\\/g, "/").replace(/:/g, "\\:");
 
-  const args = [
-    "-i", inputPath,
-    "-vf", `ass='${escapedAss}':fontsdir='${escapedFonts}'`,
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "20",
-    "-c:a", "copy",
-    "-pix_fmt", "yuv420p",
-    "-movflags", "+faststart",
-    "-y",
-    outputPath,
-  ];
+  const bgmPath = enableBgm ? await pickRandomBgm() : null;
 
-  log.log("Applying captions and hook text...");
-  await execFileAsync("ffmpeg", args, { timeout: 120_000 });
+  if (!bgmPath) {
+    const args = [
+      "-i", inputPath,
+      "-vf", `ass='${escapedAss}':fontsdir='${escapedFonts}'`,
+      "-af", PITCH_AF,
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "20",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      "-y",
+      outputPath,
+    ];
+    log.log(`Applying captions + pitch shift (${PITCH_FACTOR}), bgm=off...`);
+    await execFileAsync("ffmpeg", args, { timeout: 120_000 });
+  } else {
+    const clipDur = await getAudioDuration(inputPath);
+    const bgmDur = await getAudioDuration(bgmPath);
+    const bgmStart = bgmDur > clipDur + 5 ? Math.floor(Math.random() * (bgmDur - clipDur - 2)) : 0;
+    const fadeOut = Math.max(0, clipDur - BGM_FADE_SEC);
+
+    // filter_complex: pitch-shift original, trim+fade BGM, mix both
+    const fc = [
+      `[0:a]${PITCH_AF}[orig]`,
+      `[orig]volume=${BGM_ORIGINAL_VOL}[origv]`,
+      `[1:a]atrim=start=${bgmStart},asetpts=PTS-STARTPTS,volume=${BGM_MIX_VOL},afade=t=in:d=${BGM_FADE_SEC},afade=t=out:st=${fadeOut}:d=${BGM_FADE_SEC}[bgm]`,
+      `[origv][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+    ].join(";");
+
+    const args = [
+      "-i", inputPath,
+      "-i", bgmPath,
+      "-filter_complex", fc,
+      "-vf", `ass='${escapedAss}':fontsdir='${escapedFonts}'`,
+      "-map", "0:v",
+      "-map", "[aout]",
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "20",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      "-shortest",
+      "-y",
+      outputPath,
+    ];
+    log.log(`Applying captions + pitch shift + BGM mix (orig=${BGM_ORIGINAL_VOL}, bgm=${BGM_MIX_VOL}, track=${path.basename(bgmPath)})...`);
+    await execFileAsync("ffmpeg", args, { timeout: 120_000 });
+  }
 
   const stat = await fs.stat(outputPath);
   log.log(`Enhanced clip: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);

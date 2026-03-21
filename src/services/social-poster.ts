@@ -273,7 +273,7 @@ export async function postVideoToSocials(
     include: {
       series: {
         include: {
-          automation: { select: { targetPlatforms: true, includeAiTags: true } },
+          automation: { select: { targetPlatforms: true, includeAiTags: true, crossPlatformOnly: true } },
           user: {
             include: { socialAccounts: true },
           },
@@ -300,9 +300,23 @@ export async function postVideoToSocials(
     await sleep(wait);
   }
 
-  const targetPlatforms = platformOverride
+  let targetPlatforms = platformOverride
     ?? (video.series.automation?.targetPlatforms as string[])
     ?? [];
+
+  // Cross-platform routing: skip posting to the same platform the clip was sourced from.
+  // Controlled per-automation via crossPlatformOnly flag.
+  const crossPlatformOnly = video.series.automation?.crossPlatformOnly ?? false;
+  const sourcePlatform = (video.sourceMetadata as { platform?: string } | null)?.platform;
+  if (crossPlatformOnly && sourcePlatform && !platformOverride) {
+    const PLATFORM_MAP: Record<string, string> = { youtube: "YOUTUBE", facebook: "FACEBOOK", instagram: "INSTAGRAM" };
+    const skipPlatform = PLATFORM_MAP[sourcePlatform.toLowerCase()];
+    if (skipPlatform && targetPlatforms.includes(skipPlatform)) {
+      log.log(`Cross-platform routing: source is ${sourcePlatform}, skipping ${skipPlatform}`);
+      targetPlatforms = targetPlatforms.filter((p) => p !== skipPlatform);
+    }
+  }
+
   if (targetPlatforms.length === 0) {
     log.log(`No target platforms for video ${videoId}`);
     return [];
@@ -319,7 +333,7 @@ export async function postVideoToSocials(
     .replace(/\s{2,}/g, " ")
     .trim();
   const scriptText = video.scriptText ?? undefined;
-  const includeAiTags = video.series.automation?.includeAiTags ?? true;
+  const includeAiTags = video.series.automation?.includeAiTags ?? false;
 
   let previousYtUrl: string | undefined;
   if (targetPlatforms.includes("YOUTUBE")) {

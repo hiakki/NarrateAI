@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -59,6 +60,9 @@ interface ClipAutomation {
   timezone: string;
   lastRunAt: string | null;
   targetPlatforms: string[];
+  includeAiTags: boolean;
+  crossPlatformOnly: boolean;
+  enableBgm: boolean;
   clipConfig: {
     clipNiche: string;
     clipDurationSec: number;
@@ -186,13 +190,17 @@ export default function ClipRepurposePage() {
   const [editForm, setEditForm] = useState<{
     name: string; clipNiche: string; clipDurationSec: number; cropMode: string;
     targetPlatforms: Set<string>; frequency: string; postTime: string;
-  }>({ name: "", clipNiche: "auto", clipDurationSec: 45, cropMode: "blur-bg", targetPlatforms: new Set(), frequency: "daily", postTime: "10:00" });
+    includeAiTags: boolean; crossPlatformOnly: boolean; enableBgm: boolean;
+  }>({ name: "", clipNiche: "auto", clipDurationSec: 45, cropMode: "blur-bg", targetPlatforms: new Set(), frequency: "daily", postTime: "10:00", includeAiTags: false, crossPlatformOnly: false, enableBgm: true });
 
   const [formName, setFormName] = useState("Viral Clips");
   const [formNiche, setFormNiche] = useState("auto");
   const [formDuration, setFormDuration] = useState(45);
   const [formCropMode, setFormCropMode] = useState("blur-bg");
   const [formPlatforms, setFormPlatforms] = useState<Set<string>>(new Set(["FACEBOOK", "YOUTUBE", "INSTAGRAM"]));
+  const [formIncludeAiTags, setFormIncludeAiTags] = useState(false);
+  const [formCrossPlatformOnly, setFormCrossPlatformOnly] = useState(false);
+  const [formEnableBgm, setFormEnableBgm] = useState(true);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
@@ -303,6 +311,9 @@ export default function ClipRepurposePage() {
           clipDurationSec: formDuration,
           cropMode: formCropMode,
           targetPlatforms: Array.from(formPlatforms),
+          includeAiTags: formIncludeAiTags,
+          crossPlatformOnly: formCrossPlatformOnly,
+          enableBgm: formEnableBgm,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         }),
       });
@@ -325,6 +336,9 @@ export default function ClipRepurposePage() {
       targetPlatforms: new Set(auto.targetPlatforms ?? []),
       frequency: auto.frequency,
       postTime: auto.postTime,
+      includeAiTags: auto.includeAiTags ?? false,
+      crossPlatformOnly: auto.crossPlatformOnly ?? false,
+      enableBgm: auto.enableBgm ?? true,
     });
   };
 
@@ -345,6 +359,9 @@ export default function ClipRepurposePage() {
           targetPlatforms: Array.from(editForm.targetPlatforms),
           frequency: editForm.frequency,
           postTime: editForm.postTime,
+          includeAiTags: editForm.includeAiTags,
+          crossPlatformOnly: editForm.crossPlatformOnly,
+          enableBgm: editForm.enableBgm,
         }),
       });
       setEditingId(null);
@@ -837,6 +854,23 @@ export default function ClipRepurposePage() {
                   ))}
                 </div>
               </div>
+              <div className="space-y-1.5 pt-0.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[11px] font-medium text-muted-foreground">Skip same-platform posting</Label>
+                  <Switch size="sm" checked={editForm.crossPlatformOnly}
+                    onCheckedChange={(v) => setEditForm((p) => ({ ...p, crossPlatformOnly: v }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-[11px] font-medium text-muted-foreground">Background music overlay</Label>
+                  <Switch size="sm" checked={editForm.enableBgm}
+                    onCheckedChange={(v) => setEditForm((p) => ({ ...p, enableBgm: v }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-[11px] font-medium text-muted-foreground">Include AI tags</Label>
+                  <Switch size="sm" checked={editForm.includeAiTags}
+                    onCheckedChange={(v) => setEditForm((p) => ({ ...p, includeAiTags: v }))} />
+                </div>
+              </div>
               <div className="flex gap-2 pt-0.5">
                 <Button size="sm" className="h-7 text-xs" onClick={saveEdit} disabled={saving}>
                   {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
@@ -1262,6 +1296,30 @@ export default function ClipRepurposePage() {
                     {mode === "blur-bg" ? "Blur Background (9:16)" : "Center Crop (9:16)"}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Skip same-platform posting</Label>
+                  <p className="text-xs text-muted-foreground">Avoid copyright by not re-posting to the source platform</p>
+                </div>
+                <Switch checked={formCrossPlatformOnly} onCheckedChange={setFormCrossPlatformOnly} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Background music overlay</Label>
+                  <p className="text-xs text-muted-foreground">Mix royalty-free BGM underneath to further break audio fingerprints</p>
+                </div>
+                <Switch checked={formEnableBgm} onCheckedChange={setFormEnableBgm} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Include AI tags</Label>
+                  <p className="text-xs text-muted-foreground">Add AI-generated hashtags and SEO tags to posts</p>
+                </div>
+                <Switch checked={formIncludeAiTags} onCheckedChange={setFormIncludeAiTags} />
               </div>
             </div>
 

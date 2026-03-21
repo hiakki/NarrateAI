@@ -208,8 +208,10 @@ model Automation {
 
   targetPlatforms Json          @default("[]")
   enabled         Boolean       @default(true)
-  includeAiTags   Boolean       @default(true)
-  frequency       String        @default("daily")
+  includeAiTags      Boolean       @default(false)
+  crossPlatformOnly  Boolean       @default(false)
+  enableBgm          Boolean       @default(true)
+  frequency          String        @default("daily")
   postTime        String        @default("09:00")
   timezone        String
 

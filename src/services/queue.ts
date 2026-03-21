@@ -108,6 +108,7 @@ export interface ClipRepurposeJobData {
     cropMode: "blur-bg" | "center-crop";
     creditOriginal: boolean;
     preferPlatform?: "youtube" | "facebook" | "instagram";
+    enableBgm?: boolean;
   };
   targetPlatforms: string[];
 }
