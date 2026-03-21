@@ -230,7 +230,7 @@ export default function VideosPage() {
             return (
               <Card
                 key={s.id}
-                className={`transition-all ${
+                className={`overflow-hidden transition-all ${
                   isSelected
                     ? "border-destructive/50 ring-1 ring-destructive/20 bg-destructive/[0.02]"
                     : "hover:border-primary/50"
@@ -250,9 +250,9 @@ export default function VideosPage() {
                 </CardHeader>
                 <Link href={`/dashboard/series/${s.id}`}>
                   <CardContent>
-                    <div className="flex items-center justify-between text-sm text-muted-foreground">
-                      <span className="capitalize">{s.niche}</span>
-                      <span>{s._count.videos} video{s._count.videos !== 1 ? "s" : ""}</span>
+                    <div className="flex items-center justify-between text-sm text-muted-foreground gap-2">
+                      <span className="capitalize truncate min-w-0">{s.niche}</span>
+                      <span className="shrink-0">{s._count.videos} video{s._count.videos !== 1 ? "s" : ""}</span>
                     </div>
                     <div className="mt-2 flex items-center gap-2 flex-wrap">
                       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs capitalize">

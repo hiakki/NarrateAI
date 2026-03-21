@@ -251,7 +251,7 @@ export default function ReportPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 px-4 py-2 text-sm text-amber-800 dark:text-amber-200 break-words">
           {error}
         </div>
       )}
@@ -292,41 +292,41 @@ export default function ReportPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total videos</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">Total videos</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1 flex items-center gap-1">
-                    <Film className="h-5 w-5 text-muted-foreground" />
+                    <Film className="h-5 w-5 text-muted-foreground shrink-0" />
                     {formatNumber(sc.totalVideos)}
                   </p>
                 </div>
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total views</p>
+                <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">Total views</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1 flex items-center gap-1">
-                    <Eye className="h-5 w-5 text-muted-foreground" />
+                    <Eye className="h-5 w-5 text-muted-foreground shrink-0" />
                     {formatNumber(sc.totalViews)}
                   </p>
                 </div>
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total interactions</p>
+                <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">Interactions</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1 flex items-center gap-1">
-                    <Heart className="h-5 w-5 text-muted-foreground" />
+                    <Heart className="h-5 w-5 text-muted-foreground shrink-0" />
                     {formatNumber(sc.totalInteractions)}
                   </p>
                 </div>
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Avg views/video</p>
+                <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">Avg views/vid</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1">{formatNumber(sc.viewsPerVideo)}</p>
                 </div>
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Automations</p>
+                <div className="rounded-lg border bg-muted/30 p-4 overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">Automations</p>
                   <p className="text-2xl font-semibold tabular-nums mt-1">{sc.automationsCount}</p>
                 </div>
               </div>
               <div>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Per automation</p>
                 <div className="overflow-x-auto rounded-md border">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[900px] text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
                         <th className="text-left p-3 font-medium">
@@ -375,10 +375,11 @@ export default function ReportPage() {
                     <tbody>
                       {sortedRows.map((row) => (
                         <tr key={row.automationId} className="border-b last:border-0">
-                          <td className="p-3">
+                          <td className="p-3 max-w-[180px]">
                             <Link
                               href={`/dashboard/automations/${row.automationId}`}
-                              className="text-primary hover:underline font-medium"
+                              className="text-primary hover:underline font-medium truncate block"
+                              title={row.name}
                             >
                               {row.name}
                             </Link>
@@ -386,9 +387,9 @@ export default function ReportPage() {
                               <Badge variant="secondary" className="ml-2 text-[10px]">Paused</Badge>
                             )}
                           </td>
-                          <td className="p-3 text-muted-foreground">{row.niche}</td>
-                          <td className="p-3">
-                            <span className="text-muted-foreground">
+                          <td className="p-3 text-muted-foreground max-w-[120px] truncate" title={row.niche}>{row.niche}</td>
+                          <td className="p-3 max-w-[150px]">
+                            <span className="text-muted-foreground truncate block" title={row.targetPlatforms.join(", ")}>
                               {row.targetPlatforms.length ? row.targetPlatforms.join(", ") : "—"}
                             </span>
                           </td>
@@ -453,11 +454,11 @@ export default function ReportPage() {
                       className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border p-4 bg-card"
                     >
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium flex items-center gap-2">
+                        <p className="font-medium flex items-center gap-2 min-w-0">
                           <Zap className="h-4 w-4 text-amber-500 shrink-0" />
-                          {s.title}
+                          <span className="truncate">{s.title}</span>
                         </p>
-                        <p className="text-sm text-muted-foreground mt-0.5">{s.description}</p>
+                        <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{s.description}</p>
                       </div>
                       <Button
                         size="sm"

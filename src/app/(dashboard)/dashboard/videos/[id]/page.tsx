@@ -701,11 +701,11 @@ export default function VideoDetailPage() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex items-center gap-4 mb-6">
-        <Button variant="ghost" size="sm" onClick={() => router.back()}>
+      <div className="flex items-center gap-4 mb-6 min-w-0">
+        <Button variant="ghost" size="sm" className="shrink-0" onClick={() => router.back()}>
           <ArrowLeft className="h-4 w-4 mr-1" /> Back
         </Button>
-        <h1 className="text-2xl font-bold truncate flex-1">{video.title || "Video"}</h1>
+        <h1 className="text-2xl font-bold truncate flex-1 min-w-0">{video.title || "Video"}</h1>
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200">
@@ -1320,7 +1320,7 @@ export default function VideoDetailPage() {
                       <div className="flex items-start gap-2">
                         <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium">{meta.originalTitle ?? disc.candidates[0]?.title}</p>
+                          <p className="text-sm font-medium truncate" title={meta.originalTitle ?? disc.candidates[0]?.title}>{meta.originalTitle ?? disc.candidates[0]?.title}</p>
                           <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
                             {disc.candidates[0]?.score != null && <span className="font-mono text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-semibold">Score {disc.candidates[0].score}</span>}
                             {meta.channelName && <span>by {meta.channelName}</span>}
@@ -1756,7 +1756,7 @@ export default function VideoDetailPage() {
                               <p className="text-xs text-blue-600 mt-0.5">Scheduling on {label}...</p>
                             )}
                             {hasFailed && failError && (
-                              <p className="text-xs text-red-600 mt-0.5">{failError}</p>
+                              <p className="text-xs text-red-600 mt-0.5 break-words line-clamp-2" title={failError}>{failError}</p>
                             )}
                             {!connected && !isPosted && !isScheduled && !isDeleted && !isUploading && !hasFailed && (
                               <p className="text-xs text-muted-foreground">Not connected</p>
@@ -2084,7 +2084,7 @@ export default function VideoDetailPage() {
               <XCircle className="h-5 w-5 text-red-600 shrink-0" />
               <div className="flex-1">
                 <h2 className="font-semibold text-red-800">Generation failed</h2>
-                <p className="text-sm text-red-700/90 mt-0.5">
+                <p className="text-sm text-red-700/90 mt-0.5 break-words line-clamp-3" title={video.errorMessage || undefined}>
                   {video.errorMessage || "An unknown error occurred."}
                 </p>
               </div>

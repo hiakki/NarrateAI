@@ -143,11 +143,11 @@ export default function ClipAutomationDetailPage() {
           <Link href="/dashboard/clip-repurpose" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-2">
             <ArrowLeft className="w-3.5 h-3.5" /> Back to Automations
           </Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Scissors className="w-6 h-6 text-blue-500" />
-            {auto.name}
+          <h1 className="text-2xl font-bold flex items-center gap-2 min-w-0">
+            <Scissors className="w-6 h-6 text-blue-500 shrink-0" />
+            <span className="truncate">{auto.name}</span>
           </h1>
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
             <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {auto.frequency} at {auto.postTime}</span>
             <span className="flex items-center gap-1"><Film className="w-3.5 h-3.5" /> {videos.length} clips</span>
             {auto.clipConfig?.clipNiche && (

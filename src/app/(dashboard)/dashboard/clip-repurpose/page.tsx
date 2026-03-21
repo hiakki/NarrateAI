@@ -94,7 +94,7 @@ type BulkOpState = {
 } | null;
 
 const CLIP_NICHES: Record<string, { label: string; icon: string }> = {
-  "viral-repost": { label: "Viral Repost (Non-Copyrighted)", icon: "🔥" },
+  "viral-repost": { label: "Viral Repost", icon: "🔥" },
   films:         { label: "Films & Movies", icon: "🎬" },
   anime:         { label: "Anime", icon: "⚔️" },
   serials:       { label: "TV Shows & Serials", icon: "📺" },
@@ -714,7 +714,7 @@ export default function ClipRepurposePage() {
     return (
       <Card
         key={auto.id}
-        className={`flex flex-col h-full transition-colors hover:border-primary/50 ${
+        className={`flex flex-col h-full overflow-hidden transition-colors hover:border-primary/50 ${
           !auto.enabled ? "opacity-60" : ""
         } ${isSelected ? "ring-2 ring-primary/40 border-primary/50" : ""}`}
       >
@@ -858,7 +858,7 @@ export default function ClipRepurposePage() {
                 </>
               )}
               {auto.clipConfig?.clipNiche && CLIP_NICHES[auto.clipConfig.clipNiche] ? (
-                <Badge variant="outline" className="text-xs">
+                <Badge variant="outline" className="text-xs max-w-full truncate">
                   {CLIP_NICHES[auto.clipConfig.clipNiche].icon} {CLIP_NICHES[auto.clipConfig.clipNiche].label}
                 </Badge>
               ) : (
@@ -894,7 +894,7 @@ export default function ClipRepurposePage() {
           <div className="flex-1 flex flex-col justify-center min-h-[80px]">
             {lv && lvStatus ? (
               <Link href={`/dashboard/videos/${lv.id}`} className="block">
-                <div className="rounded-lg border p-2.5 space-y-2 bg-muted/30 hover:bg-muted/50 transition-colors cursor-pointer">
+                <div className="rounded-lg border p-2.5 space-y-2 bg-muted/30 hover:bg-muted/50 transition-colors cursor-pointer overflow-hidden">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-medium truncate flex-1 min-w-0">
                       {lv.title || "Processing..."}
@@ -906,12 +906,12 @@ export default function ClipRepurposePage() {
                   </div>
 
                   {lv.sourceMetadata && (
-                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap overflow-hidden max-h-[2.5rem]">
                       {lv.sourceMetadata.channelName && (
-                        <span>from {lv.sourceMetadata.channelName}</span>
+                        <span className="truncate max-w-[5rem]">from {lv.sourceMetadata.channelName}</span>
                       )}
                       {lv.sourceMetadata.viewCount ? (
-                        <span className="flex items-center gap-0.5">
+                        <span className="flex items-center gap-0.5 shrink-0">
                           <Eye className="w-2.5 h-2.5" />
                           {lv.sourceMetadata.viewCount >= 1_000_000
                             ? `${(lv.sourceMetadata.viewCount / 1_000_000).toFixed(1)}M`
@@ -919,13 +919,13 @@ export default function ClipRepurposePage() {
                         </span>
                       ) : null}
                       {lv.sourceMetadata.peakSegment && (
-                        <span className="flex items-center gap-0.5">
+                        <span className="flex items-center gap-0.5 shrink-0">
                           <TrendingUp className="w-2.5 h-2.5" />
                           {(lv.sourceMetadata.peakSegment.avgHeat * 100).toFixed(0)}%
                         </span>
                       )}
                       {lv.sourceMetadata.platform && (
-                        <Badge variant="outline" className="text-[9px] h-3.5 px-1">
+                        <Badge variant="outline" className="text-[9px] h-3.5 px-1 truncate max-w-[5rem]">
                           {lv.sourceMetadata.platform}
                         </Badge>
                       )}
@@ -989,18 +989,21 @@ export default function ClipRepurposePage() {
                         } else if (isGenerating) {
                           rowClass = "bg-muted/40";
                           statusEl = <span className="flex items-center gap-1 text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Building</span>;
+                        } else if (!entry && lv.status === "READY") {
+                          rowClass = "bg-green-50/30 border-green-100";
+                          statusEl = <span className="flex items-center gap-1 text-green-600"><CheckCircle2 className="h-3 w-3" />Ready</span>;
                         } else {
                           rowClass = "bg-amber-50/50 border-amber-100";
                           statusEl = <span className="flex items-center gap-1 text-amber-600"><Clock className="h-3 w-3" />Pending</span>;
                         }
 
                         return (
-                          <div key={p} className={`flex items-center justify-between rounded border px-2 py-1 text-[10px] font-medium ${rowClass}`}>
-                            <span className="flex items-center gap-1.5">
+                          <div key={p} className={`flex items-center justify-between rounded border px-2 py-1 text-[10px] font-medium overflow-hidden ${rowClass}`}>
+                            <span className="flex items-center gap-1.5 shrink-0">
                               <Icon className={`h-3 w-3 ${cfg.color}`} />
                               {cfg.label}
                             </span>
-                            {statusEl}
+                            <span className="shrink-0">{statusEl}</span>
                           </div>
                         );
                       })}

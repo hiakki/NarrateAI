@@ -1134,7 +1134,7 @@ export default function AutomationsPage() {
                 <span>Completed {runSelectedState.total - runSelectedState.failed.length}/{runSelectedState.total} automations</span>
               </div>
               {runSelectedState.failed.map((msg, i) => (
-                <p key={i} className="ml-6 text-xs opacity-80">{msg}</p>
+                <p key={i} className="ml-6 text-xs opacity-80 truncate" title={msg}>{msg}</p>
               ))}
             </div>
           ) : (
@@ -1168,7 +1168,7 @@ export default function AutomationsPage() {
                 <span>Deleted {deleteAllState.total - deleteAllState.failed.length}/{deleteAllState.total} automations</span>
               </div>
               {deleteAllState.failed.map((msg, i) => (
-                <p key={i} className="ml-6 text-xs opacity-80">{msg}</p>
+                <p key={i} className="ml-6 text-xs opacity-80 truncate" title={msg}>{msg}</p>
               ))}
             </div>
           ) : (
@@ -1224,7 +1224,7 @@ export default function AutomationsPage() {
             ? <CheckCircle2 className="h-4 w-4 shrink-0" />
             : <AlertCircle className="h-4 w-4 shrink-0" />
           }
-          <span>{triggerResult.ok ? "Triggered successfully" : "Trigger failed"}: {triggerResult.msg}</span>
+          <span className="truncate min-w-0">{triggerResult.ok ? "Triggered successfully" : "Trigger failed"}: {triggerResult.msg}</span>
         </div>
       )}
 
@@ -1362,7 +1362,7 @@ export default function AutomationsPage() {
     return (
       <Card
         key={auto.id}
-        className={`flex flex-col h-full transition-colors hover:border-primary/50 ${
+        className={`flex flex-col h-full overflow-hidden transition-colors hover:border-primary/50 ${
           !auto.enabled ? "opacity-60" : ""
         } ${
           selectedIds.has(auto.id) ? "ring-2 ring-primary/40 border-primary/50" : ""
@@ -1440,7 +1440,7 @@ export default function AutomationsPage() {
                     {/* Last video status — min-height only; alignment from fixed top block above */}
                     <div className="min-h-[120px] flex flex-col shrink-0">
                     {lv && lvStatus ? (
-                      <div className="rounded-lg border p-2.5 space-y-2 bg-muted/30">
+                      <div className="rounded-lg border p-2.5 space-y-2 bg-muted/30 overflow-hidden">
                         <div className="flex items-center justify-between gap-2 shrink-0">
                           <p className="text-xs font-medium truncate flex-1 min-w-0">
                             {lv.title || "Untitled"}
@@ -1541,12 +1541,12 @@ export default function AutomationsPage() {
                               }
 
                               return (
-                                <div key={p} className={`flex items-center justify-between rounded border px-2 py-1 text-[10px] font-medium ${rowClass}`}>
-                                  <span className="flex items-center gap-1.5">
+                                <div key={p} className={`flex items-center justify-between rounded border px-2 py-1 text-[10px] font-medium overflow-hidden ${rowClass}`}>
+                                  <span className="flex items-center gap-1.5 shrink-0">
                                     <Icon className={`h-3 w-3 ${cfg.color}`} />
                                     {cfg.label}
                                   </span>
-                                  {statusEl}
+                                  <span className="shrink-0">{statusEl}</span>
                                 </div>
                               );
                             })}

@@ -524,9 +524,9 @@ export default function AutomationDetailPage() {
         </Button>
       </div>
 
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold">{auto.name}</h1>
+      <div className="flex items-center justify-between mb-8 gap-4">
+        <div className="flex items-center gap-4 min-w-0 flex-1">
+          <h1 className="text-3xl font-bold truncate min-w-0">{auto.name}</h1>
           <Switch checked={auto.enabled} onCheckedChange={toggleEnabled} />
           <Badge variant={auto.enabled ? "default" : "secondary"}>
             {auto.enabled ? "Active" : "Paused"}
@@ -598,7 +598,7 @@ export default function AutomationDetailPage() {
             ? <CheckCircle2 className="h-4 w-4 shrink-0" />
             : <AlertCircle className="h-4 w-4 shrink-0" />
           }
-          <span>{triggerMsg.text}</span>
+          <span className="truncate min-w-0" title={triggerMsg.text}>{triggerMsg.text}</span>
         </div>
       )}
 

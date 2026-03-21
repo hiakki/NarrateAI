@@ -255,21 +255,21 @@ function ChannelsContent() {
               return (
                 <Card
                   key={account.id}
-                  className={isExpired ? "border-amber-200" : ""}
+                  className={`overflow-hidden ${isExpired ? "border-amber-200" : ""}`}
                 >
-                  <CardContent className="flex items-center justify-between p-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${config.bgColor}`}>
+                  <CardContent className="flex items-center justify-between p-4 gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className={`p-2 rounded-lg shrink-0 ${config.bgColor}`}>
                         <Icon className={`h-4 w-4 ${config.color}`} />
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium text-sm truncate">
                             {account.username ??
                               account.pageName ??
                               "Unknown"}
                           </span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs text-muted-foreground shrink-0">
                             {config.name}
                           </span>
                         </div>
