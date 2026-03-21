@@ -1,7 +1,7 @@
 import "dotenv/config";
 import cron from "node-cron";
 import { PrismaClient } from "@prisma/client";
-import { enqueueVideoGeneration } from "../src/services/queue";
+import { enqueueVideoGeneration, enqueueClipRepurpose } from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { refreshInsightsForUser } from "../src/services/insights";
 
@@ -20,6 +20,10 @@ const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
 const FAILED_RETRY_AFTER_MS = 10 * 60 * 1000; // retry FAILED after 10 min
 const MAX_AUTO_RETRIES = 2;
+
+const BUILD_ALL_TIME = process.env.BUILD_ALL_TIME ?? "04:00";
+const BUILD_ALL_TIMEZONE = process.env.BUILD_ALL_TIMEZONE ?? "Asia/Kolkata";
+const BUILD_WINDOW_MINUTES = 60;
 
 interface AutoRow {
   id: string;
@@ -50,95 +54,92 @@ interface AutoRow {
   };
 }
 
-function isDue(auto: AutoRow): { due: boolean; reason: string } {
+function isInBuildWindow(): boolean {
+  const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
   const now = new Date();
-  const postTimes = auto.postTime.split(",").map((t) => t.trim());
-  const timesPerDay = postTimes.length;
-
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: auto.timezone,
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUILD_ALL_TIMEZONE,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  });
-  const parts = formatter.formatToParts(now);
-  const currentHour = parseInt(
-    parts.find((p) => p.type === "hour")?.value ?? "0",
-  );
-  const currentMin = parseInt(
-    parts.find((p) => p.type === "minute")?.value ?? "0",
-  );
+  }).formatToParts(now);
+  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  const nowMin = h * 60 + m;
+  const buildMin = buildH * 60 + buildM;
+  return nowMin >= buildMin && nowMin < buildMin + BUILD_WINDOW_MINUTES;
+}
 
-  const matchedSlot = postTimes.find((t) => {
-    const [h, m] = t.split(":").map(Number);
-    return currentHour === h && Math.abs(currentMin - m) < 10;
+function hasRunToday(lastRunAt: Date | null, timezone: string): boolean {
+  if (!lastRunAt) return false;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   });
+  return fmt.format(new Date()) === fmt.format(lastRunAt);
+}
 
-  if (!matchedSlot) {
-    return {
-      due: false,
-      reason: `not in any window (now=${currentHour}:${String(currentMin).padStart(2, "0")} ${auto.timezone}, targets=${auto.postTime})`,
-    };
+function localTimeToUTC(timeStr: string, tz: string): Date {
+  const [targetH, targetM] = timeStr.split(":").map(Number);
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(now);
+  const year = parseInt(parts.find((p) => p.type === "year")!.value);
+  const month = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
+  const day = parseInt(parts.find((p) => p.type === "day")!.value);
+
+  let guess = new Date(Date.UTC(year, month, day, targetH, targetM, 0));
+  for (let i = 0; i < 3; i++) {
+    const lp = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+    }).formatToParts(guess);
+    const lh = parseInt(lp.find((p) => p.type === "hour")!.value);
+    const lm = parseInt(lp.find((p) => p.type === "minute")!.value);
+    const diff = (targetH * 60 + targetM) - (lh * 60 + lm);
+    if (diff === 0) break;
+    guess = new Date(guess.getTime() + diff * 60000);
+  }
+  return guess;
+}
+
+function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
+  if (!isInBuildWindow()) {
+    return { build: false, reason: "outside build window" };
   }
 
-  if (!auto.lastRunAt) {
-    return { due: true, reason: `never run before, matched slot ${matchedSlot}` };
-  }
+  const freqDays: Record<string, number> = { daily: 1, every_other_day: 2, weekly: 7 };
+  const gapDays = freqDays[auto.frequency] ?? 1;
 
-  const hoursSinceLastRun =
-    (now.getTime() - auto.lastRunAt.getTime()) / (1000 * 60 * 60);
-
-  // For multiple daily slots, minimum gap = half the interval between slots (at least 1h)
-  // For single slot, use the original frequency-based thresholds
-  const freqThresholds: Record<string, number> = {
-    daily: 20,
-    every_other_day: 44,
-    weekly: 164,
-  };
-
-  let threshold: number;
-  if (timesPerDay > 1) {
-    // Minimum gap: slightly less than smallest interval between consecutive slots
-    const minuteValues = postTimes
-      .map((t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; })
-      .sort((a, b) => a - b);
-    let minGap = 1440; // full day
-    for (let i = 1; i < minuteValues.length; i++) {
-      minGap = Math.min(minGap, minuteValues[i] - minuteValues[i - 1]);
+  if (auto.lastRunAt) {
+    const msSinceLast = Date.now() - auto.lastRunAt.getTime();
+    const minGapMs = (gapDays - 0.25) * 24 * 60 * 60 * 1000;
+    if (msSinceLast < minGapMs) {
+      return { build: false, reason: `ran ${(msSinceLast / 3600000).toFixed(1)}h ago, need ~${gapDays}d gap` };
     }
-    // Also check wrap-around gap (last to first next day)
-    minGap = Math.min(minGap, 1440 - minuteValues[minuteValues.length - 1] + minuteValues[0]);
-
-    // Threshold = 80% of smallest gap (in hours), minimum 1 hour
-    threshold = Math.max(1, (minGap * 0.8) / 60);
-
-    // For non-daily frequencies, multiply by the frequency factor
-    if (auto.frequency === "every_other_day") threshold = Math.max(threshold, 44);
-    if (auto.frequency === "weekly") threshold = Math.max(threshold, 164);
-  } else {
-    threshold = freqThresholds[auto.frequency] ?? 20;
   }
 
-  if (hoursSinceLastRun < threshold) {
-    return {
-      due: false,
-      reason: `ran ${hoursSinceLastRun.toFixed(1)}h ago, need ${threshold.toFixed(1)}h gap (slot=${matchedSlot})`,
-    };
-  }
-
-  return { due: true, reason: `${hoursSinceLastRun.toFixed(1)}h since last run, threshold ${threshold.toFixed(1)}h, slot=${matchedSlot}` };
+  return { build: true, reason: `build window active, due for build` };
 }
 
 async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
   return runWithAutomationIdAsync(auto.id, async () => {
-  const { due, reason } = isDue(auto as unknown as AutoRow);
+  const { build, reason } = shouldBuildNow(auto as unknown as AutoRow);
 
-  if (!due) {
+  if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
     return;
   }
 
-  log(`[TRIGGER]`, `"${auto.name}" — ${reason}`);
+  log(`[BUILD]`, `"${auto.name}" — ${reason}`);
 
   if (!auto.seriesId) {
     log(`[AUTO]`, `No linked series, creating one...`);
@@ -269,6 +270,58 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     return;
   }
 
+  // ── CLIP-REPURPOSE branch: different pipeline entirely ──
+  const autoType = ((auto as Record<string, unknown>).automationType as string) ?? "original";
+
+  if (autoType === "clip-repurpose") {
+    const clipConfig = ((auto as Record<string, unknown>).clipConfig as Record<string, unknown>) ?? {};
+    const postSlot = auto.postTime.split(",")[0].trim();
+    let scheduledPostTime = localTimeToUTC(postSlot, auto.timezone);
+    if (scheduledPostTime.getTime() < Date.now() + 15 * 60 * 1000) {
+      scheduledPostTime = new Date(scheduledPostTime.getTime() + 24 * 60 * 60 * 1000);
+    }
+    try {
+      const video = await db.video.create({
+        data: {
+          seriesId: auto.seriesId,
+          targetDuration: auto.duration,
+          status: "QUEUED",
+          scheduledPostTime,
+          scheduledPlatforms: (auto.targetPlatforms ?? []) as string[],
+        },
+      });
+
+      await enqueueClipRepurpose({
+        videoId: video.id,
+        seriesId: auto.seriesId,
+        userId: auto.user.id,
+        userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+        automationName: auto.name,
+        niche: auto.niche,
+        language: auto.language,
+        tone: auto.tone,
+        clipConfig: {
+          clipNiche: (clipConfig.clipNiche as string) ?? "auto",
+          clipDurationSec: (clipConfig.clipDurationSec as number) ?? 45,
+          cropMode: (clipConfig.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
+          creditOriginal: (clipConfig.creditOriginal as boolean) ?? true,
+        },
+        targetPlatforms: (auto.targetPlatforms ?? []) as string[],
+      });
+
+      await db.automation.update({
+        where: { id: auto.id },
+        data: { lastRunAt: new Date() },
+      });
+
+      log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
+    } catch (qErr: unknown) {
+      err(`[ERR]`, `Failed to enqueue clip-repurpose for "${auto.name}":`, qErr);
+    }
+    return;
+  }
+
+  // ── ORIGINAL pipeline: AI-generated video ──
   let characterPrompt: string | undefined;
   if ((auto as Record<string, unknown>).characterId) {
     const char = await db.character.findUnique({
@@ -290,12 +343,16 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     auto.user,
   );
 
+  const origPostSlot = auto.postTime.split(",")[0].trim();
+  const origScheduledPostTime = localTimeToUTC(origPostSlot, auto.timezone);
   try {
     const video = await db.video.create({
       data: {
         seriesId: auto.seriesId,
         targetDuration: auto.duration,
         status: "QUEUED",
+        scheduledPostTime: origScheduledPostTime,
+        scheduledPlatforms: (auto.targetPlatforms ?? []) as string[],
       },
     });
 
@@ -363,7 +420,6 @@ async function checkSchedules() {
     debug(`${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
     await runInBatches(automations, SCHEDULER_CONCURRENCY, processAutomation);
-    await checkReadyVideosForPosting();
   } catch (e) {
     err("Error in schedule check:", e);
   }
@@ -371,53 +427,39 @@ async function checkSchedules() {
 
 async function checkReadyVideosForPosting() {
   try {
-    const automationsWithTargets = await db.automation.findMany({
-      where: {
-        enabled: true,
-        NOT: { targetPlatforms: { equals: [] } },
-        seriesId: { not: null },
-      },
-      select: {
-        targetPlatforms: true,
-        seriesId: true,
-      },
-    });
-
-    const seriesIds = automationsWithTargets
-      .map((a) => a.seriesId)
-      .filter((id): id is string => id !== null);
-
-    if (seriesIds.length === 0) return;
+    const now = new Date();
 
     const readyVideos = await db.video.findMany({
       where: {
         status: "READY",
-        seriesId: { in: seriesIds },
+        scheduledPostTime: { lte: now },
+        NOT: { scheduledPlatforms: { equals: null } },
       },
-      take: 10,
+      take: 15,
     });
 
+    if (readyVideos.length === 0) return;
+
     const STALE_UPLOAD_MS = 10 * 60 * 1000;
+    const postTasks: { videoId: string; remaining: string[] }[] = [];
 
-    const postTasks = readyVideos.map((video) => {
-      const auto = automationsWithTargets.find(
-        (a) => a.seriesId === video.seriesId,
-      );
-      if (!auto) return null;
+    for (const video of readyVideos) {
+      const scheduled = (video.scheduledPlatforms ?? []) as string[];
+      if (scheduled.length === 0) continue;
 
-      const targets = auto.targetPlatforms as string[];
       const rawPosted = (video.postedPlatforms ?? []) as (
         | string
         | { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; startedAt?: number }
       )[];
 
-      const remaining = targets.filter((t) => {
+      const remaining = scheduled.filter((t) => {
         const entry = rawPosted.find((p) =>
           typeof p === "string" ? p === t : p.platform === t,
         );
         if (!entry) return true;
         if (typeof entry === "string") return false;
         if (entry.success === true) return false;
+        if ((entry as { success?: string }).success === "scheduled") return false;
         if (entry.success === undefined && (entry.postId || entry.url)) return false;
         if (entry.success === "uploading") {
           const age = Date.now() - (entry.startedAt ?? 0);
@@ -426,21 +468,101 @@ async function checkReadyVideosForPosting() {
         return true;
       });
 
-      if (remaining.length === 0) return null;
-      return { videoId: video.id, remaining };
-    }).filter((t): t is { videoId: string; remaining: string[] } => t !== null);
+      if (remaining.length > 0) {
+        postTasks.push({ videoId: video.id, remaining });
+      }
+    }
 
     if (postTasks.length > 0) {
-      log(`Auto-posting ${postTasks.length} ready video(s) in parallel`);
+      log(`Scheduling ${postTasks.length} ready video(s) on native platforms`);
       await Promise.allSettled(
-        postTasks.map(({ videoId, remaining }) => {
-          log(`Posting video ${videoId} to ${remaining.join(", ")}`);
-          return postVideoToSocials(videoId, remaining);
+        postTasks.map(async ({ videoId, remaining }) => {
+          const v = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
+          const scheduledAt = v?.scheduledPostTime
+            ? new Date(v.scheduledPostTime)
+            : new Date(Date.now() + 60 * 60 * 1000);
+          log(`Scheduling video ${videoId} to ${remaining.join(", ")} for ${scheduledAt.toISOString()}`);
+          return postVideoToSocials(videoId, remaining, scheduledAt);
         }),
       );
     }
   } catch (e) {
     err("Error checking ready videos:", e);
+  }
+}
+
+/**
+ * Instagram Reels don't support native scheduling via API (requires whitelisted app).
+ * The social-poster defers IG by storing success="scheduled" + scheduledFor timestamp.
+ * This function checks for those deferred entries and publishes them when the time arrives.
+ */
+async function checkDeferredInstagramPosts() {
+  try {
+    const now = new Date();
+
+    // Find videos that may have deferred IG entries (stored in postedPlatforms JSON)
+    const candidates = await db.video.findMany({
+      where: {
+        status: { in: ["READY", "SCHEDULED", "POSTED"] },
+      },
+      select: { id: true, postedPlatforms: true },
+      take: 100,
+    });
+
+    const igPostTasks: string[] = [];
+
+    for (const video of candidates) {
+      const rawPosted = (video.postedPlatforms ?? []) as (
+        | string
+        | { platform: string; success?: boolean | string; scheduledFor?: string }
+      )[];
+
+      const igEntry = rawPosted.find((p) =>
+        typeof p === "string" ? p === "INSTAGRAM" : p.platform === "INSTAGRAM",
+      );
+      if (!igEntry || typeof igEntry === "string") continue;
+
+      if (igEntry.success !== "scheduled") continue;
+      if (!igEntry.scheduledFor) continue;
+
+      const scheduledFor = new Date(igEntry.scheduledFor);
+      if (scheduledFor > now) continue;
+
+      igPostTasks.push(video.id);
+    }
+
+    if (igPostTasks.length === 0) return;
+
+    log(`Publishing ${igPostTasks.length} deferred Instagram Reel(s) (scheduled time has arrived)`);
+
+    await Promise.allSettled(
+      igPostTasks.map(async (videoId) => {
+        log(`Deferred IG publish: video ${videoId} — resetting entry and posting immediately`);
+
+        // Reset IG entry from "scheduled" to allow postVideoToSocials to proceed
+        const video = await db.video.findUnique({
+          where: { id: videoId },
+          select: { postedPlatforms: true },
+        });
+        if (video) {
+          const entries = (video.postedPlatforms ?? []) as { platform: string; success?: unknown; scheduledFor?: string }[];
+          const updated = entries.map((e) => {
+            if (e.platform === "INSTAGRAM" && e.success === "scheduled") {
+              return { ...e, success: false, scheduledFor: undefined };
+            }
+            return e;
+          });
+          await db.video.update({
+            where: { id: videoId },
+            data: { postedPlatforms: updated as never },
+          });
+        }
+
+        return postVideoToSocials(videoId, ["INSTAGRAM"]);
+      }),
+    );
+  } catch (e) {
+    err("Error checking deferred Instagram posts:", e);
   }
 }
 
@@ -582,6 +704,8 @@ async function tick() {
   try {
     await recoverStuckVideos();
     await checkSchedules();
+    await checkReadyVideosForPosting();
+    await checkDeferredInstagramPosts();
   } finally {
     running = false;
   }
@@ -620,5 +744,5 @@ cron.schedule("0 2 * * *", () => {
   refreshInsightsDaily();
 });
 
-log("Started. Checking schedules every 5 minutes; insights refresh daily at 02:00.");
+log(`Started. Build window: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min). Posts scheduled per-video. Tick every 5 min.`);
 tick();

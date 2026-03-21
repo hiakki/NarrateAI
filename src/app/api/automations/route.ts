@@ -39,7 +39,7 @@ export async function GET() {
     });
 
     const automations = await db.automation.findMany({
-      where: { userId: session.user.id },
+      where: { userId: session.user.id, automationType: { not: "clip-repurpose" } },
       include: {
         series: {
           include: {

@@ -45,6 +45,12 @@ enum GenerationStage {
   I2V
   ASSEMBLY
   UPLOADING
+  // Clip-repurpose pipeline stages
+  DISCOVER
+  HEATMAP
+  CLIPPING
+  ENHANCE
+  FINALIZE
 }
 
 enum Platform {
@@ -197,6 +203,9 @@ model Automation {
   imageProvider   ImageProvider?
   imageToVideoProvider String?
 
+  automationType  String        @default("original")
+  clipConfig      Json?
+
   targetPlatforms Json          @default("[]")
   enabled         Boolean       @default(true)
   includeAiTags   Boolean       @default(true)
@@ -233,14 +242,18 @@ model Video {
   targetDuration   Int?
   status           VideoStatus      @default(QUEUED)
   generationStage  GenerationStage?
-  scheduledPostTime DateTime?
-  postedPlatforms  Json             @default("[]")
+  scheduledPostTime  DateTime?
+  scheduledPlatforms Json?
+  postedPlatforms    Json             @default("[]")
   errorMessage     String?
   checkpointData   Json?
   stageTimings     Json?   // per-stage durations: { SCRIPT: { startedAt, completedAt, durationMs }, ... }
   retryCount       Int              @default(0)
   insights         Json?
   insightsRefreshedAt DateTime?
+
+  sourceUrl        String?
+  sourceMetadata   Json?
 
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt

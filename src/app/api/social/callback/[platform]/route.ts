@@ -5,7 +5,15 @@ import { encrypt } from "@/lib/social/encrypt";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("OAuth");
-const APP_URL = () => process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
+function getAppUrl(req: NextRequest): string {
+  const proto = req.headers.get("x-forwarded-proto") ?? "http";
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "localhost:3000";
+  const fromHeaders = `${proto}://${host}`;
+  return process.env.NEXT_PUBLIC_APP_URL && process.env.NEXT_PUBLIC_APP_URL !== "http://localhost:3000"
+    ? process.env.NEXT_PUBLIC_APP_URL
+    : fromHeaders;
+}
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 
 interface FBPage {
@@ -59,7 +67,7 @@ async function fetchBusinessPages(token: string): Promise<FBPage[]> {
   return allPages;
 }
 
-async function handleMetaCallback(code: string, state: string, userId: string) {
+async function handleMetaCallback(code: string, state: string, userId: string, appUrl: string) {
   const appId = process.env.FACEBOOK_APP_ID!;
   const appSecret = process.env.FACEBOOK_APP_SECRET!;
 
@@ -68,7 +76,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
       new URLSearchParams({
         client_id: appId,
         client_secret: appSecret,
-        redirect_uri: `${APP_URL()}/api/social/callback/meta`,
+        redirect_uri: `${appUrl}/api/social/callback/meta`,
         code,
       }),
   );
@@ -182,6 +190,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
         },
         update: {
           accessTokenEnc: encrypt(page.access_token),
+          refreshTokenEnc: encrypt(longToken),
           username: page.name,
           pageId: page.id,
           pageName: page.name,
@@ -192,6 +201,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
           platform: "FACEBOOK",
           platformUserId: page.id,
           accessTokenEnc: encrypt(page.access_token),
+          refreshTokenEnc: encrypt(longToken),
           username: page.name,
           pageId: page.id,
           pageName: page.name,
@@ -203,7 +213,7 @@ async function handleMetaCallback(code: string, state: string, userId: string) {
   }
 }
 
-async function handleYouTubeCallback(code: string, userId: string): Promise<{ channelRequired?: boolean } | void> {
+async function handleYouTubeCallback(code: string, userId: string, appUrl: string): Promise<{ channelRequired?: boolean } | void> {
   const clientId =
     process.env.YOUTUBE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID!;
   const clientSecret =
@@ -216,7 +226,7 @@ async function handleYouTubeCallback(code: string, userId: string): Promise<{ ch
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: `${APP_URL()}/api/social/callback/youtube`,
+      redirect_uri: `${appUrl}/api/social/callback/youtube`,
       grant_type: "authorization_code",
     }),
   });
@@ -309,8 +319,9 @@ export async function GET(
 ) {
   try {
     const session = await auth();
+    const appUrl = getAppUrl(req);
     if (!session?.user) {
-      return NextResponse.redirect(`${APP_URL()}/login`);
+      return NextResponse.redirect(`${appUrl}/login`);
     }
 
     const { platform } = await params;
@@ -322,39 +333,39 @@ export async function GET(
     if (error) {
       log.error(`OAuth error for ${platform}: ${error}`);
       return NextResponse.redirect(
-        `${APP_URL()}/dashboard/channels?error=${encodeURIComponent(error)}`,
+        `${appUrl}/dashboard/channels?error=${encodeURIComponent(error)}`,
       );
     }
 
     if (!code) {
       return NextResponse.redirect(
-        `${APP_URL()}/dashboard/channels?error=no_code`,
+        `${appUrl}/dashboard/channels?error=no_code`,
       );
     }
 
     let youtubeError: string | undefined;
     switch (platform) {
       case "meta":
-        await handleMetaCallback(code, state, session.user.id);
+        await handleMetaCallback(code, state, session.user.id, appUrl);
         break;
       case "youtube": {
-        const result = await handleYouTubeCallback(code, session.user.id);
+        const result = await handleYouTubeCallback(code, session.user.id, appUrl);
         if (result?.channelRequired) youtubeError = "channel_required";
         break;
       }
       default:
         return NextResponse.redirect(
-          `${APP_URL()}/dashboard/channels?error=unknown_platform`,
+          `${appUrl}/dashboard/channels?error=unknown_platform`,
         );
     }
 
-    const base = `${APP_URL()}/dashboard/channels?connected=${platform === "meta" ? state : platform}`;
+    const base = `${appUrl}/dashboard/channels?connected=${platform === "meta" ? state : platform}`;
     const redirectUrl = youtubeError ? `${base}&youtube_error=${youtubeError}` : base;
     return NextResponse.redirect(redirectUrl);
   } catch (error) {
     log.error("Social callback error:", error instanceof Error ? error.message : error);
     return NextResponse.redirect(
-      `${APP_URL()}/dashboard/channels?error=connection_failed`,
+      `${getAppUrl(req)}/dashboard/channels?error=connection_failed`,
     );
   }
 }

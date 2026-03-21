@@ -1,7 +1,7 @@
 import { PrismaClient, Platform } from "@prisma/client";
 import { decrypt } from "@/lib/social/encrypt";
 import { postInstagramReel } from "@/lib/social/instagram";
-import { postFacebookReel } from "@/lib/social/facebook";
+import { postFacebookReel, getFreshFacebookToken } from "@/lib/social/facebook";
 import { uploadYouTubeShort } from "@/lib/social/youtube";
 import { uploadShareChatVideo } from "@/lib/social/sharechat";
 import { uploadMojVideo } from "@/lib/social/moj";
@@ -20,16 +20,29 @@ function sanitizeErrorForUi(raw: string): string {
   if (!trimmed) return "Something went wrong. Try again later.";
   try {
     if ((trimmed.startsWith("{") && trimmed.includes('"error"')) || trimmed.startsWith("{")) {
-      const parsed = JSON.parse(trimmed) as { error?: { message?: string; error_user_msg?: string }; message?: string };
+      const parsed = JSON.parse(trimmed) as { error?: { message?: string; error_user_msg?: string; code?: number; type?: string }; message?: string };
       const err = parsed?.error;
+      console.error("[SocialPoster] API error (raw):", trimmed.length > 1500 ? trimmed.slice(0, 1500) + "…" : trimmed);
+
+      if (err?.code === 190 || err?.type === "OAuthException") {
+        return "Token expired or revoked. Please reconnect your account in Channels.";
+      }
+
       const msg = err?.error_user_msg || err?.message || parsed?.message;
       if (typeof msg === "string" && msg.trim()) {
-        console.error("[SocialPoster] API error (raw):", trimmed.length > 1500 ? trimmed.slice(0, 1500) + "…" : trimmed);
+        const lower = msg.toLowerCase();
+        if (lower.includes("log in") || lower.includes("expired") || lower.includes("session")) {
+          return "Token expired. Please reconnect your account in Channels.";
+        }
         return msg.trim();
       }
     }
   } catch {
     // not JSON or no message field
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("expired") || lower.includes("revoked") || lower.includes("log in")) {
+    return "Token expired. Please reconnect your account in Channels.";
   }
   return trimmed;
 }
@@ -44,11 +57,12 @@ interface PostResult {
 
 interface PlatformEntry {
   platform: string;
-  success?: boolean | "uploading";
+  success?: boolean | "uploading" | "scheduled" | "deleted";
   postId?: string | null;
   url?: string | null;
   error?: string;
   startedAt?: number;
+  scheduledFor?: string;
 }
 
 const STALE_UPLOAD_MS = 10 * 60 * 1000; // 10 minutes
@@ -126,6 +140,10 @@ function shouldSkip(entry: PlatformEntry | undefined): { skip: boolean; reason: 
 
   if (entry.success === true) {
     return { skip: true, reason: "already posted" };
+  }
+
+  if (entry.success === "scheduled") {
+    return { skip: true, reason: "already scheduled" };
   }
 
   if (entry.success === "uploading") {
@@ -206,6 +224,38 @@ async function finalizePlatform(
   }
 }
 
+async function finalizePlatformEx(
+  videoId: string,
+  entry:
+    | { platform: string; success: true | "scheduled"; postId: string | null; url: string | null }
+    | { platform: string; success: false; error: string },
+) {
+  try {
+    const entries = await getPlatformEntries(videoId);
+    const filtered = [...entries.values()].filter((e) => e.platform !== entry.platform);
+    filtered.push(entry as PlatformEntry);
+
+    const hasAnySuccess = filtered.some((e) => e.success === true);
+    const hasAnyScheduled = filtered.some((e) => e.success === "scheduled");
+    const newStatus = hasAnySuccess ? "POSTED" : hasAnyScheduled ? "SCHEDULED" : undefined;
+
+    const summary = entry.success
+      ? `${entry.success} postId=${(entry as { postId?: string | null }).postId ?? "?"}`
+      : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
+    log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
+
+    await db.video.update({
+      where: { id: videoId },
+      data: {
+        postedPlatforms: filtered as never,
+        ...(newStatus ? { status: newStatus } : {}),
+      },
+    });
+  } catch (e) {
+    log.error(`Failed to finalize ${entry.platform} for ${videoId}:`, e);
+  }
+}
+
 const PLATFORM_URLS: Record<string, (id: string) => string> = {
   YOUTUBE: (pid) => `https://youtube.com/shorts/${pid}`,
   FACEBOOK: (pid) => `https://www.facebook.com/reel/${pid}`,
@@ -216,6 +266,7 @@ const PLATFORM_URLS: Record<string, (id: string) => string> = {
 export async function postVideoToSocials(
   videoId: string,
   platformOverride?: string[],
+  scheduledAt?: Date,
 ): Promise<PostResult[]> {
   const video = await db.video.findUnique({
     where: { id: videoId },
@@ -236,7 +287,7 @@ export async function postVideoToSocials(
     return [];
   }
 
-  if (!["READY", "POSTED"].includes(video.status)) {
+  if (!["READY", "POSTED", "SCHEDULED"].includes(video.status)) {
     log.log(`Skipping ${videoId}: status is ${video.status}`);
     return [];
   }
@@ -258,8 +309,15 @@ export async function postVideoToSocials(
   }
 
   const videoPath = path.join(process.cwd(), "public", (video.videoUrl ?? "").replace(/^\//, ""));
-  const nicheId = video.series.niche ?? "";
-  const title = video.title ?? "Check this out!";
+  const seriesNiche = video.series.niche ?? "";
+  const sourceNiche = (video.sourceMetadata as { niche?: string } | null)?.niche;
+  const nicheId = seriesNiche === "clip-repurpose" && sourceNiche ? sourceNiche : seriesNiche;
+  const rawTitle = video.title ?? "Check this out!";
+  const title = rawTitle
+    .replace(/^#\d+\s+/, "")         // "#3 Title" → "Title"
+    .replace(/\s*\[\d+s?-\d+s?\]\s*/g, " ")  // "[0s-24s]" → " "
+    .replace(/\s{2,}/g, " ")
+    .trim();
   const scriptText = video.scriptText ?? undefined;
   const includeAiTags = video.series.automation?.includeAiTags ?? true;
 
@@ -290,8 +348,17 @@ export async function postVideoToSocials(
   }
 
   const ytSeo = generateVideoSEO(title, nicheId, scriptText, includeAiTags, previousYtUrl);
-  const igCaption = generateInstagramCaption(title, nicheId, scriptText, includeAiTags);
-  const fbCaption = generateFacebookCaption(title, nicheId, scriptText, includeAiTags);
+  let igCaption = generateInstagramCaption(title, nicheId, scriptText, includeAiTags);
+  let fbCaption = generateFacebookCaption(title, nicheId, scriptText, includeAiTags);
+
+  // For clip-repurpose videos, append the copyright credit from the video description
+  const isClipRepurpose = !!video.sourceUrl;
+  if (isClipRepurpose && video.description) {
+    const creditSection = video.description;
+    igCaption += `\n\n${creditSection}`;
+    fbCaption += `\n\n${creditSection}`;
+    ytSeo.description += `\n\n${creditSection}`;
+  }
 
   // Post to all platforms in parallel
   async function postToPlatform(platform: string): Promise<PostResult> {
@@ -343,10 +410,47 @@ export async function postVideoToSocials(
     }
 
     for (const account of accounts) {
-      const accessToken = decrypt(account.accessTokenEnc);
+      let accessToken = decrypt(account.accessTokenEnc);
       const refreshToken = account.refreshTokenEnc
         ? decrypt(account.refreshTokenEnc)
         : null;
+
+      // Proactively refresh Meta tokens (Facebook/Instagram) before they expire
+      if ((platform === "FACEBOOK" || platform === "INSTAGRAM") && account.refreshTokenEnc && account.pageId) {
+        try {
+          accessToken = await getFreshFacebookToken(
+            account.id,
+            accessToken,
+            account.refreshTokenEnc,
+            account.pageId,
+            account.tokenExpiresAt,
+          );
+        } catch (e) {
+          log.warn(`Token refresh failed for ${platform}, proceeding with stored token:`, e instanceof Error ? e.message : e);
+        }
+      }
+
+      const schedUnix = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
+      const schedIso = scheduledAt ? scheduledAt.toISOString() : undefined;
+
+      // Instagram doesn't support native Reel scheduling — defer to internal scheduler
+      if (platform === "INSTAGRAM" && scheduledAt) {
+        log.log(`Deferring Instagram publish for ${videoId} to ${scheduledAt.toISOString()} (native scheduling not supported for Reels)`);
+        await finalizePlatformEx(videoId, {
+          platform: "INSTAGRAM",
+          success: "scheduled",
+          postId: null,
+          url: null,
+        });
+        const entries = await getPlatformEntries(videoId);
+        const igEntry = entries.get("INSTAGRAM");
+        if (igEntry) {
+          igEntry.scheduledFor = scheduledAt.toISOString();
+          const allEntries = [...entries.values()];
+          await db.video.update({ where: { id: videoId }, data: { postedPlatforms: allEntries as never } });
+        }
+        return { platform: "INSTAGRAM", success: true, postId: undefined };
+      }
 
       let lastResult: { success: boolean; postId?: string; postUrl?: string; error?: string } | null = null;
 
@@ -370,6 +474,7 @@ export async function postVideoToSocials(
                 accessToken,
                 videoPath,
                 fbCaption,
+                schedUnix,
               );
               break;
 
@@ -384,6 +489,7 @@ export async function postVideoToSocials(
                 account.platformUserId,
                 video!.series.user.id,
                 ytSeo.categoryId,
+                schedIso,
               );
               break;
 
@@ -440,8 +546,9 @@ export async function postVideoToSocials(
           ?? (result.postId && PLATFORM_URLS[platform]
             ? PLATFORM_URLS[platform](result.postId)
             : null);
-        await finalizePlatform(videoId, {
-          platform, success: true, postId: result.postId ?? null, url: url ?? null,
+        const successStatus: true | "scheduled" = scheduledAt ? "scheduled" : true;
+        await finalizePlatformEx(videoId, {
+          platform, success: successStatus, postId: result.postId ?? null, url: url ?? null,
         });
         return { platform, ...result };
       } else {
@@ -460,7 +567,7 @@ export async function postVideoToSocials(
     return { platform, success: false, error: "No accounts processed" };
   }
 
-  log.log(`Posting video ${videoId} to ${targetPlatforms.join(", ")} in parallel`);
+  log.log(`${scheduledAt ? "Scheduling" : "Posting"} video ${videoId} to ${targetPlatforms.join(", ")}${scheduledAt ? ` for ${scheduledAt.toISOString()} (unix=${Math.floor(scheduledAt.getTime() / 1000)})` : " immediately"}`);
   const settled = await Promise.allSettled(targetPlatforms.map(postToPlatform));
 
   const results: PostResult[] = settled.map((s, i) => {

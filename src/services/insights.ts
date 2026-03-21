@@ -10,7 +10,7 @@ import {
   getInstagramMediaIdFromShortcode,
   getInstagramMediaMetrics,
 } from "@/lib/social/instagram";
-import { getFacebookVideoInsights } from "@/lib/social/facebook";
+import { getFacebookVideoInsights, getFreshFacebookToken } from "@/lib/social/facebook";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("Insights");
@@ -113,6 +113,7 @@ export async function refreshInsightsForUser(
       pageId: true,
       accessTokenEnc: true,
       refreshTokenEnc: true,
+      tokenExpiresAt: true,
     },
   });
 
@@ -160,7 +161,10 @@ export async function refreshInsightsForUser(
   const igStatsByPostId: Record<string, { likes: number; comments: number; views: number }> = {};
   if (igAccount && (igList.length > 0 || true)) {
     try {
-      const accessToken = decrypt(igAccount.accessTokenEnc);
+      let accessToken = decrypt(igAccount.accessTokenEnc);
+      if (igAccount.refreshTokenEnc && igAccount.pageId) {
+        try { accessToken = await getFreshFacebookToken(igAccount.id, accessToken, igAccount.refreshTokenEnc, igAccount.pageId, igAccount.tokenExpiresAt); } catch { /* use stored */ }
+      }
       const postIds = [...new Set(igList.map((x) => x.postId))];
       const shortcodeLike = (id: string) => /^[A-Za-z0-9_-]+$/.test(id) && !/^\d+$/.test(id);
       const postIdToMediaId = new Map<string, string>();
@@ -192,7 +196,10 @@ export async function refreshInsightsForUser(
   const fbStatsByPostId: Record<string, { views: number; reactions: number; comments: number }> = {};
   if (fbAccount && (fbList.length > 0 || true)) {
     try {
-      const accessToken = decrypt(fbAccount.accessTokenEnc);
+      let accessToken = decrypt(fbAccount.accessTokenEnc);
+      if (fbAccount.refreshTokenEnc && fbAccount.pageId) {
+        try { accessToken = await getFreshFacebookToken(fbAccount.id, accessToken, fbAccount.refreshTokenEnc, fbAccount.pageId, fbAccount.tokenExpiresAt); } catch { /* use stored */ }
+      }
       for (const { postId } of fbList) {
         const ins = await getFacebookVideoInsights(accessToken, postId);
         fbStatsByPostId[postId] = ins;

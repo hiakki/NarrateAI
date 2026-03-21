@@ -5,15 +5,53 @@ const log = createLogger("Instagram");
 const GRAPH_VERSION = "v21.0";
 const GRAPH_API = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
+interface MetaError {
+  error?: {
+    message?: string;
+    error_user_msg?: string;
+    code?: number;
+    error_subcode?: number;
+    type?: string;
+  };
+}
+
+function isMetaAuthError(body: unknown): boolean {
+  try {
+    const parsed = (typeof body === "object" ? body : JSON.parse(typeof body === "string" ? body : "")) as MetaError;
+    const code = parsed?.error?.code;
+    const type = parsed?.error?.type;
+    if (code === 190) return true;
+    if (type === "OAuthException") return true;
+    const msg = (parsed?.error?.message ?? "").toLowerCase();
+    return msg.includes("expired") || msg.includes("session has been invalidated") || msg.includes("password has been changed");
+  } catch {
+    return false;
+  }
+}
+
+function metaAuthErrorMessage(body: unknown): string {
+  try {
+    const parsed = (typeof body === "object" ? body : JSON.parse(typeof body === "string" ? body : "")) as MetaError;
+    const subcode = parsed?.error?.error_subcode;
+    if (subcode === 459 || subcode === 460) {
+      return "Instagram requires account verification. Please clear the checkpoint on facebook.com, then reconnect your account in Channels.";
+    }
+  } catch { /* ignore */ }
+  return "Instagram token expired or revoked. Please reconnect your account in Channels.";
+}
+
 /** Log raw API error to console; return a short user-facing message for UI. */
 function metaErrorForUi(body: unknown): string {
   if (body == null) return "Something went wrong. Try again later.";
   const raw = typeof body === "string" ? body : JSON.stringify(body);
   const truncated = raw.length > 2000 ? raw.slice(0, 2000) + "…" : raw;
   console.error("[Instagram] API error (raw):", truncated);
+
+  if (isMetaAuthError(body)) return metaAuthErrorMessage(body);
+
   try {
     const parsed = typeof body === "object" ? body : JSON.parse(raw);
-    const err = (parsed as { error?: { message?: string; error_user_msg?: string } }).error;
+    const err = (parsed as MetaError).error;
     const msg = err?.error_user_msg || err?.message;
     if (typeof msg === "string" && msg.trim()) return msg.trim();
   } catch {
@@ -89,7 +127,6 @@ export async function postInstagramReel(
   try {
     log.log(`Starting resumable upload for IG user ${igUserId}`);
 
-    // Diagnose token before proceeding
     const envAppId = process.env.FACEBOOK_APP_ID ?? "(not set)";
     const tokenInfo = await debugToken(accessToken);
     let pageTokenInfo: { appId: string | null; type: string | null; isValid: boolean } | null = null;
@@ -98,17 +135,19 @@ export async function postInstagramReel(
       log.error(`APP ID MISMATCH: token belongs to app ${tokenInfo.appId} but env is ${envAppId}`);
     }
 
+    const containerBody: Record<string, unknown> = {
+      media_type: "REELS",
+      upload_type: "resumable",
+      caption,
+    };
+
     const createRes = await fetch(`${GRAPH_API}/${igUserId}/media`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({
-        media_type: "REELS",
-        upload_type: "resumable",
-        caption,
-      }),
+      body: JSON.stringify(containerBody),
     });
 
     if (!createRes.ok) {
@@ -232,6 +271,29 @@ export async function postInstagramReel(
   } catch (err) {
     const raw = err instanceof Error ? err.message : "Unknown error";
     return { success: false, error: raw };
+  }
+}
+
+export async function deleteInstagramMedia(
+  mediaId: string,
+  accessToken: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.facebook.com/v25.0/${mediaId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const raw = rawMetaError(err);
+      log.warn(`Failed to delete IG media ${mediaId}:`, raw);
+      return { success: false, error: metaErrorForUi(err) };
+    }
+    log.log(`Deleted Instagram media ${mediaId}`);
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, error: msg };
   }
 }
 

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useEffect, useState, useRef } from "react";
-import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2, Star, BarChart2 } from "lucide-react";
+import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2, Star, BarChart2, Scissors } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -20,7 +20,8 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/create", label: "Create", icon: Sparkles },
-  { href: "/dashboard/automations", label: "Automations", icon: Bot },
+  { href: "/dashboard/automations", label: "Video Gen", icon: Bot },
+  { href: "/dashboard/clip-repurpose", label: "Viral Clips", icon: Scissors },
   { href: "/dashboard/characters", label: "Characters", icon: Star },
   { href: "/dashboard/videos", label: "Videos", icon: Film },
   { href: "/dashboard/channels", label: "Channels", icon: Share2 },

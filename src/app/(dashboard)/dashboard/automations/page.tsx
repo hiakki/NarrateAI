@@ -10,7 +10,7 @@ import {
   Bot, Plus, Clock, Loader2, Instagram, Youtube, Facebook,
   Trash2, Film, Zap, AlertCircle, CheckCircle2, XCircle, RefreshCw, Send,
   Pause, Play, Square, CheckSquare, SquareIcon, Star, EyeOff, Share2, Smartphone,
-  BarChart2, Eye, Heart, Search, ChevronDown, ChevronRight,
+  BarChart2, Eye, Heart, Search, ChevronDown, ChevronRight, CalendarClock,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -21,7 +21,7 @@ import { formatPlatformError } from "@/lib/format-platform-error";
 
 interface PlatformEntry {
   platform: string;
-  success?: boolean | "uploading";
+  success?: boolean | "uploading" | "scheduled" | "deleted";
   postId?: string;
   url?: string;
   error?: string;
@@ -78,6 +78,7 @@ const STATUS_CFG: Record<string, { label: string; className: string; icon: typeo
   QUEUED: { label: "Queued", className: "text-yellow-700 bg-yellow-50", icon: Clock },
   GENERATING: { label: "Generating", className: "text-blue-700 bg-blue-50", icon: Loader2 },
   READY: { label: "Ready", className: "text-green-700 bg-green-50", icon: CheckCircle2 },
+  SCHEDULED: { label: "Scheduled", className: "text-blue-700 bg-blue-100", icon: CalendarClock },
   POSTED: { label: "Posted", className: "text-green-800 bg-green-100", icon: CheckCircle2 },
   FAILED: { label: "Failed", className: "text-red-700 bg-red-50", icon: XCircle },
 };
@@ -807,9 +808,9 @@ export default function AutomationsPage() {
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
-          <h1 className="text-3xl font-bold">Automations</h1>
+          <h1 className="text-3xl font-bold">Video Gen Automations</h1>
           <p className="mt-1 text-muted-foreground">
-            Set up scheduled video generation and auto-posting to your channels.
+            AI-generated original videos — scheduled creation and auto-posting.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1470,6 +1471,9 @@ export default function AutomationsPage() {
                               let statusEl: React.ReactNode;
                               let rowClass = "";
 
+                              const isScheduledP = entry?.success === "scheduled";
+                              const isDeletedP = entry?.success === "deleted";
+
                               if (isSuccess) {
                                 rowClass = "bg-green-50 border-green-200";
                                 statusEl = (
@@ -1484,6 +1488,22 @@ export default function AutomationsPage() {
                                   <span className="flex items-center gap-1 text-blue-600">
                                     <Loader2 className="h-3 w-3 animate-spin" />
                                     <span>Uploading</span>
+                                  </span>
+                                );
+                              } else if (isScheduledP) {
+                                rowClass = "bg-blue-50/80 border-blue-200";
+                                statusEl = (
+                                  <span className="flex items-center gap-1 text-blue-600">
+                                    <CalendarClock className="h-3 w-3" />
+                                    <span>Scheduled</span>
+                                  </span>
+                                );
+                              } else if (isDeletedP) {
+                                rowClass = "bg-zinc-50 border-zinc-200";
+                                statusEl = (
+                                  <span className="flex items-center gap-1 text-zinc-400 line-through">
+                                    <Trash2 className="h-3 w-3" />
+                                    <span>Deleted</span>
                                   </span>
                                 );
                               } else if (isFail) {

@@ -88,3 +88,69 @@ export async function enqueueVideoGeneration(data: VideoJobData): Promise<string
   log.log(`Job enqueued: ${job.id}`);
   return job.id ?? jobId;
 }
+
+// ---------------------------------------------------------------------------
+// Clip-repurpose queue
+// ---------------------------------------------------------------------------
+
+export interface ClipRepurposeJobData {
+  videoId: string;
+  seriesId: string;
+  userId: string;
+  userName: string;
+  automationName?: string;
+  niche: string;
+  language: string;
+  tone: string;
+  clipConfig: {
+    clipNiche: string;
+    clipDurationSec: number;
+    cropMode: "blur-bg" | "center-crop";
+    creditOriginal: boolean;
+    preferPlatform?: "youtube" | "facebook" | "instagram";
+  };
+  targetPlatforms: string[];
+}
+
+let clipQueueInstance: Queue<ClipRepurposeJobData> | null = null;
+
+function getClipQueue(): Queue<ClipRepurposeJobData> {
+  if (!clipQueueInstance) {
+    clipQueueInstance = new Queue<ClipRepurposeJobData>("clip-repurpose", {
+      connection: createRedisConnection() as never,
+      defaultJobOptions: {
+        attempts: 2,
+        backoff: { type: "exponential", delay: 15000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
+      },
+    });
+  }
+  return clipQueueInstance;
+}
+
+export async function enqueueClipRepurpose(data: ClipRepurposeJobData): Promise<string> {
+  const queue = getClipQueue();
+  const jobId = data.videoId;
+
+  try {
+    const existing = await queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === "failed" || state === "completed" || state === "unknown") {
+        await existing.remove();
+      } else if (state === "active") {
+        await existing.moveToFailed(new Error("Replaced by retry"), "0", true);
+        await existing.remove();
+      } else if (state === "waiting" || state === "delayed") {
+        await existing.remove();
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not check/remove existing clip job ${jobId}:`, e);
+  }
+
+  log.log(`Enqueuing clip-repurpose job ${jobId}`);
+  const job = await queue.add("clip-repurpose", data, { jobId });
+  return job.id ?? jobId;
+}

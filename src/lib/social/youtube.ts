@@ -15,10 +15,11 @@ interface PostResult {
 }
 
 function createOAuth2Client() {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   return new google.auth.OAuth2(
     process.env.YOUTUBE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID,
     process.env.YOUTUBE_CLIENT_SECRET ?? process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.NEXT_PUBLIC_APP_URL}/api/social/callback/youtube`,
+    `${appUrl}/api/social/callback/youtube`,
   );
 }
 
@@ -128,6 +129,7 @@ export async function uploadYouTubeShort(
   platformUserId?: string,
   userId?: string,
   categoryId: string = "22",
+  publishAt?: string,
 ): Promise<PostResult> {
   try {
     const token = await getFreshAccessToken(
@@ -145,6 +147,13 @@ export async function uploadYouTubeShort(
 
     const youtube = google.youtube({ version: "v3", auth: oauth2Client });
 
+    const statusObj: Record<string, unknown> = {
+      privacyStatus: publishAt ? "private" : "public",
+      selfDeclaredMadeForKids: false,
+    };
+    if (publishAt) statusObj.publishAt = publishAt;
+    log.log(`Upload status: ${JSON.stringify(statusObj)}`);
+
     const doUpload = () =>
       youtube.videos.insert({
         part: ["snippet", "status"],
@@ -156,10 +165,7 @@ export async function uploadYouTubeShort(
             categoryId,
             defaultLanguage: "en",
           },
-          status: {
-            privacyStatus: "public",
-            selfDeclaredMadeForKids: false,
-          },
+          status: statusObj,
         },
         media: {
           body: fs.createReadStream(videoPath),
@@ -274,6 +280,29 @@ export async function getYouTubeChannelSubscribers(
   } catch (err) {
     log.warn("getYouTubeChannelSubscribers failed:", err instanceof Error ? err.message : err);
     return 0;
+  }
+}
+
+export async function deleteYouTubeVideo(
+  accessToken: string,
+  refreshToken: string | null,
+  videoId: string,
+  platformUserId?: string,
+  userId?: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const token = await getFreshAccessToken(accessToken, refreshToken, platformUserId, userId);
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({ access_token: token, refresh_token: refreshToken ?? undefined });
+    const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+
+    await youtube.videos.delete({ id: videoId });
+    log.log(`Deleted YouTube video ${videoId}`);
+    return { success: true };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : "Unknown error";
+    log.warn(`Failed to delete YouTube video ${videoId}: ${raw}`);
+    return { success: false, error: classifyYtError(raw) };
   }
 }
 

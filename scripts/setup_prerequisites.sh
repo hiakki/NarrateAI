@@ -167,6 +167,23 @@ install_ffmpeg() {
   ok "FFmpeg installed"
 }
 
+# ── Prerequisite: yt-dlp (for clip-repurpose pipeline) ─────────────────────
+install_ytdlp() {
+  if command -v yt-dlp &>/dev/null; then
+    ok "yt-dlp already installed ($(yt-dlp --version 2>/dev/null))"
+    return
+  fi
+
+  info "Installing yt-dlp..."
+  case "$PKG" in
+    apt)  sudo apt-get install -y -qq yt-dlp 2>/dev/null || pip3 install --break-system-packages yt-dlp ;;
+    brew) brew install yt-dlp ;;
+    dnf)  sudo dnf install -y yt-dlp 2>/dev/null || pip3 install yt-dlp ;;
+    *)    pip3 install yt-dlp ;;
+  esac
+  ok "yt-dlp installed"
+}
+
 # ── Prerequisite: PM2 ───────────────────────────────────────────────────────
 install_pm2() {
   if command -v pm2 &>/dev/null; then
@@ -215,6 +232,7 @@ install_all_prereqs() {
   install_node
   install_pnpm
   install_ffmpeg
+  install_ytdlp
   install_pm2
   install_cloudflared
 }
@@ -341,6 +359,14 @@ module.exports = {
       max_memory_restart: "1G",
     },
     {
+      name: "narrateai-clip-worker",
+      script: "node_modules/.bin/tsx",
+      args: "workers/clip-repurpose.ts",
+      cwd: "${PROJECT_DIR}",
+      env: { NODE_ENV: "production" },
+      max_memory_restart: "1G",
+    },
+    {
       name: "narrateai-scheduler",
       script: "node_modules/.bin/tsx",
       args: "workers/scheduler.ts",
@@ -426,10 +452,11 @@ start_tunnel() {
   echo "  Useful commands:"
   echo "    pm2 status                    — see all processes"
   echo "    pm2 logs                      — tail all logs"
-  echo "    pm2 logs narrateai-web        — web server logs"
-  echo "    pm2 logs narrateai-worker     — video worker logs"
-  echo "    pm2 logs narrateai-scheduler  — scheduler logs"
-  echo "    pm2 logs narrateai-tunnel     — tunnel logs"
+  echo "    pm2 logs narrateai-web          — web server logs"
+  echo "    pm2 logs narrateai-worker       — video worker logs"
+  echo "    pm2 logs narrateai-clip-worker  — clip repurpose worker logs"
+  echo "    pm2 logs narrateai-scheduler    — scheduler logs"
+  echo "    pm2 logs narrateai-tunnel       — tunnel logs"
   echo "    pm2 restart all               — restart everything"
     echo "    ./scripts/setup_prerequisites.sh --stop    — stop all services"
   echo ""
@@ -438,7 +465,7 @@ start_tunnel() {
 # ── Stop all services ────────────────────────────────────────────────────────
 do_stop() {
   step "Stopping NarrateAI"
-  pm2 delete narrateai-web narrateai-worker narrateai-scheduler narrateai-tunnel 2>/dev/null || true
+  pm2 delete narrateai-web narrateai-worker narrateai-clip-worker narrateai-scheduler narrateai-tunnel 2>/dev/null || true
   ok "All NarrateAI processes stopped"
   echo ""
   echo "  Infrastructure (Postgres/Redis) is still running in Docker."
@@ -488,7 +515,7 @@ main() {
         echo "  $0 --status                             Show running status"
         echo ""
         echo "Prerequisites installed automatically:"
-        echo "  Docker, Node.js ${NODE_MAJOR}, pnpm, FFmpeg, PM2, cloudflared"
+        echo "  Docker, Node.js ${NODE_MAJOR}, pnpm, FFmpeg, yt-dlp, PM2, cloudflared"
         echo ""
         echo "Environment:"
         echo "  PORT     Web server port (default: 3000)"
@@ -537,6 +564,30 @@ main() {
 
   # 5. Prepare project (deps + schema only; no build, no PM2)
   prepare_project
+
+  # 6. Optional: FB/IG cookie setup for clip repurposing
+  if [[ ! -f "data/ytdlp-cookies.txt" ]] && [[ -z "${YTDLP_COOKIES_FILE:-}" ]]; then
+    echo ""
+    info "FB/IG Content Discovery (optional)"
+    info "To discover and clip trending videos from Facebook and Instagram,"
+    info "you can log in now. A browser window will open — just sign in."
+    echo ""
+    read -rp "  Set up Facebook/Instagram access now? [y/N] " cookie_answer
+    if [[ "${cookie_answer,,}" == "y" ]]; then
+      info "Opening browser for Facebook login..."
+      npx tsx -e "
+        const { extractPlatformCookies } = require('./src/lib/cookie-extract');
+        extractPlatformCookies('facebook').then(r => {
+          console.log(r.success ? 'Cookies saved: ' + r.cookieCount + ' entries' : 'Skipped: ' + r.message);
+          process.exit(r.success ? 0 : 1);
+        });
+      " 2>/dev/null || warn "Cookie setup skipped. You can do this later from Settings > Content Discovery Access."
+    else
+      info "Skipped. You can set this up later from Settings > Content Discovery Access."
+    fi
+  else
+    info "Platform cookies already configured."
+  fi
 
   echo ""
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"

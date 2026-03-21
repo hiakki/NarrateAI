@@ -1,8 +1,47 @@
 import fs from "fs";
+import { db } from "@/lib/db";
+import { encrypt, decrypt } from "./encrypt";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("Facebook");
 const GRAPH_API = "https://graph.facebook.com/v21.0";
+
+const TOKEN_REFRESH_BUFFER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days before expiry
+
+interface MetaError {
+  error?: {
+    message?: string;
+    error_user_msg?: string;
+    code?: number;
+    error_subcode?: number;
+    type?: string;
+  };
+}
+
+function isMetaAuthError(body: unknown): boolean {
+  try {
+    const parsed = (typeof body === "object" ? body : JSON.parse(typeof body === "string" ? body : "")) as MetaError;
+    const code = parsed?.error?.code;
+    const type = parsed?.error?.type;
+    if (code === 190) return true;
+    if (type === "OAuthException") return true;
+    const msg = (parsed?.error?.message ?? "").toLowerCase();
+    return msg.includes("expired") || msg.includes("session has been invalidated") || msg.includes("password has been changed");
+  } catch {
+    return false;
+  }
+}
+
+function metaAuthErrorMessage(body: unknown): string {
+  try {
+    const parsed = (typeof body === "object" ? body : JSON.parse(typeof body === "string" ? body : "")) as MetaError;
+    const subcode = parsed?.error?.error_subcode;
+    if (subcode === 459 || subcode === 460) {
+      return "Facebook requires account verification. Please clear the checkpoint on facebook.com, then reconnect your account in Channels.";
+    }
+  } catch { /* ignore */ }
+  return "Facebook token expired or revoked. Please reconnect your account in Channels.";
+}
 
 /** Log raw API error to console; return a short user-facing message for UI. */
 function fbErrorForUi(body: unknown): string {
@@ -10,15 +49,100 @@ function fbErrorForUi(body: unknown): string {
   const raw = typeof body === "string" ? body : JSON.stringify(body);
   const truncated = raw.length > 2000 ? raw.slice(0, 2000) + "…" : raw;
   console.error("[Facebook] API error (raw):", truncated);
+
+  if (isMetaAuthError(body)) return metaAuthErrorMessage(body);
+
   try {
     const parsed = typeof body === "object" ? body : JSON.parse(raw);
-    const err = (parsed as { error?: { message?: string; error_user_msg?: string } }).error;
+    const err = (parsed as MetaError).error;
     const msg = err?.error_user_msg || err?.message;
     if (typeof msg === "string" && msg.trim()) return msg.trim();
   } catch {
     // ignore parse errors
   }
   return "Something went wrong. Try again later.";
+}
+
+/**
+ * Refresh a Meta long-lived user token and get fresh page tokens.
+ * Returns the new page access token, or null if refresh failed.
+ */
+export async function refreshMetaPageToken(
+  accountId: string,
+  userToken: string,
+  pageId: string,
+): Promise<string | null> {
+  const appId = process.env.FACEBOOK_APP_ID;
+  const appSecret = process.env.FACEBOOK_APP_SECRET;
+  if (!appId || !appSecret) return null;
+
+  try {
+    // Refresh the long-lived user token
+    const refreshRes = await fetch(
+      `${GRAPH_API}/oauth/access_token?` +
+        new URLSearchParams({
+          grant_type: "fb_exchange_token",
+          client_id: appId,
+          client_secret: appSecret,
+          fb_exchange_token: userToken,
+        }),
+    );
+    if (!refreshRes.ok) {
+      log.warn(`Meta user token refresh failed: ${refreshRes.status}`);
+      return null;
+    }
+    const { access_token: newUserToken, expires_in } = await refreshRes.json();
+    if (!newUserToken) return null;
+
+    // Get fresh page tokens
+    const pagesRes = await fetch(
+      `${GRAPH_API}/me/accounts?fields=id,access_token&access_token=${newUserToken}`,
+    );
+    if (!pagesRes.ok) return null;
+    const pagesData = await pagesRes.json();
+    const page = (pagesData.data ?? []).find((p: { id: string }) => p.id === pageId);
+    if (!page?.access_token) return null;
+
+    const tokenExpiry = expires_in ? new Date(Date.now() + expires_in * 1000) : null;
+    await db.socialAccount.update({
+      where: { id: accountId },
+      data: {
+        accessTokenEnc: encrypt(page.access_token),
+        refreshTokenEnc: encrypt(newUserToken),
+        ...(tokenExpiry ? { tokenExpiresAt: tokenExpiry } : {}),
+      },
+    });
+
+    log.log(`Refreshed Meta page token for account ${accountId} (expires in ${expires_in}s)`);
+    return page.access_token;
+  } catch (err) {
+    log.warn("Meta token refresh error:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Get a valid Facebook page token, refreshing if needed.
+ * Falls back to the stored token if refresh isn't possible.
+ * @param refreshTokenEnc - encrypted user token (stored in DB)
+ */
+export async function getFreshFacebookToken(
+  accountId: string,
+  pageAccessToken: string,
+  refreshTokenEnc: string | null,
+  pageId: string,
+  tokenExpiresAt: Date | null,
+): Promise<string> {
+  if (!refreshTokenEnc) return pageAccessToken;
+  if (!tokenExpiresAt) return pageAccessToken;
+
+  const timeUntilExpiry = tokenExpiresAt.getTime() - Date.now();
+  if (timeUntilExpiry > TOKEN_REFRESH_BUFFER_MS) return pageAccessToken;
+
+  log.log(`Token expiring in ${Math.round(timeUntilExpiry / 86400000)}d, refreshing...`);
+  const userToken = decrypt(refreshTokenEnc);
+  const fresh = await refreshMetaPageToken(accountId, userToken, pageId);
+  return fresh ?? pageAccessToken;
 }
 
 interface PostResult {
@@ -78,6 +202,7 @@ export async function postFacebookReel(
   pageAccessToken: string,
   videoPath: string,
   description: string,
+  scheduledPublishTime?: number,
 ): Promise<PostResult> {
   try {
     const startRes = await fetch(`${GRAPH_API}/${pageId}/video_reels`, {
@@ -115,16 +240,20 @@ export async function postFacebookReel(
       return { success: false, error: fbErrorForUi(parsed) };
     }
 
+    const finishBody: Record<string, unknown> = {
+      upload_phase: "finish",
+      video_id: videoId,
+      video_state: scheduledPublishTime ? "SCHEDULED" : "PUBLISHED",
+      description,
+      access_token: pageAccessToken,
+    };
+    if (scheduledPublishTime) finishBody.scheduled_publish_time = scheduledPublishTime;
+    log.log(`Finish body: video_state=${finishBody.video_state}, scheduled_publish_time=${finishBody.scheduled_publish_time ?? "none"}`);
+
     const finishRes = await fetch(`${GRAPH_API}/${pageId}/video_reels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        upload_phase: "finish",
-        video_id: videoId,
-        video_state: "PUBLISHED",
-        description,
-        access_token: pageAccessToken,
-      }),
+      body: JSON.stringify(finishBody),
     });
 
     if (!finishRes.ok) {
@@ -213,6 +342,29 @@ export async function getFacebookPageFollowers(
     return typeof data.followers_count === "number" ? data.followers_count : parseInt(String(data.followers_count ?? 0), 10) || 0;
   } catch {
     return 0;
+  }
+}
+
+export async function deleteFacebookVideo(
+  videoId: string,
+  pageAccessToken: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${GRAPH_API}/${videoId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: pageAccessToken }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      log.warn(`Failed to delete FB video ${videoId}:`, JSON.stringify(err));
+      return { success: false, error: fbErrorForUi(err) };
+    }
+    log.log(`Deleted Facebook video ${videoId}`);
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, error: msg };
   }
 }
 

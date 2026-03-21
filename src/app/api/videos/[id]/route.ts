@@ -75,6 +75,8 @@ export async function GET(
     return NextResponse.json({
       data: {
         ...video,
+        sourceUrl: video.sourceUrl ?? null,
+        sourceMetadata: video.sourceMetadata ?? null,
         sceneImages: sceneImages.urls,
         sceneClips: sceneImages.clipUrls,
         sceneImageCount: sceneImages.count,

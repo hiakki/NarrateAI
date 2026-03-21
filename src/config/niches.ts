@@ -732,6 +732,19 @@ export const NICHES: Niche[] = [
     defaultArtStyle: "realistic",
     defaultMusic: "upbeat",
   },
+  {
+    id: "clip-repurpose",
+    name: "Viral Clip Repurpose",
+    icon: "🔄",
+    description: "Find trending no-copyright videos, extract peak moments, enhance and repost as shorts/reels",
+    sampleTopics: [],
+    defaultTone: "dramatic",
+    defaultArtStyle: "realistic",
+    defaultMusic: "none",
+    aspectRatio: "9:16",
+    maxDuration: 90,
+    minDuration: 15,
+  },
 ];
 
 export function getNicheById(id: string): Niche | undefined {

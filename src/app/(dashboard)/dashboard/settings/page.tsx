@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info, Video } from "lucide-react";
+import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info, Video, Cookie, Upload, Trash2, CheckCircle2, XCircle, ExternalLink, LogIn } from "lucide-react";
 
 interface ProviderInfo {
   id: string;
@@ -155,6 +155,115 @@ export default function SettingsPage() {
   const [imageProvider, setImageProvider] = useState<string | null>(null);
   const [imageToVideoProvider, setImageToVideoProvider] = useState<string | null>(null);
 
+  const [cookieStatus, setCookieStatus] = useState<{ exists: boolean; lineCount: number; envConfigured: boolean; fbConnected?: boolean; igConnected?: boolean; fbCookieCount?: number; igCookieCount?: number } | null>(null);
+  const [cookieText, setCookieText] = useState("");
+  const [cookieSaving, setCookieSaving] = useState(false);
+  const [cookieMsg, setCookieMsg] = useState("");
+  const [cookieDeleting, setCookieDeleting] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractMsg, setExtractMsg] = useState("");
+  const fileInputRef = useCallback((node: HTMLInputElement | null) => {
+    if (node) node.value = "";
+  }, []);
+
+  const fetchCookieStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/cookies");
+      const json = await res.json();
+      if (json.data) setCookieStatus(json.data);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleCookieUpload = useCallback(async (text: string) => {
+    setCookieSaving(true);
+    setCookieMsg("");
+    try {
+      const res = await fetch("/api/settings/cookies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookieText: text }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setCookieMsg(json.error || "Failed to save");
+        return;
+      }
+      setCookieMsg(`Saved ${json.data.lineCount} cookie entries`);
+      setCookieText("");
+      fetchCookieStatus();
+      setTimeout(() => setCookieMsg(""), 4000);
+    } catch {
+      setCookieMsg("Network error");
+    } finally {
+      setCookieSaving(false);
+    }
+  }, [fetchCookieStatus]);
+
+  const handleCookieExtract = useCallback(async (platform: "facebook" | "instagram" | "both") => {
+    setExtracting(true);
+    setExtractMsg("Opening browser window...");
+    setCookieMsg("");
+    try {
+      const res = await fetch("/api/settings/cookies/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setExtractMsg(json.error || "Failed to start");
+        setExtracting(false);
+        return;
+      }
+      setExtractMsg(json.data?.message || "Browser opening...");
+
+      // Poll for completion
+      const poll = async () => {
+        for (let i = 0; i < 160; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try {
+            const statusRes = await fetch("/api/settings/cookies/extract");
+            const statusJson = await statusRes.json();
+            const d = statusJson.data;
+            if (!d) continue;
+            if (d.status === "done") {
+              setExtractMsg(`Done! ${d.cookieCount} cookies saved.`);
+              setExtracting(false);
+              fetchCookieStatus();
+              setTimeout(() => setExtractMsg(""), 5000);
+              return;
+            }
+            if (d.status === "error") {
+              setExtractMsg(d.message || "Extraction failed");
+              setExtracting(false);
+              return;
+            }
+            if (d.status === "in_progress") {
+              setExtractMsg(d.message || "Waiting for login...");
+            }
+          } catch { /* retry */ }
+        }
+        setExtractMsg("Timed out waiting for login.");
+        setExtracting(false);
+      };
+      poll();
+    } catch {
+      setExtractMsg("Network error");
+      setExtracting(false);
+    }
+  }, [fetchCookieStatus]);
+
+  const handleCookieDelete = useCallback(async () => {
+    setCookieDeleting(true);
+    try {
+      await fetch("/api/settings/cookies", { method: "DELETE" });
+      setCookieStatus({ exists: false, lineCount: 0, envConfigured: cookieStatus?.envConfigured ?? false });
+      setCookieMsg("");
+    } catch { /* ignore */ } finally {
+      setCookieDeleting(false);
+    }
+  }, [cookieStatus?.envConfigured]);
+
   const fetchProviders = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/providers");
@@ -175,7 +284,8 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchProviders();
-  }, [fetchProviders]);
+    fetchCookieStatus();
+  }, [fetchProviders, fetchCookieStatus]);
 
   async function handleSave() {
     setSaving(true);
@@ -326,6 +436,188 @@ export default function SettingsPage() {
                 )}
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Platform Cookies for Clip Repurpose */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Cookie className="h-5 w-5" />
+              Content Discovery Access
+            </CardTitle>
+            <CardDescription>
+              Connect your Facebook or Instagram account to discover and clip trending videos from those platforms.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Per-platform status */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Facebook status */}
+              <div className={`flex flex-col gap-2 p-3 rounded-lg border ${cookieStatus?.fbConnected ? "border-green-200 bg-green-50/50" : "border-muted bg-muted/30"}`}>
+                <div className="flex items-center gap-2">
+                  {cookieStatus?.fbConnected ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="text-sm font-medium">Facebook</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {cookieStatus?.fbConnected
+                    ? `Connected (${cookieStatus.fbCookieCount} cookies)`
+                    : "Not connected"}
+                </p>
+                <Button
+                  size="sm"
+                  className={cookieStatus?.fbConnected
+                    ? "h-8 text-xs"
+                    : "h-8 text-xs bg-[#1877F2] hover:bg-[#166FE5] text-white"}
+                  variant={cookieStatus?.fbConnected ? "outline" : "default"}
+                  disabled={extracting}
+                  onClick={() => handleCookieExtract("facebook")}
+                >
+                  {extracting ? (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  ) : (
+                    <LogIn className="mr-1.5 h-3 w-3" />
+                  )}
+                  {cookieStatus?.fbConnected ? "Refresh" : "Login"}
+                </Button>
+              </div>
+
+              {/* Instagram status */}
+              <div className={`flex flex-col gap-2 p-3 rounded-lg border ${cookieStatus?.igConnected ? "border-green-200 bg-green-50/50" : "border-muted bg-muted/30"}`}>
+                <div className="flex items-center gap-2">
+                  {cookieStatus?.igConnected ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="text-sm font-medium">Instagram</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {cookieStatus?.igConnected
+                    ? `Connected (${cookieStatus.igCookieCount} cookies)`
+                    : "Not connected"}
+                </p>
+                <Button
+                  size="sm"
+                  className={cookieStatus?.igConnected
+                    ? "h-8 text-xs"
+                    : "h-8 text-xs bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90 text-white"}
+                  variant={cookieStatus?.igConnected ? "outline" : "default"}
+                  disabled={extracting}
+                  onClick={() => handleCookieExtract("instagram")}
+                >
+                  {extracting ? (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  ) : (
+                    <LogIn className="mr-1.5 h-3 w-3" />
+                  )}
+                  {cookieStatus?.igConnected ? "Refresh" : "Login"}
+                </Button>
+              </div>
+            </div>
+
+            {/* YouTube always available */}
+            <div className="flex items-center gap-2 p-2 rounded-lg border border-green-200 bg-green-50/50">
+              <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+              <span className="text-xs text-green-700">YouTube discovery always available (no login needed)</span>
+            </div>
+
+            {cookieStatus?.exists && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-red-600 hover:bg-red-50"
+                disabled={cookieDeleting}
+                onClick={handleCookieDelete}
+                title="Remove all saved cookies"
+              >
+                {cookieDeleting ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <Trash2 className="mr-1.5 h-3 w-3" />}
+                Remove All Cookies
+              </Button>
+            )}
+
+            <p className="text-[11px] text-muted-foreground">
+              Each button opens a browser window. Log in once and cookies are captured automatically.
+            </p>
+
+            {/* Extraction progress */}
+            {(extracting || extractMsg) && (
+              <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-sm ${
+                extractMsg.includes("Done") ? "border-green-200 bg-green-50 text-green-700"
+                  : extractMsg.includes("fail") || extractMsg.includes("error") || extractMsg.includes("closed") || extractMsg.includes("Timed")
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-blue-200 bg-blue-50 text-blue-700"
+              }`}>
+                {extracting && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+                {!extracting && extractMsg.includes("Done") && <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                <span className="text-xs">{extractMsg}</span>
+              </div>
+            )}
+
+            {/* Manual upload fallback */}
+            <details className="group">
+              <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+                Advanced: manual cookie upload...
+              </summary>
+              <div className="mt-3 space-y-2 p-3 rounded-lg border border-dashed bg-muted/20">
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".txt,.cookies"
+                    className="hidden"
+                    id="cookie-file-input"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => handleCookieUpload(reader.result as string);
+                      reader.readAsText(file);
+                      e.target.value = "";
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={cookieSaving}
+                    onClick={() => document.getElementById("cookie-file-input")?.click()}
+                  >
+                    {cookieSaving ? (
+                      <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Uploading...</>
+                    ) : (
+                      <><Upload className="mr-2 h-3.5 w-3.5" /> Upload cookies.txt</>
+                    )}
+                  </Button>
+                </div>
+                <textarea
+                  rows={3}
+                  placeholder={"# Netscape HTTP Cookie File\n.facebook.com\tTRUE\t/\tTRUE\t0\tc_user\t12345..."}
+                  value={cookieText}
+                  onChange={(e) => setCookieText(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-[11px] font-mono resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                {cookieText.trim() && (
+                  <Button
+                    size="sm"
+                    disabled={cookieSaving}
+                    onClick={() => handleCookieUpload(cookieText)}
+                  >
+                    {cookieSaving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}
+                    Save
+                  </Button>
+                )}
+                {cookieMsg && (
+                  <p className={`text-[11px] ${cookieMsg.includes("Failed") || cookieMsg.includes("error") || cookieMsg.includes("Invalid") || cookieMsg.includes("must be") ? "text-red-600" : "text-green-600"}`}>
+                    {cookieMsg}
+                  </p>
+                )}
+              </div>
+            </details>
           </CardContent>
         </Card>
       </div>

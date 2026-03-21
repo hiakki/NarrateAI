@@ -22,9 +22,9 @@ export async function POST(
       return NextResponse.json({ error: "Video not found" }, { status: 404 });
     if (video.series.userId !== session.user.id && session.user.role === "USER")
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    if (video.status !== "READY" && video.status !== "POSTED")
+    if (!["READY", "POSTED", "SCHEDULED"].includes(video.status))
       return NextResponse.json(
-        { error: "Video is not in a posted/ready state" },
+        { error: "Video is not in a posted/ready/scheduled state" },
         { status: 400 },
       );
 
@@ -54,11 +54,27 @@ export async function POST(
       newPosted = [];
     }
 
+    const currentScheduled = (video.scheduledPlatforms ?? []) as string[];
+    let newScheduled: string[];
+    if (platforms && platforms.length > 0) {
+      const toRemove = new Set(platforms);
+      newScheduled = currentScheduled.filter((p) => !toRemove.has(p));
+    } else {
+      newScheduled = [];
+    }
+
+    const hasActive = newPosted.some((p) => {
+      if (typeof p === "string") return true;
+      return p && (p as { success?: unknown }).success !== "deleted";
+    });
+
     await db.video.update({
       where: { id },
       data: {
         postedPlatforms: newPosted as never,
-        status: newPosted.length > 0 ? "POSTED" : "READY",
+        scheduledPlatforms: newScheduled,
+        scheduledPostTime: newScheduled.length > 0 ? video.scheduledPostTime : (hasActive ? video.scheduledPostTime : null),
+        status: hasActive ? video.status : "READY",
       },
     });
 

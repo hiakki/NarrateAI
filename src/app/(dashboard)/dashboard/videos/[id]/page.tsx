@@ -38,6 +38,10 @@ import {
   BarChart2,
   Eye,
   Heart,
+  Search,
+  TrendingUp,
+  Scissors,
+  Sparkles,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -60,9 +64,18 @@ const BASE_STAGES = [
   { key: "UPLOADING", label: "Finalize", detail: "Saving your video", icon: Upload },
 ];
 
+const CLIP_REPURPOSE_STAGES = [
+  { key: "DISCOVER", label: "Discovery", detail: "Finding viral no-copyright video from trending sources", icon: Search },
+  { key: "HEATMAP", label: "Heatmap", detail: "Analyzing most-replayed sections for peak engagement", icon: TrendingUp },
+  { key: "CLIPPING", label: "Clipping", detail: "Extracting peak segment with pre/post context, converting to 9:16", icon: Scissors },
+  { key: "ENHANCE", label: "Enhancing", detail: "Adding subtitles, blur background, hook text overlay", icon: Sparkles },
+  { key: "FINALIZE", label: "Finalize", detail: "Generating title, saving final clip", icon: Upload },
+];
+
 const I2V_STAGE = { key: "I2V", label: "Image-to-Video", detail: "Animating scene images into video clips", icon: Film };
 
-function buildStages(hasI2V: boolean) {
+function buildStages(hasI2V: boolean, isClipRepurpose: boolean) {
+  if (isClipRepurpose) return CLIP_REPURPOSE_STAGES;
   if (!hasI2V) return BASE_STAGES;
   const idx = BASE_STAGES.findIndex((s) => s.key === "ASSEMBLY");
   const copy = [...BASE_STAGES];
@@ -102,6 +115,8 @@ export default function VideoDetailPage() {
   const queryClient = useQueryClient();
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [cancellingPlatforms, setCancellingPlatforms] = useState<Set<string>>(new Set());
+  const [deletingPlatforms, setDeletingPlatforms] = useState<Set<string>>(new Set());
   const [publishingPlatforms, setPublishingPlatforms] = useState<Set<string>>(new Set());
   const [publishResults, setPublishResults] = useState<
     { platform: string; success: boolean; postId?: string; error?: string }[] | null
@@ -323,7 +338,7 @@ export default function VideoDetailPage() {
       .catch(() => {});
   }, []);
 
-  async function handlePublishPlatform(platform: string) {
+  async function handlePublishPlatform(platform: string, immediate = false) {
     markPublishing(platform);
     clearFailure(platform);
     setPublishResults(null);
@@ -331,7 +346,7 @@ export default function VideoDetailPage() {
       const res = await fetch(`/api/videos/${id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platforms: [platform] }),
+        body: JSON.stringify({ platforms: [platform], ...(immediate ? { immediate: true } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -358,7 +373,7 @@ export default function VideoDetailPage() {
     }
   }
 
-  async function handlePublishAll(platforms: string[]) {
+  async function handlePublishAll(platforms: string[], immediate = false) {
     markPublishing(...platforms);
     clearFailure(...platforms);
     setPublishResults(null);
@@ -366,7 +381,7 @@ export default function VideoDetailPage() {
       const res = await fetch(`/api/videos/${id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platforms }),
+        body: JSON.stringify({ platforms, ...(immediate ? { immediate: true } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -390,6 +405,70 @@ export default function VideoDetailPage() {
       setPublishResults([{ platform: "ALL", success: false, error: "Network error" }]);
       platforms.forEach((p) => recordFailure(p, "Network error"));
       unmarkPublishing(...platforms);
+    }
+  }
+
+  async function handleCancelSchedule(platforms?: string[]) {
+    const keys = platforms ?? [];
+    const label = keys.length > 0 ? keys.join(", ") : "all platforms";
+    if (!confirm(`Cancel scheduled post on ${label}? This will delete content from the platform if already uploaded.`)) return;
+    setCancellingPlatforms((prev) => {
+      const next = new Set(prev);
+      (keys.length > 0 ? keys : ["__all__"]).forEach((k) => next.add(k));
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/videos/${id}/cancel-schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(keys.length > 0 ? { platforms: keys } : {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+      if (!res.ok) {
+        alert(data.error || `Failed to cancel ${label}`);
+      } else if (data.results) {
+        const failed = (data.results as { platform: string; success: boolean; error?: string }[]).filter((r) => !r.success);
+        if (failed.length > 0) {
+          console.warn("Platform cleanup partial failures:", failed);
+        }
+      }
+    } catch {
+      alert(`Network error cancelling ${label}`);
+    } finally {
+      setCancellingPlatforms(new Set());
+    }
+  }
+
+  async function handleDeleteFromPlatform(platforms?: string[]) {
+    const keys = platforms ?? [];
+    const label = keys.length > 0 ? keys.join(", ") : "all platforms";
+    if (!confirm(`Delete this video from ${label}? This cannot be undone.`)) return;
+    setDeletingPlatforms((prev) => {
+      const next = new Set(prev);
+      (keys.length > 0 ? keys : ["__all__"]).forEach((k) => next.add(k));
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/videos/${id}/delete-from-platform`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(keys.length > 0 ? { platforms: keys } : {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      queryClient.invalidateQueries({ queryKey: ["video", id] });
+      if (!res.ok) {
+        alert(data.error || `Failed to delete from ${label}`);
+      } else if (data.results) {
+        const failed = (data.results as { platform: string; success: boolean; error?: string }[]).filter((r) => !r.success);
+        if (failed.length > 0) {
+          console.warn("Platform delete partial failures:", failed);
+        }
+      }
+    } catch {
+      alert(`Network error deleting from ${label}`);
+    } finally {
+      setDeletingPlatforms(new Set());
     }
   }
 
@@ -485,7 +564,7 @@ export default function VideoDetailPage() {
         const stage = query.state.data?.generationStage;
         return stage === "IMAGES" || stage === "I2V" ? 10000 : 15000;
       }
-      if (status === "READY" || status === "POSTED") return 30000;
+      if (status === "READY" || status === "POSTED" || status === "SCHEDULED") return 30000;
       return false;
     },
   });
@@ -523,13 +602,13 @@ export default function VideoDetailPage() {
     if (publishingPlatforms.size === 0 || !video) return;
     const postedRaw = (video.postedPlatforms ?? []) as (
       | string
-      | { platform: string; success?: boolean | "uploading" }
+      | { platform: string; success?: boolean | "uploading" | "scheduled" | "deleted" }
     )[];
     const doneSet = new Set(
       postedRaw
         .filter((p) => {
           if (typeof p === "string") return true;
-          if (p.success === true || p.success === false) return true;
+          if (p.success === true || p.success === false || p.success === "scheduled" || p.success === "deleted") return true;
           if (p.success === undefined && ((p as Record<string, unknown>).postId || (p as Record<string, unknown>).url)) return true;
           return false;
         })
@@ -539,6 +618,26 @@ export default function VideoDetailPage() {
       (p) => doneSet.has(p) || failedPublishes.has(p),
     );
     if (toClear.length > 0) unmarkPublishing(...toClear);
+  }, [video, failedPublishes]);
+
+  // Clear client-side error state when server entry transitions to scheduled/posted
+  useEffect(() => {
+    if (!video || failedPublishes.size === 0) return;
+    const postedRaw = (video.postedPlatforms ?? []) as (
+      | string
+      | { platform: string; success?: boolean | "uploading" | "scheduled" | "deleted" }
+    )[];
+    const resolvedPlatforms = postedRaw
+      .filter((p) => typeof p !== "string" && (p.success === true || p.success === "scheduled"))
+      .map((p) => (p as { platform: string }).platform);
+    const stale = resolvedPlatforms.filter((p) => failedPublishes.has(p));
+    if (stale.length > 0) {
+      setFailedPublishes((prev) => {
+        const next = new Map(prev);
+        for (const p of stale) next.delete(p);
+        return next;
+      });
+    }
   }, [video, failedPublishes]);
 
   useEffect(() => {
@@ -587,11 +686,12 @@ export default function VideoDetailPage() {
   const isGenerating = video.status === "GENERATING";
   const isInProgress = isQueued || isGenerating;
   const isReview = video.status === "REVIEW";
-  const isReady = video.status === "READY" || video.status === "POSTED";
+  const isReady = video.status === "READY" || video.status === "POSTED" || video.status === "SCHEDULED";
   const isFailed = video.status === "FAILED";
 
+  const isClipRepurpose = !!video.sourceUrl || CLIP_REPURPOSE_STAGES.some((s) => s.key === video.generationStage);
   const hasI2V = !!video.imageToVideoProvider || video.generationStage === "I2V";
-  const stages = buildStages(hasI2V);
+  const stages = buildStages(hasI2V, isClipRepurpose);
 
   const currentStageIndex = video.generationStage
     ? stages.findIndex((s) => s.key === video.generationStage)
@@ -772,6 +872,55 @@ export default function VideoDetailPage() {
               })}
             </div>
           </CardContent>
+
+          {/* Live discovery transparency during generation (clip-repurpose) */}
+          {isClipRepurpose && video.sourceMetadata && (() => {
+            const meta = video.sourceMetadata as {
+              discovery?: { candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>; totalConsidered: number };
+              channelName?: string; originalTitle?: string; viewCount?: number; platform?: string; niche?: string;
+            };
+            const disc = meta.discovery;
+            if (!disc || disc.candidates.length === 0) return null;
+            const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+            return (
+              <div className="mx-6 mb-6 rounded-lg border bg-muted/20 p-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Discovered {disc.totalConsidered} videos, selected:
+                </p>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{meta.originalTitle ?? disc.candidates[0]?.title}</p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                      {meta.channelName && <span>{meta.channelName}</span>}
+                      {meta.viewCount ? <span className="flex items-center gap-0.5"><Eye className="w-2.5 h-2.5" /> {fmtViews(meta.viewCount)}</span> : null}
+                      {meta.platform && <span className="uppercase text-[10px] bg-muted px-1.5 py-0.5 rounded">{meta.platform}</span>}
+                      {disc.candidates[0]?.score != null && <span className="text-[10px] font-mono bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Score {disc.candidates[0].score}</span>}
+                    </div>
+                  </div>
+                </div>
+                {disc.candidates.length > 1 && (
+                  <details className="group">
+                    <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground">
+                      {disc.candidates.length - 1} other candidates...
+                    </summary>
+                    <div className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                      {disc.candidates.slice(1, 8).map((c, i) => (
+                        <div key={i} className="flex items-center justify-between text-[10px] py-0.5 px-1 rounded hover:bg-muted/50">
+                          <span className="truncate flex-1 mr-2">{c.title}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {c.score != null && <span className="font-mono text-muted-foreground">{c.score}</span>}
+                            <span className="text-muted-foreground">{fmtViews(c.viewCount)}</span>
+                            <span className="uppercase text-[9px] bg-muted px-1 rounded">{c.platform}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
         </Card>
       )}
 
@@ -843,95 +992,97 @@ export default function VideoDetailPage() {
             </CardContent>
           </Card>
 
-          {/* Pipeline steps: rerun TTS or Images (assembly & final video re-created automatically) */}
-          <Card>
-            <div className="px-4 py-3 border-b">
-              <h3 className="text-sm font-semibold">Pipeline steps</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
-              </p>
-            </div>
-            <CardContent className="p-4 space-y-2">
-              {[
-                { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
-                { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
-                { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
-                { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
-                { key: "ASSEMBLY", label: "Assembly", status: "Pending", icon: Clapperboard, canRerun: false },
-                { key: "UPLOADING", label: "Final video", status: "Pending", icon: Upload, canRerun: false },
-              ].map(({ key, label, status, icon: Icon, canRerun }) => (
-                <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                  <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{label}</span>
-                    <span className="text-xs text-muted-foreground">— {status}</span>
-                  </div>
-                  {canRerun && (
+          {/* Pipeline steps (review mode, non-clip-repurpose) */}
+          {!isClipRepurpose && (
+            <Card>
+              <div className="px-4 py-3 border-b">
+                <h3 className="text-sm font-semibold">Pipeline steps</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
+                </p>
+              </div>
+              <CardContent className="p-4 space-y-2">
+                {[
+                  { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
+                  { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
+                  { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
+                  { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
+                  { key: "ASSEMBLY", label: "Assembly", status: "Pending", icon: Clapperboard, canRerun: false },
+                  { key: "UPLOADING", label: "Final video", status: "Pending", icon: Upload, canRerun: false },
+                ].map(({ key, label, status, icon: Icon, canRerun }) => (
+                  <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
                     <div className="flex items-center gap-2">
-                      {key === "TTS" && providerData?.available?.tts?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunTtsProvider}
-                          onChange={(e) => setRerunTtsProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.available.tts.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      {key === "IMAGES" && providerData?.available?.image?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunImageProvider}
-                          onChange={(e) => setRerunImageProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.available.image.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunI2VProvider}
-                          onChange={(e) => setRerunI2VProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={rerunStep !== null}
-                        onClick={() => {
-                          const step = key as "TTS" | "IMAGES" | "I2V";
-                          const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
-                            : step === "IMAGES" ? { imageProvider: rerunImageProvider }
-                            : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
-                            : undefined;
-                          handleRerunStep(step, overrides);
-                        }}
-                      >
-                        {rerunStep === key ? (
-                          <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
-                        ) : (
-                          <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
-                        )}
-                      </Button>
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{label}</span>
+                      <span className="text-xs text-muted-foreground">— {status}</span>
                     </div>
-                  )}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+                    {canRerun && (
+                      <div className="flex items-center gap-2">
+                        {key === "TTS" && providerData?.available?.tts?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunTtsProvider}
+                            onChange={(e) => setRerunTtsProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.available.tts.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {key === "IMAGES" && providerData?.available?.image?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunImageProvider}
+                            onChange={(e) => setRerunImageProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.available.image.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunI2VProvider}
+                            onChange={(e) => setRerunI2VProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rerunStep !== null}
+                          onClick={() => {
+                            const step = key as "TTS" | "IMAGES" | "I2V";
+                            const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
+                              : step === "IMAGES" ? { imageProvider: rerunImageProvider }
+                              : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
+                              : undefined;
+                            handleRerunStep(step, overrides);
+                          }}
+                        >
+                          {rerunStep === key ? (
+                            <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
+                          ) : (
+                            <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Audio player */}
-          <Card>
+          {/* Audio player (only for original pipeline) */}
+          {!isClipRepurpose && <Card>
             <div className="px-4 py-3 border-b flex items-center gap-2">
               <Mic className="h-4 w-4" />
               <span className="text-sm font-medium">Voiceover</span>
@@ -939,10 +1090,10 @@ export default function VideoDetailPage() {
             <CardContent className="p-4">
               <audio controls className="w-full" src={`/api/videos/${video.id}/audio`} preload="metadata" />
             </CardContent>
-          </Card>
+          </Card>}
 
-          {/* Image review grid */}
-          <Card>
+          {/* Image review grid (only for original pipeline) */}
+          {!isClipRepurpose && <Card>
             <div className="px-4 py-3 border-b flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ImageIcon className="h-4 w-4" />
@@ -1045,10 +1196,10 @@ export default function VideoDetailPage() {
                 })}
               </div>
             </CardContent>
-          </Card>
+          </Card>}
 
-          {/* Proceed button */}
-          <div className="flex items-center justify-between gap-4">
+          {/* Proceed button (only for original pipeline) */}
+          {!isClipRepurpose && <div className="flex items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">
               {selectedImages.size === 0
                 ? "Select at least one image to proceed"
@@ -1065,13 +1216,14 @@ export default function VideoDetailPage() {
                 <><Play className="mr-2 h-4 w-4" /> Proceed to Assembly</>
               )}
             </Button>
-          </div>
+          </div>}
         </div>
       )}
 
       {/* ── READY: VIDEO PLAYER ── */}
       {isReady && (
         <div className="space-y-6">
+          {/* Compact ready header */}
           <Card className="overflow-hidden border-green-200 bg-green-50/30">
             <div className="flex items-center gap-2 px-4 py-2 border-b border-green-200">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -1084,7 +1236,7 @@ export default function VideoDetailPage() {
                 </span>
               )}
             </div>
-            {isReady && (
+            {!isClipRepurpose && (
               <div className="px-4 py-2 border-t border-green-200/60">
                 <p className="text-xs text-muted-foreground mb-1.5">Step timings</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-green-800/90">
@@ -1121,94 +1273,211 @@ export default function VideoDetailPage() {
                 })()}
               </div>
             )}
+            {isClipRepurpose && (
+              <div className="px-4 py-2 border-t border-green-200/60">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {stages.map((s) => {
+                    const d = stageTimings?.[s.key]?.durationMs;
+                    const Icon = s.icon;
+                    return (
+                      <span key={s.key} className="inline-flex items-center gap-1 text-green-700">
+                        <Icon className="h-3 w-3" />
+                        <span className="font-medium">{s.label}</span>
+                        {d != null && d > 0 && <span className="text-green-600/70 tabular-nums">{formatStageDuration(d)}</span>}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </Card>
 
-          {/* Pipeline steps: rerun TTS or Images (assembly & final video re-created automatically) */}
-          <Card>
-            <div className="px-4 py-3 border-b">
-              <h3 className="text-sm font-semibold">Pipeline steps</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
-              </p>
-            </div>
-            <CardContent className="p-4 space-y-2">
-              {[
-                { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
-                { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
-                { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
-                { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
-                { key: "ASSEMBLY", label: "Assembly", status: "Done", icon: Clapperboard, canRerun: false },
-                { key: "UPLOADING", label: "Final video", status: "Done", icon: Upload, canRerun: false },
-              ].map(({ key, label, status, icon: Icon, canRerun }) => (
-                <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                  <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{label}</span>
-                    <span className="text-xs text-muted-foreground">— {status}</span>
-                  </div>
-                  {canRerun && (
-                    <div className="flex items-center gap-2">
-                      {key === "TTS" && providerData?.available?.tts?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunTtsProvider}
-                          onChange={(e) => setRerunTtsProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.available.tts.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      {key === "IMAGES" && providerData?.available?.image?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunImageProvider}
-                          onChange={(e) => setRerunImageProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.available.image.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          value={rerunI2VProvider}
-                          onChange={(e) => setRerunI2VProvider(e.target.value)}
-                          disabled={rerunStep !== null}
-                        >
-                          {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={rerunStep !== null}
-                        onClick={() => {
-                          const step = key as "TTS" | "IMAGES" | "I2V";
-                          const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
-                            : step === "IMAGES" ? { imageProvider: rerunImageProvider }
-                            : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
-                            : undefined;
-                          handleRerunStep(step, overrides);
-                        }}
-                      >
-                        {rerunStep === key ? (
-                          <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
-                        ) : (
-                          <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
-                        )}
-                      </Button>
+          {/* Clip Repurpose: Combined Clip Details card (source + timing + candidates) */}
+          {isClipRepurpose && video.sourceMetadata && (() => {
+            const meta = video.sourceMetadata as {
+              discovery?: { candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>; totalConsidered: number };
+              timingBreakdown?: { preContext: { startSec: number; endSec: number; durationSec: number }; mainHeatmap: { startSec: number; endSec: number; durationSec: number }; postContext: { startSec: number; endSec: number; durationSec: number }; totalDurationSec: number };
+              peakSegment?: { startSec: number; endSec: number; avgHeat: number };
+              channelName?: string; originalTitle?: string; viewCount?: number; platform?: string; niche?: string;
+            };
+            const disc = meta.discovery;
+            const timing = meta.timingBreakdown;
+            const fmtTime = (s: number) => { const m = Math.floor(s / 60); const sec = s % 60; return m > 0 ? `${m}:${sec.toString().padStart(2, "0")}` : `${sec}s`; };
+            const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+
+            if (!disc && !timing) return null;
+
+            return (
+              <Card>
+                <div className="px-4 py-3 border-b">
+                  <h3 className="text-sm font-semibold">Clip Details</h3>
+                </div>
+                <CardContent className="p-0 divide-y">
+                  {/* Source video */}
+                  {disc && disc.candidates.length > 0 && (
+                    <div className="p-4 space-y-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Source · {disc.totalConsidered} scanned</p>
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">{meta.originalTitle ?? disc.candidates[0]?.title}</p>
+                          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                            {disc.candidates[0]?.score != null && <span className="font-mono text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-semibold">Score {disc.candidates[0].score}</span>}
+                            {meta.channelName && <span>by {meta.channelName}</span>}
+                            {meta.viewCount ? <span className="flex items-center gap-0.5"><Eye className="w-3 h-3" /> {fmtViews(meta.viewCount)} views</span> : null}
+                            {meta.platform && <span className="uppercase text-[10px] bg-muted px-1.5 py-0.5 rounded">{meta.platform}</span>}
+                            {video.sourceUrl && (
+                              <a href={video.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5">
+                                <Link2 className="w-3 h-3" /> Original
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {disc.candidates.length > 1 && (
+                        <details className="group">
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground py-0.5">
+                            {disc.candidates.length - 1} other candidates...
+                          </summary>
+                          <div className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                            {disc.candidates.slice(1).map((c, i) => (
+                              <div key={i} className="flex items-center justify-between py-1 px-2 rounded text-xs hover:bg-muted/30">
+                                <div className="flex-1 min-w-0 mr-2">
+                                  <p className="truncate">{c.title}</p>
+                                  <p className="text-muted-foreground text-[10px]">{c.channelName} · {c.platform}</p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 text-muted-foreground">
+                                  {c.score != null && <span className="font-mono text-[10px] bg-muted px-1 rounded">{c.score}</span>}
+                                  <span className="flex items-center gap-0.5 text-[10px]"><Eye className="w-2.5 h-2.5" /> {fmtViews(c.viewCount)}</span>
+                                  <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline"><Link2 className="w-3 h-3" /></a>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
                     </div>
                   )}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+
+                  {/* Timing breakdown */}
+                  {timing && (
+                    <div className="p-4 space-y-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Clip Timing · {timing.totalDurationSec}s total</p>
+                      <div className="relative h-6 rounded-md overflow-hidden border">
+                        {timing.totalDurationSec > 0 && (
+                          <>
+                            <div className="absolute inset-y-0 left-0 bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-[9px] font-medium text-blue-700 dark:text-blue-300" style={{ width: `${(timing.preContext.durationSec / timing.totalDurationSec) * 100}%` }}>
+                              {timing.preContext.durationSec > 3 ? `Pre ${timing.preContext.durationSec}s` : ""}
+                            </div>
+                            <div className="absolute inset-y-0 bg-orange-200 dark:bg-orange-900/50 flex items-center justify-center text-[9px] font-semibold text-orange-800 dark:text-orange-300 border-x border-orange-300" style={{ left: `${(timing.preContext.durationSec / timing.totalDurationSec) * 100}%`, width: `${(timing.mainHeatmap.durationSec / timing.totalDurationSec) * 100}%` }}>
+                              Peak {timing.mainHeatmap.durationSec}s{meta.peakSegment ? ` · ${(meta.peakSegment.avgHeat * 100).toFixed(0)}%` : ""}
+                            </div>
+                            <div className="absolute inset-y-0 right-0 bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-[9px] font-medium text-blue-700 dark:text-blue-300" style={{ width: `${(timing.postContext.durationSec / timing.totalDurationSec) * 100}%` }}>
+                              {timing.postContext.durationSec > 3 ? `Post ${timing.postContext.durationSec}s` : ""}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums px-0.5">
+                        <span>{fmtTime(timing.preContext.startSec)}</span>
+                        <span>{fmtTime(timing.mainHeatmap.startSec)} – {fmtTime(timing.mainHeatmap.endSec)}</span>
+                        <span>{fmtTime(timing.postContext.endSec)}</span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* Standard pipeline steps (non-clip-repurpose only) */}
+          {!isClipRepurpose && (
+            <Card>
+              <div className="px-4 py-3 border-b">
+                <h3 className="text-sm font-semibold">Pipeline steps</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Rerun voiceover, images, or image-to-video to regenerate; assembly and final video will be re-created automatically.
+                </p>
+              </div>
+              <CardContent className="p-4 space-y-2">
+                {[
+                  { key: "SCRIPT", label: "Script", status: "Generated", icon: FileText, canRerun: false },
+                  { key: "TTS", label: "Voiceover", status: "Generated", icon: Mic, canRerun: true },
+                  { key: "IMAGES", label: "Images", status: "Generated", icon: ImageIcon, canRerun: true },
+                  { key: "I2V", label: "Image-to-video", status: "Done", icon: Film, canRerun: true },
+                  { key: "ASSEMBLY", label: "Assembly", status: "Done", icon: Clapperboard, canRerun: false },
+                  { key: "UPLOADING", label: "Final video", status: "Done", icon: Upload, canRerun: false },
+                ].map(({ key, label, status, icon: Icon, canRerun }) => (
+                  <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                    <div className="flex items-center gap-2">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{label}</span>
+                      <span className="text-xs text-muted-foreground">— {status}</span>
+                    </div>
+                    {canRerun && (
+                      <div className="flex items-center gap-2">
+                        {key === "TTS" && providerData?.available?.tts?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunTtsProvider}
+                            onChange={(e) => setRerunTtsProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.available.tts.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {key === "IMAGES" && providerData?.available?.image?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunImageProvider}
+                            onChange={(e) => setRerunImageProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.available.image.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        {key === "I2V" && providerData?.imageToVideo?.all?.length ? (
+                          <select
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            value={rerunI2VProvider}
+                            onChange={(e) => setRerunI2VProvider(e.target.value)}
+                            disabled={rerunStep !== null}
+                          >
+                            {providerData.imageToVideo.all.filter((p) => p.id === "" || providerData.imageToVideo.availableIds.includes(p.id)).map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={rerunStep !== null}
+                          onClick={() => {
+                            const step = key as "TTS" | "IMAGES" | "I2V";
+                            const overrides = step === "TTS" ? { ttsProvider: rerunTtsProvider }
+                              : step === "IMAGES" ? { imageProvider: rerunImageProvider }
+                              : step === "I2V" ? { imageToVideoProvider: rerunI2VProvider }
+                              : undefined;
+                            handleRerunStep(step, overrides);
+                          }}
+                        >
+                          {rerunStep === key ? (
+                            <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> Rerunning...</>
+                          ) : (
+                            <><RefreshCw className="h-3.5 w-3.5 mr-1" /> Rerun this step</>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <div className="rounded-lg overflow-hidden bg-black shadow-xl">
             <video
@@ -1227,6 +1496,69 @@ export default function VideoDetailPage() {
             </Button>
           </div>
 
+          {/* Scheduled Post card */}
+          {video.scheduledPostTime && (() => {
+            const scheduled = (video.scheduledPlatforms ?? []) as string[];
+            if (scheduled.length === 0) return null;
+            const PLAT_META: Record<string, { label: string; icon: typeof Youtube; color: string }> = {
+              YOUTUBE: { label: "YouTube", icon: Youtube, color: "text-red-600" },
+              INSTAGRAM: { label: "Instagram", icon: Instagram, color: "text-pink-600" },
+              FACEBOOK: { label: "Facebook", icon: Facebook, color: "text-blue-600" },
+            };
+            const postTime = new Date(video.scheduledPostTime);
+            const isPast = postTime.getTime() <= Date.now();
+            const timeStr = postTime.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+            const dateStr = postTime.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            return (
+              <Card className="mt-4 border-amber-200 bg-amber-50/40">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-amber-600" />
+                      {isPast ? "Scheduled (posting soon)" : `Scheduled for ${timeStr} · ${dateStr}`}
+                    </h3>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-red-600 hover:text-red-700 text-xs"
+                      disabled={cancellingPlatforms.size > 0}
+                      onClick={() => handleCancelSchedule()}
+                    >
+                      {cancellingPlatforms.has("__all__") ? (
+                        <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Cancelling...</>
+                      ) : (
+                        <><XCircle className="mr-1 h-3 w-3" /> Cancel All</>
+                      )}
+                    </Button>
+                  </div>
+                  {scheduled.map((key) => {
+                    const meta = PLAT_META[key];
+                    if (!meta) return null;
+                    const Icon = meta.icon;
+                    return (
+                      <div key={key} className="flex items-center justify-between rounded-lg border border-amber-200 bg-white p-2.5">
+                        <div className="flex items-center gap-2">
+                          <Icon className={`h-4 w-4 ${meta.color}`} />
+                          <span className="text-sm">{meta.label}</span>
+                          <span className="text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">{timeStr}</span>
+                        </div>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          className="text-red-500 hover:text-red-600"
+                          disabled={cancellingPlatforms.has(key)}
+                          onClick={() => handleCancelSchedule([key])}
+                        >
+                          {cancellingPlatforms.has(key) ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
           {/* Per-platform publish card */}
           {(() => {
             const PLATFORMS = [
@@ -1237,7 +1569,7 @@ export default function VideoDetailPage() {
               { key: "MOJ", label: "Moj", icon: Smartphone, color: "text-amber-600" },
             ] as const;
 
-            type ServerEntry = { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; error?: string };
+            type ServerEntry = { platform: string; success?: boolean | "uploading" | "scheduled" | "deleted"; postId?: string; url?: string; error?: string; scheduledFor?: string };
             const postedRaw = (video.postedPlatforms ?? []) as (string | ServerEntry)[];
 
             const serverMap = new Map<string, ServerEntry>();
@@ -1258,7 +1590,7 @@ export default function VideoDetailPage() {
             const postablePlatforms = PLATFORMS.filter((p) => {
               const entry = serverMap.get(p.key);
               if (!entry) return connectedSet.has(p.key);
-              return entry.success === false && connectedSet.has(p.key);
+              return (entry.success === false || entry.success === "deleted") && connectedSet.has(p.key);
             });
 
             return (
@@ -1267,40 +1599,60 @@ export default function VideoDetailPage() {
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold">Publish</h3>
                     <div className="flex gap-2">
-                      {[...serverMap.values()].some((e) => e.success === true) && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-muted-foreground text-xs"
-                          disabled={resettingPlatforms.size > 0}
-                          onClick={() => handleResetPosted()}
-                        >
-                          {resettingPlatforms.size > 0 ? (
-                            <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Resetting...</>
-                          ) : (
-                            <><RefreshCw className="mr-1 h-3 w-3" /> Reset All</>
-                          )}
-                        </Button>
+                      {[...serverMap.values()].some((e) => e.success === true || e.success === "scheduled") && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-500 text-xs hover:text-red-600"
+                            disabled={deletingPlatforms.size > 0}
+                            onClick={() => handleDeleteFromPlatform()}
+                          >
+                            {deletingPlatforms.has("__all__") ? (
+                              <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Deleting...</>
+                            ) : (
+                              <><Trash2 className="mr-1 h-3 w-3" /> Delete All</>
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-muted-foreground text-xs"
+                            disabled={resettingPlatforms.size > 0}
+                            onClick={() => handleResetPosted()}
+                          >
+                            {resettingPlatforms.size > 0 ? (
+                              <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Resetting...</>
+                            ) : (
+                              <><RefreshCw className="mr-1 h-3 w-3" /> Reset All</>
+                            )}
+                          </Button>
+                        </>
                       )}
                       {postablePlatforms.length > 1 && (() => {
                         const anyServerFail = postablePlatforms.some((p) => serverMap.get(p.key)?.success === false);
                         const anyClientFail = postablePlatforms.some((p) => failedPublishes.has(p.key));
                         const anyFailed = anyServerFail || anyClientFail;
-                        return (
-                          <Button
-                            size="sm"
-                            variant={anyFailed ? "destructive" : "outline"}
-                            disabled={postablePlatforms.every((p) => publishingPlatforms.has(p.key))}
-                            onClick={() => handlePublishAll(postablePlatforms.filter((p) => !publishingPlatforms.has(p.key)).map((p) => p.key))}
-                          >
-                            {postablePlatforms.some((p) => publishingPlatforms.has(p.key)) ? (
-                              <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Publishing...</>
-                            ) : anyFailed ? (
-                              <><RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry All</>
-                            ) : (
-                              <><Send className="mr-1 h-3.5 w-3.5" /> Post to All</>
-                            )}
+                        const allBusy = postablePlatforms.every((p) => publishingPlatforms.has(p.key));
+                        const someBusy = postablePlatforms.some((p) => publishingPlatforms.has(p.key));
+                        const availableKeys = postablePlatforms.filter((p) => !publishingPlatforms.has(p.key)).map((p) => p.key);
+                        return someBusy ? (
+                          <Button size="sm" variant="outline" disabled>
+                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Scheduling...
                           </Button>
+                        ) : anyFailed ? (
+                          <Button size="sm" variant="destructive" disabled={allBusy} onClick={() => handlePublishAll(availableKeys)}>
+                            <RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry All
+                          </Button>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => handlePublishAll(availableKeys)}>
+                              <Clock className="mr-1 h-3.5 w-3.5" /> Schedule All
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => handlePublishAll(availableKeys, true)}>
+                              <Send className="mr-1 h-3.5 w-3.5" /> Post All Now
+                            </Button>
+                          </>
                         );
                       })()}
                     </div>
@@ -1309,15 +1661,17 @@ export default function VideoDetailPage() {
                   {PLATFORMS.map(({ key, label, icon: Icon, color }) => {
                     const entry = serverMap.get(key);
                     const isPosted = entry?.success === true;
+                    const isScheduled = entry?.success === "scheduled";
+                    const isDeleted = entry?.success === "deleted";
                     const isUploading = entry?.success === "uploading";
                     const isServerFailed = entry?.success === false;
-                    const postUrl = isPosted ? (entry.url ?? undefined) : undefined;
+                    const postUrl = (isPosted || isScheduled) ? (entry?.url ?? undefined) : undefined;
                     const connected = connectedSet.has(key);
                     const isPublishing = publishingPlatforms.has(key);
                     const clientFailError = failedPublishes.get(key);
                     const serverFailError = isServerFailed && entry?.error ? formatPlatformError(entry.error) : undefined;
                     const failError = clientFailError || serverFailError;
-                    const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted;
+                    const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted && !isScheduled;
                     const isEditingThisLink = editingLink === key;
                     const insightsRaw = (video as { insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> }).insights;
                     const platformInsights = insightsRaw?.[key] as { views?: number; likes?: number; comments?: number; reactions?: number } | undefined;
@@ -1327,7 +1681,9 @@ export default function VideoDetailPage() {
                     const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
 
                     let rowBg = "";
-                    if (isPosted) rowBg = "bg-green-50 border-green-200";
+                    if (isDeleted) rowBg = "bg-zinc-50 border-zinc-200";
+                    else if (isPosted) rowBg = "bg-green-50 border-green-200";
+                    else if (isScheduled) rowBg = "bg-blue-50 border-blue-200";
                     else if (isUploading || isPublishing) rowBg = "bg-blue-50/60 border-blue-200";
                     else if (hasFailed) rowBg = "bg-red-50/60 border-red-200";
 
@@ -1337,6 +1693,22 @@ export default function VideoDetailPage() {
                           <Icon className={`h-5 w-5 shrink-0 ${color}`} />
                           <div className="flex-1 min-w-0">
                             <span className="text-sm font-medium">{label}</span>
+                            {isScheduled && postUrl && (
+                              <div className="mt-0.5">
+                                <a href={postUrl} target="_blank" rel="noopener noreferrer"
+                                  className="text-xs text-blue-700 underline underline-offset-2 hover:text-blue-900 truncate">
+                                  {postUrl}
+                                </a>
+                              </div>
+                            )}
+                            {isScheduled && !postUrl && entry?.scheduledFor && (
+                              <p className="text-xs text-blue-600 mt-0.5">
+                                Will post at {new Date(entry.scheduledFor).toLocaleString()}
+                              </p>
+                            )}
+                            {isDeleted && (
+                              <p className="text-xs text-zinc-400 mt-0.5 line-through">Deleted</p>
+                            )}
                             {isPosted && postUrl && !isEditingThisLink && (
                               <div className="mt-0.5 space-y-1">
                                 <div className="flex items-center gap-1 min-w-0">
@@ -1380,22 +1752,89 @@ export default function VideoDetailPage() {
                                 )}
                               </div>
                             )}
-                            {(isUploading || isPublishing) && !isPosted && (
-                              <p className="text-xs text-blue-600 mt-0.5">Uploading to {label}...</p>
+                            {(isUploading || isPublishing) && !isPosted && !isScheduled && (
+                              <p className="text-xs text-blue-600 mt-0.5">Scheduling on {label}...</p>
                             )}
                             {hasFailed && failError && (
                               <p className="text-xs text-red-600 mt-0.5">{failError}</p>
                             )}
-                            {!connected && !isPosted && !isUploading && !hasFailed && (
+                            {!connected && !isPosted && !isScheduled && !isDeleted && !isUploading && !hasFailed && (
                               <p className="text-xs text-muted-foreground">Not connected</p>
                             )}
                           </div>
                           <div className="shrink-0">
-                            {isPosted ? (
+                            {isDeleted ? (
+                              <div className="flex items-center gap-2">
+                                <span className="flex items-center gap-1 text-xs text-zinc-400 font-medium">
+                                  <Trash2 className="h-4 w-4" /> Deleted
+                                </span>
+                                {connected && !isPublishing && (
+                                  <>
+                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                      <Clock className="h-3.5 w-3.5" /> Schedule
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                      <Send className="h-3.5 w-3.5" /> Post Now
+                                    </Button>
+                                  </>
+                                )}
+                                {connected && isPublishing && (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                                )}
+                              </div>
+                            ) : isScheduled ? (
+                              <div className="flex items-center gap-2">
+                                <span className="flex items-center gap-1 text-xs text-blue-700 font-medium">
+                                  <Clock className="h-4 w-4" /> Scheduled
+                                </span>
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-red-400 hover:text-red-600"
+                                  disabled={cancellingPlatforms.has(key) || cancellingPlatforms.has("__all__")}
+                                  onClick={() => handleCancelSchedule([key])}
+                                  title="Cancel scheduled post"
+                                >
+                                  {cancellingPlatforms.has(key) ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-3 w-3" />
+                                  )}
+                                </Button>
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-muted-foreground hover:text-foreground"
+                                  disabled={resettingPlatforms.has(key) || isPublishing}
+                                  onClick={() => handleResetPosted([key])}
+                                  title="Reset to re-schedule"
+                                >
+                                  {resettingPlatforms.has(key) ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                </Button>
+                              </div>
+                            ) : isPosted ? (
                               <div className="flex items-center gap-2">
                                 <span className="flex items-center gap-1 text-xs text-green-700 font-medium">
                                   <CheckCircle2 className="h-4 w-4" /> Posted
                                 </span>
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-red-400 hover:text-red-600"
+                                  disabled={deletingPlatforms.has(key) || deletingPlatforms.has("__all__")}
+                                  onClick={() => handleDeleteFromPlatform([key])}
+                                  title="Delete from platform"
+                                >
+                                  {deletingPlatforms.has(key) ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-3 w-3" />
+                                  )}
+                                </Button>
                                 <Button
                                   size="icon-xs"
                                   variant="ghost"
@@ -1413,25 +1852,27 @@ export default function VideoDetailPage() {
                               </div>
                             ) : isUploading || isPublishing ? (
                               <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
                               </span>
                             ) : connected ? (
-                              <Button
-                                size="sm"
-                                variant={hasFailed ? "destructive" : "outline"}
-                                className={hasFailed ? "gap-1.5" : ""}
-                                disabled={isPublishing}
-                                onClick={() => handlePublishPlatform(key)}
-                                title={hasFailed ? failError : undefined}
-                              >
+                              <div className="flex items-center gap-1.5">
                                 {isPublishing ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
                                 ) : hasFailed ? (
-                                  <><RefreshCw className="h-3.5 w-3.5" /> Retry</>
+                                  <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => handlePublishPlatform(key)} title={failError}>
+                                    <RefreshCw className="h-3.5 w-3.5" /> Retry
+                                  </Button>
                                 ) : (
-                                  <><Send className="mr-1 h-3.5 w-3.5" /> Post</>
+                                  <>
+                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                      <Clock className="h-3.5 w-3.5" /> Schedule
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                      <Send className="h-3.5 w-3.5" /> Post Now
+                                    </Button>
+                                  </>
                                 )}
-                              </Button>
+                              </div>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>
                             )}
