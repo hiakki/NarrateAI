@@ -211,6 +211,7 @@ model Automation {
   includeAiTags      Boolean       @default(false)
   crossPlatformOnly  Boolean       @default(false)
   enableBgm          Boolean       @default(true)
+  enableHflip        Boolean       @default(false)
   frequency          String        @default("daily")
   postTime        String        @default("09:00")
   timezone        String

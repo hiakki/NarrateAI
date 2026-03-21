@@ -109,6 +109,7 @@ export interface ClipRepurposeJobData {
     creditOriginal: boolean;
     preferPlatform?: "youtube" | "facebook" | "instagram";
     enableBgm?: boolean;
+    enableHflip?: boolean;
   };
   targetPlatforms: string[];
 }

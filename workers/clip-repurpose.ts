@@ -258,6 +258,7 @@ const worker = new Worker<ClipRepurposeJobData>(
         croppedPath,
         peak,
         clipConfig.cropMode || "blur-bg",
+        clipConfig.enableHflip ?? false,
       );
 
       // ── Stage 5: ENHANCE (captions + blur + hook text) ──

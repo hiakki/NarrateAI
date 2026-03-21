@@ -63,6 +63,7 @@ interface ClipAutomation {
   includeAiTags: boolean;
   crossPlatformOnly: boolean;
   enableBgm: boolean;
+  enableHflip: boolean;
   clipConfig: {
     clipNiche: string;
     clipDurationSec: number;
@@ -190,8 +191,8 @@ export default function ClipRepurposePage() {
   const [editForm, setEditForm] = useState<{
     name: string; clipNiche: string; clipDurationSec: number; cropMode: string;
     targetPlatforms: Set<string>; frequency: string; postTime: string;
-    includeAiTags: boolean; crossPlatformOnly: boolean; enableBgm: boolean;
-  }>({ name: "", clipNiche: "auto", clipDurationSec: 45, cropMode: "blur-bg", targetPlatforms: new Set(), frequency: "daily", postTime: "10:00", includeAiTags: false, crossPlatformOnly: false, enableBgm: true });
+    includeAiTags: boolean; crossPlatformOnly: boolean; enableBgm: boolean; enableHflip: boolean;
+  }>({ name: "", clipNiche: "auto", clipDurationSec: 45, cropMode: "blur-bg", targetPlatforms: new Set(), frequency: "daily", postTime: "10:00", includeAiTags: false, crossPlatformOnly: false, enableBgm: true, enableHflip: false });
 
   const [formName, setFormName] = useState("Viral Clips");
   const [formNiche, setFormNiche] = useState("auto");
@@ -201,6 +202,7 @@ export default function ClipRepurposePage() {
   const [formIncludeAiTags, setFormIncludeAiTags] = useState(false);
   const [formCrossPlatformOnly, setFormCrossPlatformOnly] = useState(false);
   const [formEnableBgm, setFormEnableBgm] = useState(true);
+  const [formEnableHflip, setFormEnableHflip] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
@@ -314,6 +316,7 @@ export default function ClipRepurposePage() {
           includeAiTags: formIncludeAiTags,
           crossPlatformOnly: formCrossPlatformOnly,
           enableBgm: formEnableBgm,
+          enableHflip: formEnableHflip,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         }),
       });
@@ -339,6 +342,7 @@ export default function ClipRepurposePage() {
       includeAiTags: auto.includeAiTags ?? false,
       crossPlatformOnly: auto.crossPlatformOnly ?? false,
       enableBgm: auto.enableBgm ?? true,
+      enableHflip: auto.enableHflip ?? false,
     });
   };
 
@@ -362,6 +366,7 @@ export default function ClipRepurposePage() {
           includeAiTags: editForm.includeAiTags,
           crossPlatformOnly: editForm.crossPlatformOnly,
           enableBgm: editForm.enableBgm,
+          enableHflip: editForm.enableHflip,
         }),
       });
       setEditingId(null);
@@ -866,6 +871,11 @@ export default function ClipRepurposePage() {
                     onCheckedChange={(v) => setEditForm((p) => ({ ...p, enableBgm: v }))} />
                 </div>
                 <div className="flex items-center justify-between">
+                  <Label className="text-[11px] font-medium text-muted-foreground">Horizontal flip (mirror)</Label>
+                  <Switch size="sm" checked={editForm.enableHflip}
+                    onCheckedChange={(v) => setEditForm((p) => ({ ...p, enableHflip: v }))} />
+                </div>
+                <div className="flex items-center justify-between">
                   <Label className="text-[11px] font-medium text-muted-foreground">Include AI tags</Label>
                   <Switch size="sm" checked={editForm.includeAiTags}
                     onCheckedChange={(v) => setEditForm((p) => ({ ...p, includeAiTags: v }))} />
@@ -1313,6 +1323,13 @@ export default function ClipRepurposePage() {
                   <p className="text-xs text-muted-foreground">Mix royalty-free BGM underneath to further break audio fingerprints</p>
                 </div>
                 <Switch checked={formEnableBgm} onCheckedChange={setFormEnableBgm} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Horizontal flip (mirror)</Label>
+                  <p className="text-xs text-muted-foreground">Mirror the video horizontally — flips text and logos, rarely needed</p>
+                </div>
+                <Switch checked={formEnableHflip} onCheckedChange={setFormEnableHflip} />
               </div>
               <div className="flex items-center justify-between">
                 <div>

@@ -75,6 +75,7 @@ export async function POST(req: NextRequest) {
       includeAiTags?: boolean;
       crossPlatformOnly?: boolean;
       enableBgm?: boolean;
+      enableHflip?: boolean;
     };
 
     if (body.action === "stop" && body.automationId) {
@@ -124,6 +125,7 @@ export async function POST(req: NextRequest) {
           ...(body.includeAiTags !== undefined ? { includeAiTags: body.includeAiTags } : {}),
           ...(body.crossPlatformOnly !== undefined ? { crossPlatformOnly: body.crossPlatformOnly } : {}),
           ...(body.enableBgm !== undefined ? { enableBgm: body.enableBgm } : {}),
+          ...(body.enableHflip !== undefined ? { enableHflip: body.enableHflip } : {}),
           clipConfig: updatedClipConfig,
         },
       });
@@ -223,6 +225,7 @@ export async function POST(req: NextRequest) {
           cropMode: (clipConfig.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
           creditOriginal: true,
           enableBgm: auto.enableBgm,
+          enableHflip: auto.enableHflip,
         },
         targetPlatforms,
       });
@@ -258,6 +261,7 @@ export async function POST(req: NextRequest) {
         includeAiTags: body.includeAiTags ?? false,
         crossPlatformOnly: body.crossPlatformOnly ?? false,
         enableBgm: body.enableBgm ?? true,
+        enableHflip: body.enableHflip ?? false,
         frequency: body.frequency ?? "daily",
         postTime: body.postTime ?? "10:00",
         timezone: body.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
