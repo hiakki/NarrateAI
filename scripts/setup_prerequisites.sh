@@ -316,7 +316,7 @@ restore_backup() {
   bash "$SCRIPT_DIR/backup-restore.sh" restore "$archive" --yes
 }
 
-# ── Prepare project (deps + schema only) ──────────────────────────────────────
+# ── Prepare project (deps + schema) ───────────────────────────────────────────
 prepare_project() {
   step "Preparing project (dependencies + schema)"
   cd "$PROJECT_DIR"
@@ -386,7 +386,7 @@ start_app() {
   cd "$PROJECT_DIR"
   generate_pm2_config
 
-  pm2 delete narrateai-web narrateai-worker narrateai-scheduler 2>/dev/null || true
+  pm2 delete narrateai-web narrateai-worker narrateai-clip-worker narrateai-scheduler 2>/dev/null || true
   pm2 start "$PM2_ECOSYSTEM"
   ok "Application started via PM2"
 
@@ -494,7 +494,7 @@ do_status() {
 main() {
   local skip_prereqs=false
   local restore_file=""
-  local action="deploy"
+  local action="setup"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -504,11 +504,11 @@ main() {
       --status)       action="status"; shift ;;
       --help|-h)
         echo ""
-        echo "NarrateAI Deployment Script"
+        echo "NarrateAI Setup Script"
         echo ""
         echo "Usage:"
-        echo "  $0                                      Fresh deployment"
-        echo "  $0 --restore <backup.tar.gz>            Deploy and restore from backup"
+        echo "  $0                                      Full setup (prereqs + deps + schema)"
+        echo "  $0 --restore <backup.tar.gz>            Setup and restore from backup"
         echo "  $0 --skip-prereqs                       Skip prerequisite installation"
         echo "  $0 --skip-prereqs --restore <file>      Restore without installing"
         echo "  $0 --stop                               Stop all NarrateAI services"
@@ -592,10 +592,11 @@ main() {
   echo ""
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo -e "${GREEN}  Setup complete.${NC}"
-  echo -e "${GREEN}  Run app:           pnpm dev:all${NC}"
-  echo -e "${GREEN}  Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)${NC}"
-  echo -e "${GREEN}  (Dev deprecation warning suppressed. Localtunnel not used.)${NC}"
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+  echo ""
+  echo "  Development:    pnpm dev:all"
+  echo "  Production:     ./scripts/setup_prerequisites.sh --deploy"
+  echo "  Stop:           ./scripts/setup_prerequisites.sh --stop"
   echo ""
 }
 
