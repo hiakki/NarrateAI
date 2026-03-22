@@ -137,6 +137,9 @@ const NICHE_YT_HANDLES: Record<ClipNiche, string[]> = {
   motivation: [
     "https://www.youtube.com/@TEDEd",
     "https://www.youtube.com/@Goalcast",
+    "https://www.youtube.com/@MotivationHub",
+    "https://www.youtube.com/@TomBilyeu",
+    "https://www.youtube.com/@BrianTracey",
   ],
   comedy: [
     "https://www.youtube.com/@failarmy",
@@ -254,8 +257,28 @@ function getChannelsForNiche(niche: ClipNiche): { yt: string[]; fb: string[]; ig
   const fb = [...(NICHE_FB_PAGES[niche] ?? [])];
   const ig = [...(NICHE_IG_PROFILES[niche] ?? [])];
   if (yt.length < 3) {
-    for (const ch of NICHE_YT_HANDLES.entertainment) {
-      if (!yt.includes(ch)) yt.push(ch);
+    const related: Record<string, ClipNiche[]> = {
+      motivation: ["education"],
+      education: ["motivation", "science"],
+      science: ["education", "nature"],
+      nature: ["science", "travel"],
+      travel: ["nature", "food"],
+      food: ["travel"],
+      comedy: ["entertainment"],
+      news: ["education"],
+      music: ["entertainment"],
+      sports: ["entertainment"],
+      gaming: ["entertainment"],
+      films: ["entertainment", "anime"],
+      anime: ["films", "gaming"],
+      serials: ["films"],
+    };
+    const fallbackNiches = related[niche] ?? ["entertainment"];
+    for (const fn of fallbackNiches) {
+      for (const ch of NICHE_YT_HANDLES[fn] ?? []) {
+        if (!yt.includes(ch)) yt.push(ch);
+        if (yt.length >= 5) break;
+      }
       if (yt.length >= 5) break;
     }
   }
@@ -717,7 +740,7 @@ export async function discoverVideo(config: {
       score += 5;
     }
 
-    // Niche relevance scoring: boost matching titles, penalize off-topic content
+    // Niche relevance scoring: strongly boost on-topic, heavily penalize off-topic
     if (config.niche !== "auto" && config.niche !== "viral-repost") {
       const titleLower = (v.title || "").toLowerCase();
       const nicheSignals: Record<string, { positive: string[]; negative: string[] }> = {
@@ -747,15 +770,18 @@ export async function discoverVideo(config: {
                          negative: ["gaming", "recipe", "anime", "comedy"] },
         education:     { positive: ["learn", "explain", "how to", "tutorial", "history", "fact", "lesson", "course", "guide"],
                          negative: ["gaming", "prank", "comedy", "meme"] },
-        motivation:    { positive: ["motivat", "inspir", "success", "speech", "mindset", "discipline", "hustle", "grind", "self help", "productiv"],
-                         negative: ["gaming", "prank", "comedy", "meme", "recipe"] },
+        motivation:    { positive: ["motivat", "inspir", "success", "speech", "mindset", "discipline", "hustle", "grind", "self help", "productiv", "goal", "dream", "believe", "never give up", "persever", "resilien"],
+                         negative: ["gaming", "prank", "comedy", "meme", "recipe", "futuristic", "vs ", "$1 vs", "gameplay"] },
         music:         { positive: ["music", "song", "dance", "singer", "concert", "cover", "beat", "rap", "dj", "perform", "choreograph"],
                          negative: ["gaming", "recipe", "news", "documentary"] },
       };
       const signals = nicheSignals[config.niche];
       if (signals) {
-        if (signals.positive.some((kw) => titleLower.includes(kw))) score += 10;
-        if (signals.negative.some((kw) => titleLower.includes(kw))) score -= 15;
+        const hasPositive = signals.positive.some((kw) => titleLower.includes(kw));
+        const hasNegative = signals.negative.some((kw) => titleLower.includes(kw));
+        if (hasPositive) score += 25;
+        if (hasNegative) score -= 40;
+        if (!hasPositive && !hasNegative) score -= 10;
       }
     }
 
