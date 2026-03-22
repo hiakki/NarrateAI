@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { createLogger } from "@/lib/logger";
 import { getCookieFilePath } from "@/lib/cookie-path";
-import { discoverFbPageVideos, discoverIgReels, type ScrapedVideo } from "./browser-scraper";
+import { discoverFbPageVideos, discoverIgReels } from "./browser-scraper";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipDiscovery");
@@ -19,7 +19,10 @@ export interface DiscoveredVideo {
   publishedAt: string;
   durationSec: number;
   platform: Platform;
-  source: "channel" | "trending" | "creative-commons" | "direct";
+  source: "search" | "channel" | "trending" | "creative-commons" | "direct";
+  likeCount?: number;
+  commentCount?: number;
+  licensedContent?: boolean;
 }
 
 export interface DiscoveryResult {
@@ -55,250 +58,85 @@ export const CLIP_NICHES: Record<ClipNiche, { label: string; description: string
   auto:          { label: "Auto (All Niches)", description: "Mix from all trending content", icon: "🔄" },
 };
 
-// Viral compilation / repost-friendly creators (no overlap with entertainment niche)
-const NON_COPYRIGHT_YT = [
-  "https://www.youtube.com/@MarkRober",
-  "https://www.youtube.com/@DailyDoseOfInternet",
-  "https://www.youtube.com/@RyanTrahan",
-  "https://www.youtube.com/@ZHCCrafts",
-  "https://www.youtube.com/@SteveWillDoIt",
-];
-
-// YouTube handles — yt-dlp can scrape these directly (RSS feeds are dead)
-const NICHE_YT_HANDLES: Record<ClipNiche, string[]> = {
-  "viral-repost": [
-    ...NON_COPYRIGHT_YT,
-    "https://www.youtube.com/@ViralHog",
-    "https://www.youtube.com/@PeopleAreAwesome",
-  ],
-  films: [
-    "https://www.youtube.com/@MovieclipsTRAILERS",
-    "https://www.youtube.com/@Movieclips",
-    "https://www.youtube.com/@RottenTomatoesTrailers",
-    "https://www.youtube.com/@ScreenCulture",
-  ],
-  anime: [
-    "https://www.youtube.com/@Crunchyroll",
-    "https://www.youtube.com/@Maboroshi",
-    "https://www.youtube.com/@Funimation",
-  ],
-  serials: [
-    "https://www.youtube.com/@netflix",
-    "https://www.youtube.com/@PrimeVideoIN",
-    "https://www.youtube.com/@HBO",
-    "https://www.youtube.com/@DisneyPlusHotstar",
-  ],
-  entertainment: [
-    "https://www.youtube.com/@MrBeast",
-    "https://www.youtube.com/@dudeperfect",
-    "https://www.youtube.com/@Airrack",
-    "https://www.youtube.com/@BenAzelart",
-    "https://www.youtube.com/@SSSniperWolf",
-    "https://www.youtube.com/@prestonplayz",
-    "https://www.youtube.com/@RedBull",
-  ],
-  nature: [
-    "https://www.youtube.com/@NatGeo",
-    "https://www.youtube.com/@BBCEarth",
-    "https://www.youtube.com/@TheDodo",
-  ],
-  science: [
-    "https://www.youtube.com/@veritasium",
-    "https://www.youtube.com/@kurzgesagt",
-    "https://www.youtube.com/@smartereveryday",
-    "https://www.youtube.com/@NASA",
-  ],
-  sports: [
-    "https://www.youtube.com/@ESPN",
-    "https://www.youtube.com/@AdrenalineAddiction",
-    "https://www.youtube.com/@HouseofHighlights",
-  ],
-  gaming: [
-    "https://www.youtube.com/@GameGrumps",
-    "https://www.youtube.com/@IGN",
-  ],
-  food: [
-    "https://www.youtube.com/@BabishCulinaryUniverse",
-    "https://www.youtube.com/@JoshuaWeissman",
-  ],
-  travel: [
-    "https://www.youtube.com/@VICE",
-    "https://www.youtube.com/@Insider",
-  ],
-  news: [
-    "https://www.youtube.com/@Insider",
-    "https://www.youtube.com/@VICE",
-  ],
-  education: [
-    "https://www.youtube.com/@TEDEd",
-    "https://www.youtube.com/@khanacademy",
-    "https://www.youtube.com/@CGPGrey",
-  ],
-  motivation: [
-    "https://www.youtube.com/@TEDEd",
-    "https://www.youtube.com/@Goalcast",
-    "https://www.youtube.com/@MotivationHub",
-    "https://www.youtube.com/@TomBilyeu",
-    "https://www.youtube.com/@BrianTracey",
-  ],
-  comedy: [
-    "https://www.youtube.com/@failarmy",
-    "https://www.youtube.com/@JustForLaughsGags",
-    "https://www.youtube.com/@LADbible",
-  ],
-  music: [],
-  auto: [],
+// ── Primary: niche → YouTube search queries (yt-dlp ytsearch:) ──────────────
+const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
+  "viral-repost": ["viral video this week no copyright", "free to repost viral video"],
+  films:         ["iconic movie scene", "film trailer reaction trending"],
+  anime:         ["anime fight scene epic", "anime emotional moment viral"],
+  serials:       ["tv show best scene", "series clip trending"],
+  entertainment: ["viral challenge insane", "amazing stunts unbelievable"],
+  nature:        ["wildlife amazing moment", "nature documentary breathtaking"],
+  science:       ["science experiment mind blowing", "space discovery new"],
+  sports:        ["sports highlight this week", "best goal incredible play"],
+  gaming:        ["gaming clutch moment viral", "esports best play highlight"],
+  food:          ["street food viral", "cooking challenge amazing"],
+  travel:        ["travel hidden gem beautiful", "amazing destination explore"],
+  news:          ["breaking news analysis today", "world event explained"],
+  education:     ["explained viral how things work", "mind blowing facts"],
+  motivation:    ["motivational speech powerful", "success story inspiring never give up"],
+  comedy:        ["funny viral video", "comedy sketch hilarious"],
+  music:         ["music performance viral amazing", "dance trending choreography"],
+  auto:          ["trending viral video today", "most viewed video this week"],
 };
 
-const NICHE_FB_PAGES: Record<ClipNiche, string[]> = {
-  "viral-repost": [
-    "https://www.facebook.com/DailyDoseOfInternet/videos/",
-    "https://www.facebook.com/ViralHog/videos/",
-    "https://www.facebook.com/PeopleAreAwesome/videos/",
-  ],
-  films: [
-    "https://www.facebook.com/UniversalPictures/videos/",
-    "https://www.facebook.com/WarnerBrosPictures/videos/",
-    "https://www.facebook.com/MarvelEntertainment/videos/",
-    "https://www.facebook.com/SonyPictures/videos/",
-  ],
-  anime: [
-    "https://www.facebook.com/Crunchyroll/videos/",
-    "https://www.facebook.com/funimation/videos/",
-  ],
-  serials: [
-    "https://www.facebook.com/netflix/videos/",
-    "https://www.facebook.com/PrimeVideoIN/videos/",
-    "https://www.facebook.com/HBO/videos/",
-    "https://www.facebook.com/DisneyPlus/videos/",
-  ],
-  entertainment: [
-    "https://www.facebook.com/MrBeast6000/videos/",
-    "https://www.facebook.com/DudePerfect/videos/",
-    "https://www.facebook.com/RedBull/videos/",
-  ],
-  nature: ["https://www.facebook.com/NatGeo/videos/", "https://www.facebook.com/BBCEarth/videos/"],
-  science: ["https://www.facebook.com/NASAEarth/videos/", "https://www.facebook.com/ScienceChannel/videos/"],
-  sports: ["https://www.facebook.com/ESPN/videos/", "https://www.facebook.com/SportsCenter/videos/"],
-  gaming: ["https://www.facebook.com/IGN/videos/"],
-  food: ["https://www.facebook.com/BuzzFeedTasty/videos/", "https://www.facebook.com/5min.crafts/videos/"],
-  travel: ["https://www.facebook.com/viralthread/videos/", "https://www.facebook.com/beautifuldestinations/videos/"],
-  news: ["https://www.facebook.com/NowThisNews/videos/"],
-  education: ["https://www.facebook.com/TEDEd/videos/", "https://www.facebook.com/BrightSide/videos/"],
-  motivation: ["https://www.facebook.com/Goalcast/videos/"],
-  comedy: ["https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/BoredPanda/videos/", "https://www.facebook.com/FailArmy/videos/", "https://www.facebook.com/LADbible/videos/"],
-  music: [],
-  auto: [
-    "https://www.facebook.com/ViralHog/videos/",
-    "https://www.facebook.com/9GAG/videos/",
-    "https://www.facebook.com/NatGeo/videos/",
-    "https://www.facebook.com/ESPN/videos/",
-  ],
+// ── Fallback: YT channel lists (only used when search returns < 5 results) ──
+const NICHE_YT_HANDLES: Partial<Record<ClipNiche, string[]>> = {
+  "viral-repost": ["https://www.youtube.com/@DailyDoseOfInternet", "https://www.youtube.com/@ViralHog", "https://www.youtube.com/@PeopleAreAwesome"],
+  entertainment:  ["https://www.youtube.com/@MrBeast", "https://www.youtube.com/@dudeperfect", "https://www.youtube.com/@Airrack"],
+  nature:         ["https://www.youtube.com/@NatGeo", "https://www.youtube.com/@BBCEarth", "https://www.youtube.com/@TheDodo"],
+  science:        ["https://www.youtube.com/@veritasium", "https://www.youtube.com/@kurzgesagt"],
+  sports:         ["https://www.youtube.com/@ESPN", "https://www.youtube.com/@HouseofHighlights"],
+  comedy:         ["https://www.youtube.com/@failarmy", "https://www.youtube.com/@LADbible"],
+  motivation:     ["https://www.youtube.com/@Goalcast", "https://www.youtube.com/@MotivationHub"],
+  education:      ["https://www.youtube.com/@TEDEd", "https://www.youtube.com/@khanacademy"],
+  food:           ["https://www.youtube.com/@BabishCulinaryUniverse"],
 };
 
-const NICHE_IG_PROFILES: Record<ClipNiche, string[]> = {
-  "viral-repost": [
-    "https://www.instagram.com/dailydoseofinternet/",
-    "https://www.instagram.com/markrober/",
-    "https://www.instagram.com/viralhog/",
-    "https://www.instagram.com/peopleareawesome/",
-  ],
-  films: [
-    "https://www.instagram.com/universalpictures/",
-    "https://www.instagram.com/warnerbros/",
-    "https://www.instagram.com/marvelstudios/",
-    "https://www.instagram.com/a24/",
-  ],
-  anime: [
-    "https://www.instagram.com/crunchyroll/",
-    "https://www.instagram.com/funimation/",
-  ],
-  serials: [
-    "https://www.instagram.com/netflix/",
-    "https://www.instagram.com/primevideo/",
-    "https://www.instagram.com/hbo/",
-    "https://www.instagram.com/disneyplus/",
-  ],
-  entertainment: [
-    "https://www.instagram.com/mrbeast/",
-    "https://www.instagram.com/dudeperfect/",
-    "https://www.instagram.com/redbull/",
-  ],
-  nature: ["https://www.instagram.com/natgeo/", "https://www.instagram.com/bbcearth/"],
-  science: ["https://www.instagram.com/nasa/", "https://www.instagram.com/sciencechannel/"],
-  sports: ["https://www.instagram.com/espn/", "https://www.instagram.com/sportscenter/"],
-  gaming: ["https://www.instagram.com/ign/"],
-  food: ["https://www.instagram.com/buzzfeedtasty/"],
-  travel: ["https://www.instagram.com/beautifuldestinations/"],
-  news: ["https://www.instagram.com/nowthis/"],
-  education: ["https://www.instagram.com/tikitoktoptips/", "https://www.instagram.com/ted/"],
-  motivation: ["https://www.instagram.com/goalcast/"],
-  comedy: ["https://www.instagram.com/9gag/", "https://www.instagram.com/failarmy/", "https://www.instagram.com/ladbible/"],
-  music: [],
-  auto: [
-    "https://www.instagram.com/viralhog/",
-    "https://www.instagram.com/9gag/",
-    "https://www.instagram.com/natgeo/",
-    "https://www.instagram.com/espn/",
-  ],
+// FB/IG pages — kept for cross-platform discovery (safer for reposting to YT)
+const NICHE_FB_PAGES: Partial<Record<ClipNiche, string[]>> = {
+  "viral-repost": ["https://www.facebook.com/DailyDoseOfInternet/videos/", "https://www.facebook.com/ViralHog/videos/", "https://www.facebook.com/PeopleAreAwesome/videos/"],
+  entertainment:  ["https://www.facebook.com/MrBeast6000/videos/", "https://www.facebook.com/DudePerfect/videos/", "https://www.facebook.com/RedBull/videos/"],
+  nature:         ["https://www.facebook.com/NatGeo/videos/", "https://www.facebook.com/BBCEarth/videos/"],
+  science:        ["https://www.facebook.com/NASAEarth/videos/"],
+  sports:         ["https://www.facebook.com/ESPN/videos/"],
+  food:           ["https://www.facebook.com/BuzzFeedTasty/videos/"],
+  education:      ["https://www.facebook.com/TEDEd/videos/", "https://www.facebook.com/BrightSide/videos/"],
+  motivation:     ["https://www.facebook.com/Goalcast/videos/"],
+  comedy:         ["https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/FailArmy/videos/", "https://www.facebook.com/LADbible/videos/"],
+};
+
+const NICHE_IG_PROFILES: Partial<Record<ClipNiche, string[]>> = {
+  "viral-repost": ["https://www.instagram.com/dailydoseofinternet/", "https://www.instagram.com/viralhog/", "https://www.instagram.com/peopleareawesome/"],
+  entertainment:  ["https://www.instagram.com/mrbeast/", "https://www.instagram.com/dudeperfect/", "https://www.instagram.com/redbull/"],
+  nature:         ["https://www.instagram.com/natgeo/", "https://www.instagram.com/bbcearth/"],
+  science:        ["https://www.instagram.com/nasa/"],
+  sports:         ["https://www.instagram.com/espn/"],
+  food:           ["https://www.instagram.com/buzzfeedtasty/"],
+  education:      ["https://www.instagram.com/ted/"],
+  motivation:     ["https://www.instagram.com/goalcast/"],
+  comedy:         ["https://www.instagram.com/9gag/", "https://www.instagram.com/failarmy/", "https://www.instagram.com/ladbible/"],
 };
 
 function getChannelsForNiche(niche: ClipNiche): { yt: string[]; fb: string[]; ig: string[] } {
+  const fb = [...(NICHE_FB_PAGES[niche] ?? [])];
+  const ig = [...(NICHE_IG_PROFILES[niche] ?? [])];
   if (niche === "auto") {
     const allYt = Object.values(NICHE_YT_HANDLES).flat();
     const allFb = Object.values(NICHE_FB_PAGES).flat();
     const allIg = Object.values(NICHE_IG_PROFILES).flat();
-    const uniqueYt = [...new Set(allYt)];
-    const uniqueFb = [...new Set(allFb)];
-    const uniqueIg = [...new Set(allIg)];
-    return { yt: uniqueYt.sort(() => Math.random() - 0.5).slice(0, 8), fb: uniqueFb.slice(0, 3), ig: uniqueIg.slice(0, 2) };
-  }
-  const yt = [...(NICHE_YT_HANDLES[niche] ?? [])];
-  const fb = [...(NICHE_FB_PAGES[niche] ?? [])];
-  const ig = [...(NICHE_IG_PROFILES[niche] ?? [])];
-  if (yt.length < 3) {
-    const related: Record<string, ClipNiche[]> = {
-      motivation: ["education"],
-      education: ["motivation", "science"],
-      science: ["education", "nature"],
-      nature: ["science", "travel"],
-      travel: ["nature", "food"],
-      food: ["travel"],
-      comedy: ["entertainment"],
-      news: ["education"],
-      music: ["entertainment"],
-      sports: ["entertainment"],
-      gaming: ["entertainment"],
-      films: ["entertainment", "anime"],
-      anime: ["films", "gaming"],
-      serials: ["films"],
+    return {
+      yt: [...new Set(allYt)].sort(() => Math.random() - 0.5).slice(0, 5),
+      fb: [...new Set(allFb)].slice(0, 3),
+      ig: [...new Set(allIg)].slice(0, 2),
     };
-    const fallbackNiches = related[niche] ?? ["entertainment"];
-    for (const fn of fallbackNiches) {
-      for (const ch of NICHE_YT_HANDLES[fn] ?? []) {
-        if (!yt.includes(ch)) yt.push(ch);
-        if (yt.length >= 5) break;
-      }
-      if (yt.length >= 5) break;
-    }
   }
-  return { yt: yt.sort(() => Math.random() - 0.5), fb, ig };
+  return { yt: [...(NICHE_YT_HANDLES[niche] ?? [])], fb, ig };
 }
 
-const YT_RSS_BASE = "https://www.youtube.com/feeds/videos.xml";
 const YT_API_BASE = "https://www.googleapis.com/youtube/v3";
 
 function getYouTubeApiKey(): string | undefined {
   return process.env.YOUTUBE_API_KEY;
-}
-
-function detectPlatform(url: string): Platform {
-  if (/youtube\.com|youtu\.be/i.test(url)) return "youtube";
-  if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return "facebook";
-  if (/instagram\.com|instagr\.am/i.test(url)) return "instagram";
-  if (/tiktok\.com/i.test(url)) return "tiktok";
-  if (/twitter\.com|x\.com/i.test(url)) return "twitter";
-  return "other";
 }
 
 function findYtDlp(): string {
@@ -320,6 +158,7 @@ interface YtDlpEntry {
   channel_id: string;
   upload_date: string;
   extractor_key: string;
+  live_status: string;
 }
 
 /**
@@ -351,10 +190,23 @@ async function discoverViaYtDlp(
     });
 
     const entries: YtDlpEntry[] = [];
+    const NOT_DOWNLOADABLE = new Set(["is_upcoming", "is_live", "post_live"]);
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    let skipped = 0;
     for (const line of stdout.split("\n")) {
       if (!line.trim()) continue;
       try {
         const data = JSON.parse(line) as Record<string, unknown>;
+
+        const liveStatus = String(data.live_status ?? "");
+        if (NOT_DOWNLOADABLE.has(liveStatus) || data.is_live === true) { skipped++; continue; }
+
+        const releaseTs = Number(data.release_timestamp ?? 0);
+        if (releaseTs > nowEpoch) { skipped++; continue; }
+
+        const avail = String(data.availability ?? "");
+        if (avail === "needs_auth" || avail === "premium_only" || avail === "subscriber_only") { skipped++; continue; }
+
         entries.push({
           id: String(data.id ?? ""),
           title: String(data.title ?? ""),
@@ -366,18 +218,46 @@ async function discoverViaYtDlp(
           channel_id: String(data.channel_id ?? data.uploader_id ?? ""),
           upload_date: String(data.upload_date ?? ""),
           extractor_key: String(data.extractor_key ?? data.ie_key ?? ""),
+          live_status: liveStatus,
         });
       } catch {
         // skip malformed lines
       }
     }
 
-    log.log(`yt-dlp discovered ${entries.length} videos from ${sourceUrl}`);
+    if (skipped > 0) log.log(`Skipped ${skipped} non-downloadable entries (live/upcoming/premiere/restricted)`);
+    log.log(`yt-dlp discovered ${entries.length} downloadable videos from ${sourceUrl}`);
     return entries;
   } catch (err) {
     log.warn(`yt-dlp discovery failed for ${sourceUrl}: ${err instanceof Error ? err.message.slice(0, 200) : err}`);
     return [];
   }
+}
+
+/**
+ * Search YouTube for trending content in a niche using yt-dlp's ytsearch.
+ * This is the primary discovery method — finds actually-trending content
+ * instead of just scraping latest uploads from specific channels.
+ */
+async function discoverViaSearch(
+  niche: ClipNiche,
+  maxPerQuery = 10,
+): Promise<YtDlpEntry[]> {
+  const queries = NICHE_SEARCH_QUERIES[niche] ?? NICHE_SEARCH_QUERIES.auto;
+  const all: YtDlpEntry[] = [];
+
+  for (const query of queries) {
+    const searchUrl = `ytsearch${maxPerQuery}:${query}`;
+    const entries = await discoverViaYtDlp(searchUrl, maxPerQuery);
+    all.push(...entries);
+  }
+
+  const seen = new Set<string>();
+  return all.filter((e) => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
 }
 
 /**
@@ -414,6 +294,7 @@ async function resolveDirectUrl(url: string): Promise<YtDlpEntry | null> {
       channel_id: String(data.channel_id ?? data.uploader_id ?? ""),
       upload_date: String(data.upload_date ?? ""),
       extractor_key: String(data.extractor_key ?? ""),
+      live_status: String(data.live_status ?? ""),
     };
   } catch (err) {
     log.warn(`yt-dlp resolve failed for ${url}: ${err instanceof Error ? err.message.slice(0, 200) : err}`);
@@ -431,50 +312,37 @@ function parseDuration(iso8601: string): number {
   return (parseInt(m[1] ?? "0") * 3600) + (parseInt(m[2] ?? "0") * 60) + parseInt(m[3] ?? "0");
 }
 
-async function fetchChannelVideosViaRss(channelId: string): Promise<string[]> {
-  const url = `${YT_RSS_BASE}?channel_id=${channelId}`;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    const ids: string[] = [];
-    const re = /<yt:videoId>([^<]+)<\/yt:videoId>/g;
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(xml))) ids.push(match[1]);
-    return ids;
-  } catch (err) {
-    log.warn(`RSS fetch failed for ${channelId}: ${err instanceof Error ? err.message : err}`);
-    return [];
-  }
+interface EnrichedVideoDetail {
+  title: string; viewCount: number; durationSec: number;
+  channelId: string; channelName: string; publishedAt: string;
+  likeCount: number; commentCount: number; licensedContent: boolean;
 }
 
 async function enrichYouTubeVideoDetails(
   videoIds: string[],
   apiKey: string,
-): Promise<Map<string, { title: string; viewCount: number; durationSec: number; channelId: string; channelName: string; publishedAt: string }>> {
-  const results = new Map<string, { title: string; viewCount: number; durationSec: number; channelId: string; channelName: string; publishedAt: string }>();
+): Promise<Map<string, EnrichedVideoDetail>> {
+  const results = new Map<string, EnrichedVideoDetail>();
   const batchSize = 50;
 
   for (let i = 0; i < videoIds.length; i += batchSize) {
     const batch = videoIds.slice(i, i + batchSize);
     const params = new URLSearchParams({
-      part: "snippet,contentDetails,statistics",
+      part: "snippet,contentDetails,statistics,status",
       id: batch.join(","),
       key: apiKey,
     });
 
     try {
       const res = await fetch(`${YT_API_BASE}/videos?${params}`, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) {
-        log.warn(`YouTube API videos.list ${res.status}`);
-        continue;
-      }
+      if (!res.ok) { log.warn(`YouTube API videos.list ${res.status}`); continue; }
       const data = (await res.json()) as {
         items?: Array<{
           id: string;
           snippet: { title: string; channelId: string; channelTitle: string; publishedAt: string };
-          contentDetails: { duration: string };
-          statistics: { viewCount?: string };
+          contentDetails: { duration: string; licensedContent?: boolean };
+          statistics: { viewCount?: string; likeCount?: string; commentCount?: string };
+          status: { license?: string };
         }>;
       };
       for (const item of data.items ?? []) {
@@ -485,6 +353,9 @@ async function enrichYouTubeVideoDetails(
           channelId: item.snippet.channelId,
           channelName: item.snippet.channelTitle,
           publishedAt: item.snippet.publishedAt,
+          likeCount: parseInt(item.statistics.likeCount ?? "0"),
+          commentCount: parseInt(item.statistics.commentCount ?? "0"),
+          licensedContent: item.contentDetails.licensedContent ?? false,
         });
       }
     } catch (err) {
@@ -535,15 +406,108 @@ async function searchCreativeCommons(apiKey: string, maxResults = 10): Promise<s
 }
 
 // ---------------------------------------------------------------------------
-// Main discovery (niche-based, multi-platform)
+// Copyright pre-screening (YouTube only, requires API key)
+// ---------------------------------------------------------------------------
+
+interface CopyrightInfo {
+  licensedContent: boolean;
+  license: string;
+  likeCount: number;
+  commentCount: number;
+}
+
+async function copyrightPreScreen(
+  videoIds: string[],
+  apiKey: string,
+): Promise<Map<string, CopyrightInfo>> {
+  const results = new Map<string, CopyrightInfo>();
+  const batchSize = 50;
+
+  for (let i = 0; i < videoIds.length; i += batchSize) {
+    const batch = videoIds.slice(i, i + batchSize);
+    const params = new URLSearchParams({
+      part: "contentDetails,status,statistics",
+      id: batch.join(","),
+      key: apiKey,
+    });
+
+    try {
+      const res = await fetch(`${YT_API_BASE}/videos?${params}`, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) { log.warn(`Copyright screen API ${res.status}`); continue; }
+      const data = (await res.json()) as {
+        items?: Array<{
+          id: string;
+          contentDetails: { licensedContent?: boolean };
+          status: { license?: string };
+          statistics: { likeCount?: string; commentCount?: string };
+        }>;
+      };
+      for (const item of data.items ?? []) {
+        results.set(item.id, {
+          licensedContent: item.contentDetails.licensedContent ?? false,
+          license: item.status.license ?? "youtube",
+          likeCount: parseInt(item.statistics.likeCount ?? "0"),
+          commentCount: parseInt(item.statistics.commentCount ?? "0"),
+        });
+      }
+    } catch (err) {
+      log.warn(`Copyright screen error: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Niche relevance signals (shared across scoring)
+// ---------------------------------------------------------------------------
+
+const NICHE_SIGNALS: Record<string, { positive: string[]; negative: string[] }> = {
+  comedy:        { positive: ["funny", "fail", "prank", "laugh", "comedy", "hilarious", "joke", "humor", "meme", "skit", "sketch", "lol", "rofl"],
+                   negative: ["wildlife", "documentary", "science", "recipe", "tutorial", "meditation", "workout", "news"] },
+  films:         { positive: ["movie", "film", "scene", "trailer", "cinema", "actor", "actress", "oscar", "blockbuster"],
+                   negative: ["recipe", "workout", "tutorial", "gaming", "gameplay"] },
+  anime:         { positive: ["anime", "manga", "otaku", "naruto", "dragon ball", "one piece", "jujutsu", "demon slayer", "amv"],
+                   negative: ["recipe", "workout", "news", "documentary"] },
+  serials:       { positive: ["serial", "episode", "drama", "sitcom", "tv show", "series", "season"],
+                   negative: ["recipe", "workout", "gaming", "gameplay"] },
+  entertainment: { positive: ["stunt", "challenge", "prank", "viral", "amazing", "insane", "crazy", "unbelievable"],
+                   negative: ["recipe", "tutorial", "meditation", "documentary"] },
+  nature:        { positive: ["nature", "animal", "wildlife", "ocean", "forest", "bird", "dog", "cat", "planet", "earth", "safari"],
+                   negative: ["gaming", "gameplay", "comedy", "prank", "skit"] },
+  science:       { positive: ["science", "physics", "experiment", "space", "nasa", "engineer", "tech", "robot", "quantum", "atom"],
+                   negative: ["comedy", "prank", "recipe", "workout"] },
+  sports:        { positive: ["goal", "sport", "match", "player", "team", "football", "basketball", "cricket", "tennis", "olympic", "highlight", "slam dunk"],
+                   negative: ["recipe", "tutorial", "meditation", "anime"] },
+  gaming:        { positive: ["game", "gaming", "gameplay", "esport", "speedrun", "gamer", "xbox", "playstation", "pc", "fortnite", "minecraft"],
+                   negative: ["recipe", "workout", "news", "documentary"] },
+  food:          { positive: ["food", "recipe", "cook", "chef", "kitchen", "eat", "taste", "restaurant", "bake", "street food", "mukbang"],
+                   negative: ["gaming", "gameplay", "anime", "sport"] },
+  travel:        { positive: ["travel", "destination", "explore", "adventure", "country", "city", "backpack", "flight", "hotel", "culture"],
+                   negative: ["gaming", "gameplay", "anime", "recipe"] },
+  news:          { positive: ["news", "breaking", "report", "analysis", "politic", "economy", "crisis", "update"],
+                   negative: ["gaming", "recipe", "anime", "comedy"] },
+  education:     { positive: ["learn", "explain", "how to", "tutorial", "history", "fact", "lesson", "course", "guide"],
+                   negative: ["gaming", "prank", "comedy", "meme"] },
+  motivation:    { positive: ["motivat", "inspir", "success", "speech", "mindset", "discipline", "hustle", "grind", "self help", "productiv", "goal", "dream", "believe", "never give up", "persever", "resilien"],
+                   negative: ["gaming", "prank", "comedy", "meme", "recipe", "futuristic", "vs ", "$1 vs", "gameplay"] },
+  music:         { positive: ["music", "song", "dance", "singer", "concert", "cover", "beat", "rap", "dj", "perform", "choreograph"],
+                   negative: ["gaming", "recipe", "news", "documentary"] },
+};
+
+// ---------------------------------------------------------------------------
+// Main discovery (search-first, multi-platform)
 // ---------------------------------------------------------------------------
 
 /**
- * Discover a single best video to clip, using niche-based auto-discovery.
+ * Discover a single best video to clip.
  *
- * The niche determines which YouTube channels and Facebook pages to search.
- * Also always includes YouTube trending. Returns both the selected video
- * and a summary of all candidates considered (for transparency in the UI).
+ * Pipeline:
+ *   1. SEARCH — yt-dlp ytsearch for trending niche content (primary)
+ *   2. CHANNEL FALLBACK — scrape known channels if search yields < 5 results
+ *   3. FB/IG — browser scraper with view-count enforcement
+ *   4. COPYRIGHT SCREEN — YouTube API checks licensedContent (when key available)
+ *   5. QUALITY SCORE — engagement, recency, velocity, niche relevance, copyright risk
  */
 export async function discoverVideo(config: {
   niche: ClipNiche;
@@ -555,54 +519,68 @@ export async function discoverVideo(config: {
 }): Promise<DiscoveryResult | null> {
   const ytApiKey = getYouTubeApiKey();
   const pref = config.preferPlatform;
-  const defaultMinViews = config.minViewCount ?? 500_000;
-  const igMinViews = 5_000; // IG reels accumulate views over time
+  const minViews = config.minViewCount ?? 100_000;
+  const fbMinViews = 50_000;
+  const igMinViews = 5_000;
   const minDur = config.minDurationSec ?? 5;
   const maxDur = config.maxDurationSec ?? 3600;
+  const nowMs = Date.now();
 
   const allCandidates: DiscoveredVideo[] = [];
   const { yt: ytChannels, fb: fbPages, ig: igProfiles } = getChannelsForNiche(config.niche);
 
-  log.log(`[DISCOVER] Niche "${config.niche}" → ${ytChannels.length} YT, ${fbPages.length} FB, ${igProfiles.length} IG${pref ? ` (prefer: ${pref})` : ""}`);
+  log.log(`[DISCOVER] Niche "${config.niche}"${pref ? ` (prefer: ${pref})` : ""}`);
 
-  // ── 1. YouTube channels for this niche (via yt-dlp handle scraping) ──
+  // ── 1. PRIMARY: YouTube search-based trending discovery ──
   if (!pref || pref === "youtube") {
-    for (const handleUrl of ytChannels) {
-      const entries = await discoverViaYtDlp(handleUrl, 5);
-      for (const e of entries) {
-        if (e.id) {
-          allCandidates.push({
-            videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
-            title: e.title, channelId: e.channel_id, channelName: e.channel,
-            viewCount: e.view_count, publishedAt: e.upload_date,
-            durationSec: e.duration, platform: "youtube", source: "channel",
-          });
+    log.log(`[SEARCH] Running search-based discovery for "${config.niche}"...`);
+    const searchResults = await discoverViaSearch(config.niche, 10);
+    for (const e of searchResults) {
+      if (e.id) {
+        allCandidates.push({
+          videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
+          title: e.title, channelId: e.channel_id, channelName: e.channel,
+          viewCount: e.view_count, publishedAt: e.upload_date,
+          durationSec: e.duration, platform: "youtube", source: "search",
+        });
+      }
+    }
+    log.log(`[SEARCH] Got ${allCandidates.length} candidates from search`);
+
+    // ── 2. FALLBACK: Channel scraping only if search returned too few ──
+    if (allCandidates.length < 5) {
+      log.log(`[FALLBACK] Search returned < 5, scraping ${ytChannels.length} channels...`);
+      for (const handleUrl of ytChannels) {
+        const entries = await discoverViaYtDlp(handleUrl, 5);
+        for (const e of entries) {
+          if (e.id) {
+            allCandidates.push({
+              videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
+              title: e.title, channelId: e.channel_id, channelName: e.channel,
+              viewCount: e.view_count, publishedAt: e.upload_date,
+              durationSec: e.duration, platform: "youtube", source: "channel",
+            });
+          }
         }
       }
     }
   }
 
-  // ── 2. YouTube Trending (when API key available) ──
+  // ── 3. YouTube Trending + Creative Commons (when API key available) ──
   if (ytApiKey && (!pref || pref === "youtube")) {
-    const ids = await fetchTrendingVideoIds(ytApiKey);
-    for (const id of ids) {
+    const trendingIds = await fetchTrendingVideoIds(ytApiKey);
+    for (const id of trendingIds) {
       allCandidates.push({
-        videoId: id,
-        url: `https://www.youtube.com/watch?v=${id}`,
+        videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
         viewCount: 0, publishedAt: "", durationSec: 0,
         platform: "youtube", source: "trending",
       });
     }
-  }
-
-  // ── 3. YouTube Creative Commons (when API key available) ──
-  if (ytApiKey && (!pref || pref === "youtube")) {
-    const ids = await searchCreativeCommons(ytApiKey);
-    for (const id of ids) {
+    const ccIds = await searchCreativeCommons(ytApiKey);
+    for (const id of ccIds) {
       allCandidates.push({
-        videoId: id,
-        url: `https://www.youtube.com/watch?v=${id}`,
+        videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
         viewCount: 0, publishedAt: "", durationSec: 0,
         platform: "youtube", source: "creative-commons",
@@ -610,13 +588,13 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── 4. Facebook Pages for this niche (via browser scraper) ──
+  // ── 4. Facebook Pages (browser scraper, with view-count floor) ──
   if (!pref || pref === "facebook") {
     for (const fbUrl of fbPages) {
       try {
         const fbVideos = await discoverFbPageVideos(fbUrl, 10);
         for (const v of fbVideos) {
-          if (v.videoId) {
+          if (v.videoId && v.viewCount >= fbMinViews) {
             allCandidates.push({
               videoId: v.videoId, url: v.url, title: v.title,
               channelId: "", channelName: v.channelName,
@@ -626,18 +604,18 @@ export async function discoverVideo(config: {
           }
         }
       } catch (err) {
-        log.warn(`FB browser scrape failed for ${fbUrl}: ${err instanceof Error ? err.message : err}`);
+        log.warn(`FB scrape failed for ${fbUrl}: ${err instanceof Error ? err.message : err}`);
       }
     }
   }
 
-  // ── 5. Instagram Profiles for this niche (via browser scraper) ──
+  // ── 5. Instagram Profiles (browser scraper, with view-count floor) ──
   if (!pref || pref === "instagram") {
     for (const igUrl of igProfiles) {
       try {
         const igReels = await discoverIgReels(igUrl, 10);
         for (const v of igReels) {
-          if (v.videoId) {
+          if (v.videoId && v.viewCount >= igMinViews) {
             allCandidates.push({
               videoId: v.videoId, url: v.url, title: v.title,
               channelId: "", channelName: v.channelName,
@@ -647,7 +625,7 @@ export async function discoverVideo(config: {
           }
         }
       } catch (err) {
-        log.warn(`IG browser scrape failed for ${igUrl}: ${err instanceof Error ? err.message : err}`);
+        log.warn(`IG scrape failed for ${igUrl}: ${err instanceof Error ? err.message : err}`);
       }
     }
   }
@@ -666,116 +644,126 @@ export async function discoverVideo(config: {
     return null;
   }
 
-  // ── Enrich candidates that lack metadata ──
+  const copyrightMap = new Map<string, CopyrightInfo>();
+
+  // ── Enrich YouTube candidates (metadata + engagement + copyright in one call) ──
   const ytNeedEnrich = unique.filter((v) => v.platform === "youtube" && !v.title);
   if (ytNeedEnrich.length > 0 && ytApiKey) {
     const details = await enrichYouTubeVideoDetails(ytNeedEnrich.map((v) => v.videoId), ytApiKey);
     for (const v of ytNeedEnrich) {
       const d = details.get(v.videoId);
       if (d) {
-        v.title = d.title;
-        v.viewCount = d.viewCount;
-        v.durationSec = d.durationSec;
-        v.channelId = d.channelId;
-        v.channelName = d.channelName;
-        v.publishedAt = d.publishedAt;
+        v.title = d.title; v.viewCount = d.viewCount; v.durationSec = d.durationSec;
+        v.channelId = d.channelId; v.channelName = d.channelName; v.publishedAt = d.publishedAt;
+        v.likeCount = d.likeCount; v.commentCount = d.commentCount;
+        v.licensedContent = d.licensedContent;
+        copyrightMap.set(v.videoId, {
+          licensedContent: d.licensedContent, license: "youtube",
+          likeCount: d.likeCount, commentCount: d.commentCount,
+        });
       }
     }
   }
-
   const stillNeedEnrich = unique.filter((v) => !v.title && v.url);
   if (stillNeedEnrich.length > 0) {
     log.log(`Enriching ${stillNeedEnrich.length} candidates via yt-dlp...`);
     for (const v of stillNeedEnrich.slice(0, 10)) {
       const entry = await resolveDirectUrl(v.url);
       if (entry) {
-        v.title = entry.title || v.title;
-        v.viewCount = entry.view_count || v.viewCount;
+        v.title = entry.title || v.title; v.viewCount = entry.view_count || v.viewCount;
         v.durationSec = entry.duration || v.durationSec;
-        v.channelName = entry.channel || v.channelName;
-        v.channelId = entry.channel_id || v.channelId;
+        v.channelName = entry.channel || v.channelName; v.channelId = entry.channel_id || v.channelId;
       }
     }
   }
 
-  // ── Score and filter (per-platform view thresholds) ──
-  const scored = unique.filter((v) => {
-    const minV = v.platform === "instagram" ? igMinViews : defaultMinViews;
-    if (v.viewCount > 0 && v.viewCount < minV) return false;
+  // ── 6. COPYRIGHT SCREEN (YouTube only, when API key available) ──
+  const ytCandidateIds = unique.filter((v) => v.platform === "youtube" && v.videoId).map((v) => v.videoId);
+  if (ytApiKey && ytCandidateIds.length > 0) {
+    log.log(`[COPYRIGHT] Screening ${ytCandidateIds.length} YouTube candidates...`);
+    const crMap = await copyrightPreScreen(ytCandidateIds, ytApiKey);
+    for (const [id, info] of crMap) { copyrightMap.set(id, info); }
+    const licensed = [...crMap.values()].filter((c) => c.licensedContent).length;
+    const cc = [...crMap.values()].filter((c) => c.license === "creativeCommon").length;
+    log.log(`[COPYRIGHT] ${licensed} licensed (risky), ${cc} Creative Commons (safe)`);
+  }
+
+  // Apply copyright data + engagement to candidates
+  for (const v of unique) {
+    const cr = copyrightMap.get(v.videoId);
+    if (cr) {
+      v.licensedContent = cr.licensedContent;
+      v.likeCount = cr.likeCount;
+      v.commentCount = cr.commentCount;
+    }
+  }
+
+  // ── Filter: min views, duration, skip fully-licensed (hard block) ──
+  const filtered = unique.filter((v) => {
+    const platformMinViews = v.platform === "instagram" ? igMinViews : v.platform === "facebook" ? fbMinViews : minViews;
+    if (v.viewCount < platformMinViews) return false;
     if (v.durationSec > 0 && (v.durationSec < minDur || v.durationSec > maxDur)) return false;
     return true;
   });
 
-  if (scored.length === 0) {
-    log.warn(`No videos passed filters (${unique.length} candidates, minViews=${defaultMinViews}/${igMinViews}ig, dur=${minDur}-${maxDur}s)`);
+  if (filtered.length === 0) {
+    log.warn(`No videos passed filters (${unique.length} candidates, minViews=${minViews}, dur=${minDur}-${maxDur}s)`);
     return null;
   }
 
-  // Multi-factor scoring: views (60%), platform bonus (20%), source quality (20%)
-  const maxViews = Math.max(...scored.map((v) => v.viewCount), 1);
-  const scoredWithRank = scored.map((v) => {
+  // ── 7. QUALITY SCORING ──
+  const scoredWithRank = filtered.map((v) => {
     let score = 0;
 
-    // View score (0-60): normalized against max, log-scaled for fairer distribution
-    const viewScore = v.viewCount > 0
-      ? (Math.log10(v.viewCount) / Math.log10(Math.max(maxViews, 10))) * 60
-      : 0;
-    score += viewScore;
+    // --- View velocity: views/day since upload (rewards fast-growing content) ---
+    let ageDays = 30;
+    if (v.publishedAt) {
+      const pubMs = v.publishedAt.length === 8
+        ? new Date(`${v.publishedAt.slice(0, 4)}-${v.publishedAt.slice(4, 6)}-${v.publishedAt.slice(6, 8)}`).getTime()
+        : new Date(v.publishedAt).getTime();
+      if (!isNaN(pubMs)) ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
+    }
+    const velocity = v.viewCount / ageDays;
+    const velocityScore = velocity > 0 ? Math.min(35, Math.log10(velocity) * 7) : 0;
+    score += velocityScore;
 
-    // Platform bonus (0-20): FB/IG clips are already short-form optimized
-    const platformBonus: Record<string, number> = {
-      facebook: 20, instagram: 18, youtube: 12, tiktok: 15, other: 5,
-    };
-    score += platformBonus[v.platform] ?? 5;
-
-    // Source quality (0-20): official channels > creative-commons > trending
-    const sourceBonus: Record<string, number> = {
-      channel: 20, trending: 15, "creative-commons": 18, direct: 10,
-    };
-    score += sourceBonus[v.source] ?? 5;
-
-    // Non-copyright creator bonus: extra 5 points for known safe-to-repost channels
-    const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart"];
-    if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) {
-      score += 5;
+    // --- Engagement ratio (YouTube only, when data available) ---
+    if (v.likeCount && v.viewCount > 0) {
+      const likeRatio = v.likeCount / v.viewCount;
+      score += Math.min(20, likeRatio * 500);
+    }
+    if (v.commentCount && v.viewCount > 0) {
+      const commentRatio = v.commentCount / v.viewCount;
+      score += Math.min(10, commentRatio * 2000);
     }
 
-    // Niche relevance scoring: strongly boost on-topic, heavily penalize off-topic
+    // --- Recency bonus/penalty ---
+    if (ageDays <= 3) score += 15;
+    else if (ageDays <= 7) score += 10;
+    else if (ageDays <= 14) score += 5;
+    else if (ageDays > 60) score -= 10;
+
+    // --- Copyright risk ---
+    if (v.licensedContent) score -= 50;
+    const crInfo = copyrightMap.get(v.videoId);
+    if (crInfo?.license === "creativeCommon") score += 30;
+
+    // --- Platform bonus: FB/IG are already short-form and safer for cross-platform ---
+    const platformBonus: Record<string, number> = { facebook: 10, instagram: 8, youtube: 0, tiktok: 5, other: 0 };
+    score += platformBonus[v.platform] ?? 0;
+
+    // --- Source quality ---
+    const sourceBonus: Record<string, number> = { search: 5, "creative-commons": 15, channel: 3, trending: 5, direct: 0 };
+    score += sourceBonus[v.source] ?? 0;
+
+    // --- Non-copyright creator bonus ---
+    const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart", "viral hog", "people are awesome"];
+    if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 10;
+
+    // --- Niche relevance ---
     if (config.niche !== "auto" && config.niche !== "viral-repost") {
       const titleLower = (v.title || "").toLowerCase();
-      const nicheSignals: Record<string, { positive: string[]; negative: string[] }> = {
-        comedy:        { positive: ["funny", "fail", "prank", "laugh", "comedy", "hilarious", "joke", "humor", "meme", "skit", "sketch", "lol", "rofl"],
-                         negative: ["wildlife", "documentary", "science", "recipe", "tutorial", "meditation", "workout", "news"] },
-        films:         { positive: ["movie", "film", "scene", "trailer", "cinema", "actor", "actress", "oscar", "blockbuster"],
-                         negative: ["recipe", "workout", "tutorial", "gaming", "gameplay"] },
-        anime:         { positive: ["anime", "manga", "otaku", "naruto", "dragon ball", "one piece", "jujutsu", "demon slayer", "amv"],
-                         negative: ["recipe", "workout", "news", "documentary"] },
-        serials:       { positive: ["serial", "episode", "drama", "sitcom", "tv show", "series", "season"],
-                         negative: ["recipe", "workout", "gaming", "gameplay"] },
-        entertainment: { positive: ["stunt", "challenge", "prank", "viral", "amazing", "insane", "crazy", "unbelievable"],
-                         negative: ["recipe", "tutorial", "meditation", "documentary"] },
-        nature:        { positive: ["nature", "animal", "wildlife", "ocean", "forest", "bird", "dog", "cat", "planet", "earth", "safari"],
-                         negative: ["gaming", "gameplay", "comedy", "prank", "skit"] },
-        science:       { positive: ["science", "physics", "experiment", "space", "nasa", "engineer", "tech", "robot", "quantum", "atom"],
-                         negative: ["comedy", "prank", "recipe", "workout"] },
-        sports:        { positive: ["goal", "sport", "match", "player", "team", "football", "basketball", "cricket", "tennis", "olympic", "highlight", "slam dunk"],
-                         negative: ["recipe", "tutorial", "meditation", "anime"] },
-        gaming:        { positive: ["game", "gaming", "gameplay", "esport", "speedrun", "gamer", "xbox", "playstation", "pc", "fortnite", "minecraft"],
-                         negative: ["recipe", "workout", "news", "documentary"] },
-        food:          { positive: ["food", "recipe", "cook", "chef", "kitchen", "eat", "taste", "restaurant", "bake", "street food", "mukbang"],
-                         negative: ["gaming", "gameplay", "anime", "sport"] },
-        travel:        { positive: ["travel", "destination", "explore", "adventure", "country", "city", "backpack", "flight", "hotel", "culture"],
-                         negative: ["gaming", "gameplay", "anime", "recipe"] },
-        news:          { positive: ["news", "breaking", "report", "analysis", "politic", "economy", "crisis", "update"],
-                         negative: ["gaming", "recipe", "anime", "comedy"] },
-        education:     { positive: ["learn", "explain", "how to", "tutorial", "history", "fact", "lesson", "course", "guide"],
-                         negative: ["gaming", "prank", "comedy", "meme"] },
-        motivation:    { positive: ["motivat", "inspir", "success", "speech", "mindset", "discipline", "hustle", "grind", "self help", "productiv", "goal", "dream", "believe", "never give up", "persever", "resilien"],
-                         negative: ["gaming", "prank", "comedy", "meme", "recipe", "futuristic", "vs ", "$1 vs", "gameplay"] },
-        music:         { positive: ["music", "song", "dance", "singer", "concert", "cover", "beat", "rap", "dj", "perform", "choreograph"],
-                         negative: ["gaming", "recipe", "news", "documentary"] },
-      };
-      const signals = nicheSignals[config.niche];
+      const signals = NICHE_SIGNALS[config.niche];
       if (signals) {
         const hasPositive = signals.positive.some((kw) => titleLower.includes(kw));
         const hasNegative = signals.negative.some((kw) => titleLower.includes(kw));
@@ -789,10 +777,8 @@ export async function discoverVideo(config: {
   });
 
   scoredWithRank.sort((a, b) => b.score - a.score);
-
   const best = scoredWithRank[0];
 
-  // Build candidates summary for UI transparency (with scores)
   const candidatesSummary = scoredWithRank.slice(0, 20).map((v) => ({
     title: v.title || "(untitled)",
     url: v.url,
@@ -802,6 +788,6 @@ export async function discoverVideo(config: {
     score: v.score,
   }));
 
-  log.log(`Discovered: "${best.title}" (${best.viewCount.toLocaleString()} views, score=${best.score}) [${best.platform}/${best.source}] from ${unique.length} total candidates`);
+  log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.platform}/${best.source}] from ${unique.length} candidates`);
   return { selected: best, candidates: candidatesSummary, totalConsidered: unique.length };
 }

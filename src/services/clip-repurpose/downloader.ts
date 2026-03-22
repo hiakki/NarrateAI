@@ -32,6 +32,7 @@ export interface VideoInfo {
   heatmap: HeatmapPoint[] | null;
   subtitles: Record<string, Array<{ url: string; ext: string }>> | null;
   automatic_captions: Record<string, Array<{ url: string; ext: string }>> | null;
+  licensedContent?: boolean;
 }
 
 function findYtDlp(): string {
@@ -124,6 +125,7 @@ export async function parseVideoInfo(infoJsonPath: string): Promise<VideoInfo> {
     heatmap: Array.isArray(data.heatmap) ? data.heatmap as HeatmapPoint[] : null,
     subtitles: data.subtitles as VideoInfo["subtitles"] ?? null,
     automatic_captions: data.automatic_captions as VideoInfo["automatic_captions"] ?? null,
+    licensedContent: typeof data.license === "string" ? data.license !== "creativeCommon" : undefined,
   };
 }
 
