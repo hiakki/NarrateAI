@@ -23,6 +23,11 @@ const CHROME_PATHS: Record<string, string[]> = {
   win32: [
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    `${process.env.LOCALAPPDATA ?? ""}\\Google\\Chrome\\Application\\chrome.exe`,
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
   ],
 };
 
@@ -30,8 +35,10 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function findChrome(): string | null {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
   const fsSync = require("fs") as typeof import("fs");
   for (const p of CHROME_PATHS[process.platform] ?? []) {
+    if (!p || p.startsWith("\\")) continue;
     if (fsSync.existsSync(p)) return p;
   }
   return null;

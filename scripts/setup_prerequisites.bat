@@ -180,6 +180,29 @@ echo [ OK ]  FFmpeg installed
 goto :eof
 
 :: ─────────────────────────────────────────────────────────────────────────────
+:install_ytdlp
+where yt-dlp >nul 2>nul
+if not errorlevel 1 (
+    echo [ OK ]  yt-dlp already installed
+    goto :eof
+)
+echo [INFO]  Installing yt-dlp...
+if "!PKG!"=="winget" winget install -e --id yt-dlp.yt-dlp --accept-package-agreements --accept-source-agreements
+if "!PKG!"=="choco" choco install yt-dlp -y
+if "!PKG!"=="none" (
+    where pip >nul 2>nul
+    if not errorlevel 1 (
+        pip install yt-dlp
+    ) else (
+        echo [ERR ] Install yt-dlp manually: pip install yt-dlp  or  winget install yt-dlp
+        goto :eof
+    )
+)
+call :refresh_path
+echo [ OK ]  yt-dlp installed
+goto :eof
+
+:: ─────────────────────────────────────────────────────────────────────────────
 :install_pm2
 where pm2 >nul 2>nul
 if not errorlevel 1 (
@@ -220,6 +243,7 @@ call :install_docker
 call :install_node
 call :install_pnpm
 call :install_ffmpeg
+call :install_ytdlp
 call :install_pm2
 call :install_cloudflared
 goto :eof
