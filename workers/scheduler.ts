@@ -580,7 +580,7 @@ async function recoverStuckVideos() {
       include: {
         series: {
           include: {
-            automation: { select: { id: true, name: true, enabled: true, characterId: true } },
+            automation: { select: { id: true, name: true, enabled: true, characterId: true, automationType: true } },
             character: { select: { fullPrompt: true } },
             user: {
               select: {
@@ -605,8 +605,15 @@ async function recoverStuckVideos() {
       const age = now - new Date(video.updatedAt).getTime();
       const retryCount = video.retryCount ?? 0;
 
+      // Skip clip-repurpose videos — they have their own worker and queue;
+      // recovering them through enqueueVideoGeneration would run the wrong pipeline.
+      const autoType = ((video.series.automation as Record<string, unknown> | null)?.automationType as string) ?? "";
+      if (autoType === "clip-repurpose") {
+        debug(`SKIP ${video.id} — belongs to clip-repurpose automation, handled by clip worker`);
+        continue;
+      }
+
       if (video.status === "FAILED") {
-        // Only auto-retry FAILED videos that belong to an enabled automation
         const auto = video.series.automation;
         if (!auto?.enabled) continue;
         if (retryCount >= MAX_AUTO_RETRIES) {
