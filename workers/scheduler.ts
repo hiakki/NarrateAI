@@ -203,74 +203,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     }
   }
 
-  // If the most recent video FAILED, retry it instead of creating a new one
-  const failedVideo = await db.video.findFirst({
-    where: { seriesId: auto.seriesId, status: "FAILED" },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      series: {
-        include: {
-          character: { select: { fullPrompt: true } },
-          user: {
-            select: {
-              id: true, name: true, email: true,
-              defaultLlmProvider: true, defaultTtsProvider: true,
-              defaultImageProvider: true, defaultImageToVideoProvider: true,
-            },
-          },
-        },
-      },
-    },
-  });
-  if (failedVideo) {
-    const completedStages = (failedVideo.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
-    const scenes = (failedVideo.scenesJson as { text: string; visualDescription: string }[]) ?? [];
-    const resolved = resolveProviders(failedVideo.series, failedVideo.series.user);
-    const artStyle = getArtStyleById(failedVideo.series.artStyle);
-    const niche = getNicheById(failedVideo.series.niche);
-    const usr = failedVideo.series.user;
-
-    await db.video.update({
-      where: { id: failedVideo.id },
-      data: { status: "QUEUED", errorMessage: null, retryCount: { increment: 1 } },
-    });
-
-    await enqueueVideoGeneration({
-      videoId: failedVideo.id,
-      seriesId: failedVideo.seriesId,
-      userId: usr.id,
-      userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
-      automationName: auto.name,
-      title: failedVideo.title || undefined,
-      scriptText: failedVideo.scriptText || undefined,
-      scenes: scenes.length > 0 ? scenes : undefined,
-      artStyle: failedVideo.series.artStyle,
-      artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
-      negativePrompt: artStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
-      tone: failedVideo.series.tone ?? "dramatic",
-      niche: failedVideo.series.niche,
-      voiceId: failedVideo.series.voiceId ?? getDefaultVoiceId(resolved.tts),
-      language: failedVideo.series.language ?? "en",
-      musicPath: niche?.defaultMusic,
-      duration: failedVideo.targetDuration ?? failedVideo.duration ?? 45,
-      llmProvider: resolved.llm,
-      ttsProvider: resolved.tts,
-      imageProvider: resolved.image,
-      imageToVideoProvider: usr.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
-      characterPrompt: failedVideo.series.character?.fullPrompt ?? undefined,
-      aspectRatio: niche?.aspectRatio ?? "9:16",
-    });
-
-    await db.automation.update({
-      where: { id: auto.id },
-      data: { lastRunAt: new Date() },
-    });
-
-    log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
-    return;
-  }
-
-  // ── CLIP-REPURPOSE branch: different pipeline entirely ──
+  // ── Route by automationType BEFORE retry logic to avoid cross-pipeline retries ──
   const autoType = ((auto as Record<string, unknown>).automationType as string) ?? "original";
 
   if (autoType === "clip-repurpose") {
@@ -305,6 +238,8 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
           clipDurationSec: (clipConfig.clipDurationSec as number) ?? 45,
           cropMode: (clipConfig.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
           creditOriginal: (clipConfig.creditOriginal as boolean) ?? true,
+          enableBgm: (auto as Record<string, unknown>).enableBgm as boolean ?? true,
+          enableHflip: (auto as Record<string, unknown>).enableHflip as boolean ?? false,
         },
         targetPlatforms: (auto.targetPlatforms ?? []) as string[],
       });
@@ -322,6 +257,74 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   }
 
   // ── ORIGINAL pipeline: AI-generated video ──
+
+  // Retry FAILED videos for original pipeline only
+  const failedVideo = await db.video.findFirst({
+    where: { seriesId: auto.seriesId, status: "FAILED" },
+    orderBy: { updatedAt: "desc" },
+    include: {
+      series: {
+        include: {
+          character: { select: { fullPrompt: true } },
+          user: {
+            select: {
+              id: true, name: true, email: true,
+              defaultLlmProvider: true, defaultTtsProvider: true,
+              defaultImageProvider: true, defaultImageToVideoProvider: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (failedVideo) {
+    const completedStages = (failedVideo.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
+    const scenes = (failedVideo.scenesJson as { text: string; visualDescription: string }[]) ?? [];
+    const resolved = resolveProviders(failedVideo.series, failedVideo.series.user);
+    const fArtStyle = getArtStyleById(failedVideo.series.artStyle);
+    const fNiche = getNicheById(failedVideo.series.niche);
+    const usr = failedVideo.series.user;
+
+    await db.video.update({
+      where: { id: failedVideo.id },
+      data: { status: "QUEUED", errorMessage: null, retryCount: { increment: 1 } },
+    });
+
+    await enqueueVideoGeneration({
+      videoId: failedVideo.id,
+      seriesId: failedVideo.seriesId,
+      userId: usr.id,
+      userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
+      automationName: auto.name,
+      title: failedVideo.title || undefined,
+      scriptText: failedVideo.scriptText || undefined,
+      scenes: scenes.length > 0 ? scenes : undefined,
+      artStyle: failedVideo.series.artStyle,
+      artStylePrompt: fArtStyle?.promptModifier ?? "cinematic, high quality",
+      negativePrompt: fArtStyle?.negativePrompt ?? "low quality, blurry, watermark, text",
+      tone: failedVideo.series.tone ?? "dramatic",
+      niche: failedVideo.series.niche,
+      voiceId: failedVideo.series.voiceId ?? getDefaultVoiceId(resolved.tts),
+      language: failedVideo.series.language ?? "en",
+      musicPath: fNiche?.defaultMusic,
+      duration: failedVideo.targetDuration ?? failedVideo.duration ?? 45,
+      llmProvider: resolved.llm,
+      ttsProvider: resolved.tts,
+      imageProvider: resolved.image,
+      imageToVideoProvider: usr.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
+      characterPrompt: failedVideo.series.character?.fullPrompt ?? undefined,
+      aspectRatio: fNiche?.aspectRatio ?? "9:16",
+    });
+
+    await db.automation.update({
+      where: { id: auto.id },
+      data: { lastRunAt: new Date() },
+    });
+
+    log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
+    return;
+  }
+
   let characterPrompt: string | undefined;
   if ((auto as Record<string, unknown>).characterId) {
     const char = await db.character.findUnique({
