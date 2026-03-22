@@ -284,14 +284,52 @@ if errorlevel 1 (
     exit /b 1
 )
 
-docker compose up -d 2>nul
-if errorlevel 1 docker-compose up -d 2>nul
+:: Ensure Docker daemon is running (starts Docker Desktop if needed)
+docker info >nul 2>nul
+if errorlevel 1 (
+    echo [INFO]  Docker daemon not running -- starting Docker Desktop...
+    set "_DD="
+    if exist "C:\Program Files\Docker\Docker\Docker Desktop.exe" set "_DD=C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    if not defined _DD if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" set "_DD=%ProgramFiles%\Docker\Docker\Docker Desktop.exe"
+    if not defined _DD (
+        echo [ERR ] Cannot find Docker Desktop. Start it manually, then re-run this script.
+        popd
+        exit /b 1
+    )
+    start "" "!_DD!"
+    echo [INFO]  Waiting for Docker daemon (up to 60s^)...
+    set "_D=60"
+    :docker_wait
+    if !_D! LEQ 0 (
+        echo [ERR ] Docker daemon did not start in 60s. Start Docker Desktop manually.
+        popd
+        exit /b 1
+    )
+    docker info >nul 2>nul
+    if not errorlevel 1 goto :docker_ok
+    set /a _D-=1
+    timeout /t 1 /nobreak >nul
+    goto :docker_wait
+    :docker_ok
+    echo [ OK ]  Docker daemon is ready
+)
+
+docker compose up -d
+if errorlevel 1 (
+    docker-compose up -d
+    if errorlevel 1 (
+        echo [ERR ] docker compose up failed. Check docker-compose.yml and Docker Desktop status.
+        popd
+        exit /b 1
+    )
+)
 
 echo [INFO]  Waiting for PostgreSQL...
 set "_R=30"
 :pg_wait
 if !_R! LEQ 0 (
     echo [ERR ] PostgreSQL did not start in 30s
+    echo [INFO]  Check: docker compose ps / docker compose logs postgres
     popd
     exit /b 1
 )
@@ -308,6 +346,7 @@ set "_R=15"
 :redis_wait
 if !_R! LEQ 0 (
     echo [ERR ] Redis did not start in 15s
+    echo [INFO]  Check: docker compose ps / docker compose logs redis
     popd
     exit /b 1
 )

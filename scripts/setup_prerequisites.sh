@@ -247,7 +247,37 @@ start_infra() {
     exit 1
   fi
 
-  docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null
+  # Ensure Docker daemon is running
+  if ! docker info &>/dev/null; then
+    info "Docker daemon not running — attempting to start..."
+    if [[ "$(uname)" == "Darwin" ]]; then
+      open -a "Docker" 2>/dev/null || true
+    elif command -v systemctl &>/dev/null; then
+      sudo systemctl start docker 2>/dev/null || true
+    fi
+
+    info "Waiting for Docker daemon (up to 60s)..."
+    local d_retries=60
+    while [[ $d_retries -gt 0 ]]; do
+      if docker info &>/dev/null; then
+        ok "Docker daemon is ready"
+        break
+      fi
+      d_retries=$((d_retries - 1))
+      sleep 1
+    done
+    if [[ $d_retries -eq 0 ]]; then
+      err "Docker daemon did not start in 60s. Start Docker Desktop / dockerd manually."
+      exit 1
+    fi
+  fi
+
+  if ! docker compose up -d 2>/dev/null; then
+    if ! docker-compose up -d 2>/dev/null; then
+      err "docker compose up failed. Check docker-compose.yml and Docker status."
+      exit 1
+    fi
+  fi
 
   info "Waiting for PostgreSQL to be ready..."
   local retries=30
@@ -261,6 +291,7 @@ start_infra() {
   done
   if [[ $retries -eq 0 ]]; then
     err "PostgreSQL did not become ready in 30s"
+    info "Check: docker compose ps / docker compose logs postgres"
     exit 1
   fi
 
@@ -276,6 +307,7 @@ start_infra() {
   done
   if [[ $retries -eq 0 ]]; then
     err "Redis did not become ready in 15s"
+    info "Check: docker compose ps / docker compose logs redis"
     exit 1
   fi
 }

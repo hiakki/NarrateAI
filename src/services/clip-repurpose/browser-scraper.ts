@@ -153,7 +153,285 @@ function parseViewCount(text: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Facebook discovery: scrape page videos
+// Facebook search-based discovery (response interception + DOM fallback)
+// ---------------------------------------------------------------------------
+
+interface FbInterceptedVideo {
+  id: string;
+  url: string;
+  title: string;
+  channelName: string;
+  viewCount: number;
+}
+
+function extractVideosFromFbJson(
+  json: unknown,
+  results: Map<string, FbInterceptedVideo>,
+  maxItems: number,
+): void {
+  if (results.size >= maxItems || !json || typeof json !== "object") return;
+
+  const obj = json as Record<string, unknown>;
+
+  // FB GraphQL video node shapes: look for video IDs + view counts in nested data
+  const id = obj.id ?? obj.videoId ?? obj.video_id;
+  const viewCount =
+    (obj.video_view_count as number) ??
+    (obj.play_count as number) ??
+    (obj.view_count as number) ??
+    (typeof obj.feedback === "object" && obj.feedback
+      ? (obj.feedback as Record<string, unknown>).video_view_count as number
+      : undefined);
+
+  if (id && typeof id === "string" && /^\d+$/.test(id) && typeof viewCount === "number" && viewCount > 0) {
+    if (!results.has(id)) {
+      const title =
+        (typeof obj.title === "object" && obj.title ? (obj.title as Record<string, unknown>).text : obj.title) ??
+        obj.message ??
+        obj.name ??
+        "";
+      const owner =
+        typeof obj.owner === "object" && obj.owner ? (obj.owner as Record<string, unknown>).name ?? "" : "";
+      results.set(id, {
+        id,
+        url: `https://www.facebook.com/watch/?v=${id}`,
+        title: String(title || ""),
+        channelName: String(owner || ""),
+        viewCount,
+      });
+    }
+  }
+
+  // Recurse into arrays and nested objects
+  for (const val of Object.values(obj)) {
+    if (Array.isArray(val)) {
+      for (const item of val) extractVideosFromFbJson(item, results, maxItems);
+    } else if (val && typeof val === "object") {
+      extractVideosFromFbJson(val, results, maxItems);
+    }
+  }
+}
+
+export async function searchFbVideos(
+  query: string,
+  maxItems = 15,
+): Promise<ScrapedVideo[]> {
+  let browser: Browser | null = null;
+  try {
+    browser = await launchBrowser();
+    const page = await prepPage(browser, "facebook.com");
+
+    const intercepted = new Map<string, FbInterceptedVideo>();
+
+    // Intercept GraphQL / API responses before navigating
+    page.on("response", async (response) => {
+      try {
+        const url = response.url();
+        if (
+          !url.includes("/api/graphql") &&
+          !url.includes("/graphql") &&
+          !url.includes("search") &&
+          !url.includes("/ajax/")
+        ) return;
+        const ct = response.headers()["content-type"] ?? "";
+        if (!ct.includes("json") && !ct.includes("javascript")) return;
+
+        const text = await response.text();
+        // FB sometimes returns multiple JSON objects separated by newlines
+        for (const chunk of text.split("\n")) {
+          const trimmed = chunk.trim();
+          if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
+          try {
+            const json = JSON.parse(trimmed);
+            extractVideosFromFbJson(json, intercepted, maxItems);
+          } catch { /* not JSON */ }
+        }
+      } catch { /* response body unavailable */ }
+    });
+
+    const searchUrl = `https://www.facebook.com/search/videos/?q=${encodeURIComponent(query)}`;
+    log.log(`[FB] Searching: ${searchUrl}`);
+    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40_000 });
+    await new Promise((r) => setTimeout(r, 4000));
+
+    // Scroll aggressively to trigger more GraphQL loads
+    for (let i = 0; i < 6; i++) {
+      await page.evaluate(() => window.scrollBy(0, 2000));
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+
+    log.log(`[FB] Intercepted ${intercepted.size} video(s) from API responses`);
+
+    // --- DOM fallback if interception got nothing ---
+    if (intercepted.size === 0) {
+      log.log(`[FB] Falling back to DOM extraction...`);
+      const domVideos = await page.evaluate((max: number) => {
+        const results: Array<{ url: string; title: string; views: string; vidId: string; channelName: string }> = [];
+        const seenIds: Record<string, boolean> = {};
+
+        const links = document.querySelectorAll(
+          'a[href*="/watch/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="fb.watch"]',
+        );
+        for (const link of links) {
+          if (results.length >= max) break;
+          const href = (link as HTMLAnchorElement).href || "";
+          if (!href) continue;
+
+          const vidMatch = href.match(/(?:\/watch\/?\?v=|\/reel\/|\/videos\/|fb\.watch\/)(\d+)/);
+          if (!vidMatch) continue;
+          const vidId = vidMatch[1];
+          if (seenIds[vidId]) continue;
+          seenIds[vidId] = true;
+
+          // Walk up to find a reasonable container
+          let container: Element | null =
+            link.closest('[role="article"]') ??
+            link.closest('[role="listitem"]') ??
+            link.closest('[data-pagelet]');
+          if (!container) {
+            container = link.parentElement;
+            for (let p = 0; p < 5 && container?.parentElement; p++) container = container.parentElement;
+          }
+          const text = container?.textContent ?? "";
+
+          let views = "";
+          const vPats = [
+            /(\d[\d,.]*\s*[KkMmBb])\s*(?:views|Views|plays|Plays)/,
+            /(\d[\d,.]+)\s*(?:views|Views|plays|Plays)/,
+          ];
+          for (const pat of vPats) {
+            const m = text.match(pat);
+            if (m) { views = m[1]; break; }
+          }
+
+          const spans = container?.querySelectorAll("span") ?? [];
+          let title = "";
+          let channelName = "";
+          for (const span of spans) {
+            const t = span.textContent?.trim() ?? "";
+            if (!channelName && t.length > 2 && t.length < 60 && !/^(\d|All reactions|Like|Comment|Share|Verified)/i.test(t)) {
+              channelName = t;
+            }
+            if (!title && t.length > 15 && t.length < 300
+              && !/^(All reactions|\d+ comment|\d+ share|Like|Comment|Share|Verified)/i.test(t)
+              && !/^\d+[KkMmBb]?$/.test(t)) {
+              title = t;
+            }
+          }
+          results.push({ url: href, title, views, vidId, channelName });
+        }
+        return results;
+      }, maxItems);
+
+      log.log(`[FB] DOM fallback found ${domVideos.length} video(s)`);
+
+      return domVideos.map((v) => {
+        let title = (v.title || "").replace(/\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago.*$/i, "").trim();
+        if (!title || title.length < 5) title = `FB Video: ${query}`;
+        return {
+          videoId: v.vidId || "",
+          url: v.url,
+          title,
+          channelName: v.channelName || "Facebook",
+          viewCount: parseViewCount(v.views),
+          durationSec: 0,
+          platform: "facebook" as const,
+        };
+      });
+    }
+
+    // Return intercepted results
+    return [...intercepted.values()].slice(0, maxItems).map((v) => {
+      let title = (v.title || "").replace(/\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago.*$/i, "").trim();
+      if (!title || title.length < 5) title = `FB Video: ${query}`;
+      return {
+        videoId: v.id,
+        url: v.url,
+        title,
+        channelName: v.channelName || "Facebook",
+        viewCount: v.viewCount,
+        durationSec: 0,
+        platform: "facebook" as const,
+      };
+    });
+  } catch (err) {
+    log.warn(`[FB] Search failed for "${query}": ${err instanceof Error ? err.message : err}`);
+    return [];
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Instagram search-based discovery (explore tags)
+// ---------------------------------------------------------------------------
+export async function searchIgReels(
+  query: string,
+  maxItems = 15,
+): Promise<ScrapedVideo[]> {
+  let browser: Browser | null = null;
+  try {
+    browser = await launchBrowser();
+    const page = await prepPage(browser, "instagram.com");
+
+    const tag = query.replace(/\s+/g, "").toLowerCase();
+    const tagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/`;
+    log.log(`[IG] Searching tag: ${tagUrl}`);
+    await page.goto(tagUrl, { waitUntil: "networkidle2", timeout: 30_000 });
+    await new Promise((r) => setTimeout(r, 3000));
+
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.scrollBy(0, 1200));
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    const reels = await page.evaluate((max: number) => {
+      const results: Array<{ url: string; views: string }> = [];
+      const seen = new Set<string>();
+
+      const links = document.querySelectorAll('a[href*="/reel/"], a[href*="/p/"]');
+      for (const link of links) {
+        if (results.length >= max) break;
+        const href = (link as HTMLAnchorElement).href;
+        if (seen.has(href)) continue;
+        seen.add(href);
+
+        const container = link.closest("div");
+        const viewSpans = container?.querySelectorAll("span") || [];
+        let views = "";
+        for (const span of viewSpans) {
+          const text = span.textContent?.trim() || "";
+          if (/[\d,.]+[KkMm]?/.test(text) && text.length < 20) {
+            views = text;
+            break;
+          }
+        }
+        results.push({ url: href, views });
+      }
+      return results;
+    }, maxItems);
+
+    log.log(`[IG] Tag search found ${reels.length} reel(s) for #${tag}`);
+
+    return reels.map((r) => ({
+      videoId: (r.url.match(/\/reel\/([^/]+)/) || r.url.match(/\/p\/([^/]+)/) || [])[1] || "",
+      url: r.url,
+      title: `#${tag} reel`,
+      channelName: `#${tag}`,
+      viewCount: parseViewCount(r.views),
+      durationSec: 0,
+      platform: "instagram" as const,
+    }));
+  } catch (err) {
+    log.warn(`[IG] Tag search failed for "${query}": ${err instanceof Error ? err.message : err}`);
+    return [];
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Facebook page discovery (legacy, kept for direct URL scraping)
 // ---------------------------------------------------------------------------
 export async function discoverFbPageVideos(
   pageUrl: string,

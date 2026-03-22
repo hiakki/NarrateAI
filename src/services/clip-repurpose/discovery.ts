@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { createLogger } from "@/lib/logger";
 import { getCookieFilePath } from "@/lib/cookie-path";
+import { searchFbVideos } from "./browser-scraper";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipDiscovery");
@@ -28,6 +29,8 @@ export interface DiscoveryResult {
   selected: DiscoveredVideo;
   candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>;
   totalConsidered: number;
+  platformBreakdown: Record<string, { found: number; qualified: number; rejected: number }>;
+  rejectedSample: Array<{ title: string; platform: string; viewCount: number; reason: string }>;
 }
 
 // ── Niche → channel mapping ──────────────────────────────────────────────────
@@ -448,11 +451,13 @@ const NICHE_SIGNALS: Record<string, { positive: string[]; negative: string[] }> 
  * Discover a single best video to clip.
  *
  * Pipeline:
- *   1. SEARCH — yt-dlp ytsearch for trending niche content
- *   2. TRENDING + CC — YouTube API trending & Creative Commons (when key available)
- *   3. ENRICH — fill in metadata for API-sourced candidates
- *   4. COPYRIGHT SCREEN — YouTube API licensedContent check
- *   5. QUALITY SCORE — engagement, recency, velocity, niche relevance, copyright risk
+ *   1. SEARCH YT — yt-dlp ytsearch for trending niche content
+ *   2. SEARCH FB — browser scraper Facebook video search
+ *   3. SEARCH IG — browser scraper Instagram tag search
+ *   4. TRENDING + CC — YouTube API trending & Creative Commons (when key available)
+ *   5. ENRICH — fill in metadata for API-sourced candidates
+ *   6. COPYRIGHT SCREEN — YouTube API licensedContent check
+ *   7. QUALITY SCORE — engagement, recency, velocity, niche relevance, copyright risk
  */
 export async function discoverVideo(config: {
   niche: ClipNiche;
@@ -464,19 +469,40 @@ export async function discoverVideo(config: {
 }): Promise<DiscoveryResult | null> {
   const ytApiKey = getYouTubeApiKey();
   const minViews = config.minViewCount ?? 100_000;
+  const fbMinViews = 50_000;
+  const igMinViews = 5_000;
   const minDur = config.minDurationSec ?? 5;
   const maxDur = config.maxDurationSec ?? 3600;
   const nowMs = Date.now();
 
   const allCandidates: DiscoveredVideo[] = [];
+  const queries = NICHE_SEARCH_QUERIES[config.niche] ?? NICHE_SEARCH_QUERIES["auto"];
+
+  // Per-platform tracking for visibility
+  const platformCounts: Record<string, { found: number; qualified: number; rejected: number }> = {
+    youtube: { found: 0, qualified: 0, rejected: 0 },
+    facebook: { found: 0, qualified: 0, rejected: 0 },
+    instagram: { found: 0, qualified: 0, rejected: 0 },
+  };
+  const rejectedSample: Array<{ title: string; platform: string; viewCount: number; reason: string }> = [];
+  const MAX_REJECTED_SAMPLE = 10;
+
+  function trackRejected(platform: string, title: string, viewCount: number, reason: string) {
+    platformCounts[platform] = platformCounts[platform] ?? { found: 0, qualified: 0, rejected: 0 };
+    platformCounts[platform].rejected++;
+    if (rejectedSample.length < MAX_REJECTED_SAMPLE) {
+      rejectedSample.push({ title: title || "(untitled)", platform, viewCount, reason });
+    }
+  }
 
   log.log(`[DISCOVER] Niche "${config.niche}"`);
 
   // ── 1. YouTube search-based trending discovery ──
-  log.log(`[SEARCH] Running search-based discovery for "${config.niche}"...`);
+  log.log(`[SEARCH-YT] Running search for "${config.niche}"...`);
   const searchResults = await discoverViaSearch(config.niche, 10);
   for (const e of searchResults) {
     if (e.id) {
+      platformCounts.youtube.found++;
       allCandidates.push({
         videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
         title: e.title, channelId: e.channel_id, channelName: e.channel,
@@ -485,12 +511,74 @@ export async function discoverVideo(config: {
       });
     }
   }
-  log.log(`[SEARCH] Got ${allCandidates.length} candidates from search`);
+  log.log(`[SEARCH-YT] Got ${platformCounts.youtube.found} candidates`);
 
-  // ── 2. YouTube Trending + Creative Commons (when API key available) ──
+  // ── 2. Facebook search-based discovery ──
+  const fbQuery = queries[0];
+  log.log(`[SEARCH-FB] Searching Facebook for "${fbQuery}"...`);
+  try {
+    const fbVideos = await searchFbVideos(fbQuery, 15);
+    platformCounts.facebook.found = fbVideos.length;
+    for (const v of fbVideos) {
+      if (!v.videoId) {
+        trackRejected("facebook", v.title, v.viewCount, "missing video ID");
+      } else if (v.viewCount < fbMinViews) {
+        trackRejected("facebook", v.title, v.viewCount, `below ${fbMinViews.toLocaleString()} min views`);
+      } else {
+        platformCounts.facebook.qualified++;
+        allCandidates.push({
+          videoId: v.videoId, url: v.url, title: v.title,
+          channelId: "", channelName: v.channelName,
+          viewCount: v.viewCount, publishedAt: "",
+          durationSec: v.durationSec, platform: "facebook", source: "search",
+        });
+      }
+    }
+    const topRejectedFb = rejectedSample.filter((r) => r.platform === "facebook").slice(0, 3).map((r) => `"${r.title}" ${r.viewCount.toLocaleString()}`).join(", ");
+    log.log(`[SEARCH-FB] Found ${fbVideos.length} videos, ${platformCounts.facebook.qualified} qualified (>= ${fbMinViews.toLocaleString()} views), ${platformCounts.facebook.rejected} rejected${topRejectedFb ? ` (top rejected: ${topRejectedFb})` : ""}`);
+  } catch (err) {
+    log.warn(`[SEARCH-FB] Failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // ── 3. Instagram tag-based discovery (via yt-dlp) ──
+  const igTag = config.niche === "auto" ? "trending" : config.niche.replace(/-/g, "");
+  const igTagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(igTag)}/`;
+  log.log(`[SEARCH-IG] Discovering via yt-dlp: ${igTagUrl}`);
+  try {
+    const igEntries = await discoverViaYtDlp(igTagUrl, 15);
+    platformCounts.instagram.found = igEntries.length;
+    for (const e of igEntries) {
+      if (!e.id) {
+        trackRejected("instagram", e.title, e.view_count, "missing ID");
+      } else if (e.view_count < igMinViews) {
+        trackRejected("instagram", e.title, e.view_count, `below ${igMinViews.toLocaleString()} min views`);
+      } else {
+        platformCounts.instagram.qualified++;
+        allCandidates.push({
+          videoId: e.id,
+          url: e.webpage_url || e.url || `https://www.instagram.com/reel/${e.id}/`,
+          title: e.title || `#${igTag} reel`,
+          channelId: e.channel_id,
+          channelName: e.channel || `#${igTag}`,
+          viewCount: e.view_count,
+          publishedAt: e.upload_date,
+          durationSec: e.duration,
+          platform: "instagram",
+          source: "search",
+        });
+      }
+    }
+    const topRejectedIg = rejectedSample.filter((r) => r.platform === "instagram").slice(0, 3).map((r) => `"${r.title}" ${r.viewCount.toLocaleString()}`).join(", ");
+    log.log(`[SEARCH-IG] Got ${igEntries.length} entries, ${platformCounts.instagram.qualified} qualified (>= ${igMinViews.toLocaleString()} views), ${platformCounts.instagram.rejected} rejected${topRejectedIg ? ` (top rejected: ${topRejectedIg})` : ""}`);
+  } catch (err) {
+    log.warn(`[SEARCH-IG] Failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // ── 4. YouTube Trending + Creative Commons (when API key available) ──
   if (ytApiKey) {
     const trendingIds = await fetchTrendingVideoIds(ytApiKey);
     for (const id of trendingIds) {
+      platformCounts.youtube.found++;
       allCandidates.push({
         videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
@@ -500,6 +588,7 @@ export async function discoverVideo(config: {
     }
     const ccIds = await searchCreativeCommons(ytApiKey);
     for (const id of ccIds) {
+      platformCounts.youtube.found++;
       allCandidates.push({
         videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
@@ -512,8 +601,9 @@ export async function discoverVideo(config: {
   // ── Deduplicate and exclude already-processed ──
   const seen = new Set<string>();
   const unique = allCandidates.filter((v) => {
-    if (seen.has(v.videoId) || config.excludeVideoIds.has(v.videoId) || config.excludeVideoIds.has(v.url)) return false;
-    seen.add(v.videoId);
+    const key = `${v.platform}:${v.videoId}`;
+    if (seen.has(key) || config.excludeVideoIds.has(v.videoId) || config.excludeVideoIds.has(v.url)) return false;
+    seen.add(key);
     return true;
   });
 
@@ -524,8 +614,8 @@ export async function discoverVideo(config: {
 
   const copyrightMap = new Map<string, CopyrightInfo>();
 
-  // ── 3. Enrich candidates via YouTube API ──
-  const needEnrich = unique.filter((v) => !v.title);
+  // ── 5. Enrich YouTube candidates via API ──
+  const needEnrich = unique.filter((v) => v.platform === "youtube" && !v.title);
   if (needEnrich.length > 0 && ytApiKey) {
     const details = await enrichYouTubeVideoDetails(needEnrich.map((v) => v.videoId), ytApiKey);
     for (const v of needEnrich) {
@@ -555,8 +645,8 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── 4. COPYRIGHT SCREEN ──
-  const candidateIds = unique.filter((v) => v.videoId).map((v) => v.videoId);
+  // ── 6. COPYRIGHT SCREEN (YouTube candidates only) ──
+  const candidateIds = unique.filter((v) => v.platform === "youtube" && v.videoId).map((v) => v.videoId);
   if (ytApiKey && candidateIds.length > 0) {
     log.log(`[COPYRIGHT] Screening ${candidateIds.length} candidates...`);
     const crMap = await copyrightPreScreen(candidateIds, ytApiKey);
@@ -575,19 +665,40 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── Filter: min views, duration ──
-  const filtered = unique.filter((v) => {
-    if (v.viewCount < minViews) return false;
-    if (v.durationSec > 0 && (v.durationSec < minDur || v.durationSec > maxDur)) return false;
-    return true;
-  });
+  // ── Filter: platform-specific min views, duration (track rejections) ──
+  const filtered: DiscoveredVideo[] = [];
+  for (const v of unique) {
+    const platformMin = v.platform === "instagram" ? igMinViews : v.platform === "facebook" ? fbMinViews : minViews;
+    if (v.viewCount < platformMin) {
+      trackRejected(v.platform, v.title, v.viewCount, `below ${platformMin.toLocaleString()} min views`);
+      continue;
+    }
+    if (v.durationSec > 0 && v.durationSec < minDur) {
+      trackRejected(v.platform, v.title, v.viewCount, `too short (${v.durationSec}s < ${minDur}s)`);
+      continue;
+    }
+    if (v.durationSec > 0 && v.durationSec > maxDur) {
+      trackRejected(v.platform, v.title, v.viewCount, `too long (${v.durationSec}s > ${maxDur}s)`);
+      continue;
+    }
+    const pc = platformCounts[v.platform];
+    if (pc) pc.qualified++;
+    filtered.push(v);
+  }
+
+  // Log per-platform summary
+  for (const [plat, counts] of Object.entries(platformCounts)) {
+    if (counts.found > 0) {
+      log.log(`[PLATFORM] ${plat}: ${counts.found} found → ${counts.qualified} qualified, ${counts.rejected} rejected`);
+    }
+  }
 
   if (filtered.length === 0) {
     log.warn(`No videos passed filters (${unique.length} candidates, minViews=${minViews}, dur=${minDur}-${maxDur}s)`);
     return null;
   }
 
-  // ── 5. QUALITY SCORING ──
+  // ── 7. QUALITY SCORING ──
   const scoredWithRank = filtered.map((v) => {
     let score = 0;
 
@@ -650,6 +761,12 @@ export async function discoverVideo(config: {
     score: v.score,
   }));
 
-  log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.source}] from ${unique.length} candidates`);
-  return { selected: best, candidates: candidatesSummary, totalConsidered: unique.length };
+  log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.platform}/${best.source}] from ${unique.length} candidates`);
+  return {
+    selected: best,
+    candidates: candidatesSummary,
+    totalConsidered: unique.length,
+    platformBreakdown: platformCounts,
+    rejectedSample,
+  };
 }

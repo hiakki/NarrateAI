@@ -876,12 +876,18 @@ export default function VideoDetailPage() {
           {/* Live discovery transparency during generation (clip-repurpose) */}
           {isClipRepurpose && video.sourceMetadata && (() => {
             const meta = video.sourceMetadata as {
-              discovery?: { candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>; totalConsidered: number };
+              discovery?: {
+                candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>;
+                totalConsidered: number;
+                platformBreakdown?: Record<string, { found: number; qualified: number; rejected: number }>;
+                rejectedSample?: Array<{ title: string; platform: string; viewCount: number; reason: string }>;
+              };
               channelName?: string; originalTitle?: string; viewCount?: number; platform?: string; niche?: string;
             };
             const disc = meta.discovery;
             if (!disc || disc.candidates.length === 0) return null;
             const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+            const pb = disc.platformBreakdown;
             return (
               <div className="mx-6 mb-6 rounded-lg border bg-muted/20 p-3 space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">
@@ -899,6 +905,16 @@ export default function VideoDetailPage() {
                     </div>
                   </div>
                 </div>
+                {pb && Object.keys(pb).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {Object.entries(pb).map(([plat, counts]) => (
+                      <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-background">
+                        <span className="uppercase font-semibold">{plat.slice(0, 2)}</span>{" "}
+                        {counts.found} found · {counts.qualified} ok · {counts.rejected} rej
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {disc.candidates.length > 1 && (
                   <details className="group">
                     <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground">
@@ -912,6 +928,25 @@ export default function VideoDetailPage() {
                             {c.score != null && <span className="font-mono text-muted-foreground">{c.score}</span>}
                             <span className="text-muted-foreground">{fmtViews(c.viewCount)}</span>
                             <span className="uppercase text-[9px] bg-muted px-1 rounded">{c.platform}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+                {disc.rejectedSample && disc.rejectedSample.length > 0 && (
+                  <details className="group">
+                    <summary className="text-[10px] text-orange-600 dark:text-orange-400 cursor-pointer hover:text-foreground">
+                      {disc.rejectedSample.length} rejected candidates...
+                    </summary>
+                    <div className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                      {disc.rejectedSample.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between text-[10px] py-0.5 px-1 rounded hover:bg-muted/50 text-muted-foreground">
+                          <span className="truncate flex-1 mr-2">{r.title}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span>{fmtViews(r.viewCount)}</span>
+                            <span className="uppercase text-[9px] bg-muted px-1 rounded">{r.platform}</span>
+                            <span className="text-[9px] text-orange-600 dark:text-orange-400">{r.reason}</span>
                           </div>
                         </div>
                       ))}
@@ -1295,7 +1330,12 @@ export default function VideoDetailPage() {
           {/* Clip Repurpose: Combined Clip Details card (source + timing + candidates) */}
           {isClipRepurpose && video.sourceMetadata && (() => {
             const meta = video.sourceMetadata as {
-              discovery?: { candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>; totalConsidered: number };
+              discovery?: {
+                candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>;
+                totalConsidered: number;
+                platformBreakdown?: Record<string, { found: number; qualified: number; rejected: number }>;
+                rejectedSample?: Array<{ title: string; platform: string; viewCount: number; reason: string }>;
+              };
               timingBreakdown?: { preContext: { startSec: number; endSec: number; durationSec: number }; mainHeatmap: { startSec: number; endSec: number; durationSec: number }; postContext: { startSec: number; endSec: number; durationSec: number }; totalDurationSec: number };
               peakSegment?: { startSec: number; endSec: number; avgHeat: number };
               channelName?: string; originalTitle?: string; viewCount?: number; platform?: string; niche?: string;
@@ -1306,6 +1346,7 @@ export default function VideoDetailPage() {
             const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
 
             if (!disc && !timing) return null;
+            const pb = disc?.platformBreakdown;
 
             return (
               <Card>
@@ -1317,6 +1358,18 @@ export default function VideoDetailPage() {
                   {disc && disc.candidates.length > 0 && (
                     <div className="p-4 space-y-2">
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Source · {disc.totalConsidered} scanned</p>
+
+                      {pb && Object.keys(pb).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {Object.entries(pb).map(([plat, counts]) => (
+                            <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-muted/30">
+                              <span className="uppercase font-semibold">{plat.slice(0, 2)}</span>{" "}
+                              {counts.found} found · {counts.qualified} ok · {counts.rejected} rej
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
                       <div className="flex items-start gap-2">
                         <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
                         <div className="min-w-0 flex-1">
@@ -1350,6 +1403,27 @@ export default function VideoDetailPage() {
                                   {c.score != null && <span className="font-mono text-[10px] bg-muted px-1 rounded">{c.score}</span>}
                                   <span className="flex items-center gap-0.5 text-[10px]"><Eye className="w-2.5 h-2.5" /> {fmtViews(c.viewCount)}</span>
                                   <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline"><Link2 className="w-3 h-3" /></a>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {disc.rejectedSample && disc.rejectedSample.length > 0 && (
+                        <details className="group">
+                          <summary className="text-xs text-orange-600 dark:text-orange-400 cursor-pointer hover:text-foreground py-0.5">
+                            {disc.rejectedSample.length} rejected candidates...
+                          </summary>
+                          <div className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                            {disc.rejectedSample.map((r, i) => (
+                              <div key={i} className="flex items-center justify-between py-1 px-2 rounded text-xs hover:bg-muted/30 text-muted-foreground">
+                                <div className="flex-1 min-w-0 mr-2">
+                                  <p className="truncate">{r.title}</p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="text-[10px]">{fmtViews(r.viewCount)}</span>
+                                  <span className="uppercase text-[9px] bg-muted px-1 rounded">{r.platform}</span>
+                                  <span className="text-[9px] text-orange-600 dark:text-orange-400 max-w-[120px] truncate">{r.reason}</span>
                                 </div>
                               </div>
                             ))}

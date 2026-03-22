@@ -165,7 +165,7 @@ const worker = new Worker<ClipRepurposeJobData>(
         throw new Error("No suitable video found from any configured source");
       }
 
-      const { selected: discovered, candidates, totalConsidered } = discoveryResult;
+      const { selected: discovered, candidates, totalConsidered, platformBreakdown, rejectedSample } = discoveryResult;
       log.log(`[DISCOVER]`, `Selected: "${discovered.title}" (${discovered.viewCount.toLocaleString()} views) [${discovered.platform}] from ${totalConsidered} candidates`);
 
       await db.video.update({
@@ -180,7 +180,7 @@ const worker = new Worker<ClipRepurposeJobData>(
             originalTitle: discovered.title,
             viewCount: discovered.viewCount,
             source: discovered.source,
-            discovery: { candidates, totalConsidered },
+            discovery: { candidates, totalConsidered, platformBreakdown, rejectedSample },
           } as never,
         },
       });
@@ -339,7 +339,7 @@ const worker = new Worker<ClipRepurposeJobData>(
             source: discovered.source,
             peakSegment: peak,
             timingBreakdown,
-            discovery: { candidates, totalConsidered },
+            discovery: { candidates, totalConsidered, platformBreakdown, rejectedSample },
           } as never,
         },
       });
@@ -352,7 +352,9 @@ const worker = new Worker<ClipRepurposeJobData>(
 
       // ── SCHEDULE via native platform APIs (never post immediately) ──
       const jobTargets = (targetPlatforms ?? []) as string[];
-      if (jobTargets.length === 0) {
+      if (process.env.DRY_RUN === "1") {
+        log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
+      } else if (jobTargets.length === 0) {
         log.log(`[POST]`, `Skipped — no target platforms in job`);
       } else {
         try {
