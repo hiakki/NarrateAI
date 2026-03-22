@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = (await req.json()) as {
-      action?: "create" | "trigger" | "toggle" | "update" | "delete" | "stop";
+      action?: "create" | "trigger" | "toggle" | "update" | "delete" | "stop" | "clear-failed";
       automationId?: string;
       enabled?: boolean;
       name?: string;
@@ -146,6 +146,18 @@ export async function POST(req: NextRequest) {
         await db.series.delete({ where: { id: existing.seriesId } }).catch(() => {});
       }
       return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === "clear-failed") {
+      const userAutos = await db.automation.findMany({
+        where: { userId: session.user.id, automationType: "clip-repurpose" },
+        select: { seriesId: true },
+      });
+      const seriesIds = userAutos.map((a) => a.seriesId).filter(Boolean) as string[];
+      const result = await db.video.deleteMany({
+        where: { seriesId: { in: seriesIds }, status: "FAILED" },
+      });
+      return NextResponse.json({ ok: true, deleted: result.count });
     }
 
     if (body.action === "trigger" && body.automationId) {

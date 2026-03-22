@@ -56,6 +56,7 @@ export interface ScrapedVideo {
 
 /**
  * Load Netscape-format cookies from disk and convert to Puppeteer format.
+ * Handles Windows \r\n line endings and validates fields before passing to CDP.
  */
 async function loadCookiesForPuppeteer(
   domain: string,
@@ -65,27 +66,36 @@ async function loadCookiesForPuppeteer(
 
   try {
     const text = await fs.readFile(cookiePath, "utf-8");
-    return text
-      .split("\n")
-      .filter((l) => l.trim() && !l.startsWith("# "))
-      .map((line) => {
-        const stripped = line.startsWith("#HttpOnly_") ? line.slice(10) : line;
-        const isHttpOnly = line.startsWith("#HttpOnly_");
-        const parts = stripped.split("\t");
-        if (parts.length < 7) return null;
-        const [dom, , pth, sec, exp, name, value] = parts;
-        if (!dom.includes(domain)) return null;
-        return {
-          name,
-          value,
-          domain: dom.startsWith(".") ? dom : `.${dom}`,
-          path: pth,
-          secure: sec === "TRUE",
-          httpOnly: isHttpOnly,
-          expires: Number(exp) || -1,
-        };
-      })
-      .filter(Boolean) as Array<{ name: string; value: string; domain: string; path: string; secure: boolean; httpOnly: boolean; expires: number }>;
+    const cookies: Array<{ name: string; value: string; domain: string; path: string; secure: boolean; httpOnly: boolean; expires: number }> = [];
+
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("# ")) continue;
+
+      const isHttpOnly = line.startsWith("#HttpOnly_");
+      const stripped = isHttpOnly ? line.slice(10) : line;
+      const parts = stripped.split("\t").map((f) => f.trim());
+      if (parts.length < 7) continue;
+
+      const [dom, , pth, sec, exp, name, value] = parts;
+      if (!dom || !dom.includes(domain)) continue;
+      if (!name) continue;
+
+      const expNum = Number(exp) || 0;
+      if (expNum > 0 && expNum < Date.now() / 1000) continue;
+
+      cookies.push({
+        name,
+        value: value ?? "",
+        domain: dom.startsWith(".") ? dom : `.${dom}`,
+        path: pth || "/",
+        secure: sec === "TRUE",
+        httpOnly: isHttpOnly,
+        expires: expNum || -1,
+      });
+    }
+
+    return cookies;
   } catch {
     return [];
   }
@@ -118,8 +128,12 @@ async function prepPage(browser: Browser, domain: string): Promise<Page> {
 
   const cookies = await loadCookiesForPuppeteer(domain);
   if (cookies.length > 0) {
-    await page.setCookie(...cookies);
-    log.log(`Loaded ${cookies.length} cookies for ${domain}`);
+    try {
+      await page.setCookie(...cookies);
+      log.log(`Loaded ${cookies.length} cookies for ${domain}`);
+    } catch (cookieErr) {
+      log.warn(`[${domain}] Failed to set ${cookies.length} cookies, continuing without: ${cookieErr instanceof Error ? cookieErr.message : cookieErr}`);
+    }
   }
 
   return page;
