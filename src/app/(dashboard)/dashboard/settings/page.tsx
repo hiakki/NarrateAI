@@ -160,7 +160,7 @@ export default function SettingsPage() {
   const [cookieSaving, setCookieSaving] = useState(false);
   const [cookieMsg, setCookieMsg] = useState("");
   const [cookieDeleting, setCookieDeleting] = useState(false);
-  const [extracting, setExtracting] = useState(false);
+  const [extractingPlatform, setExtractingPlatform] = useState<"facebook" | "instagram" | "both" | null>(null);
   const [extractMsg, setExtractMsg] = useState("");
   const fileInputRef = useCallback((node: HTMLInputElement | null) => {
     if (node) node.value = "";
@@ -200,8 +200,8 @@ export default function SettingsPage() {
   }, [fetchCookieStatus]);
 
   const handleCookieExtract = useCallback(async (platform: "facebook" | "instagram" | "both") => {
-    setExtracting(true);
-    setExtractMsg("Opening browser window...");
+    setExtractingPlatform(platform);
+    setExtractMsg(`Opening browser for ${platform === "facebook" ? "Facebook" : "Instagram"} login...`);
     setCookieMsg("");
     try {
       const res = await fetch("/api/settings/cookies/extract", {
@@ -212,12 +212,11 @@ export default function SettingsPage() {
       const json = await res.json();
       if (!res.ok) {
         setExtractMsg(json.error || "Failed to start");
-        setExtracting(false);
+        setExtractingPlatform(null);
         return;
       }
       setExtractMsg(json.data?.message || "Browser opening...");
 
-      // Poll for completion
       const poll = async () => {
         for (let i = 0; i < 160; i++) {
           await new Promise((r) => setTimeout(r, 2000));
@@ -228,14 +227,14 @@ export default function SettingsPage() {
             if (!d) continue;
             if (d.status === "done") {
               setExtractMsg(`Done! ${d.cookieCount} cookies saved.`);
-              setExtracting(false);
+              setExtractingPlatform(null);
               fetchCookieStatus();
               setTimeout(() => setExtractMsg(""), 5000);
               return;
             }
             if (d.status === "error") {
               setExtractMsg(d.message || "Extraction failed");
-              setExtracting(false);
+              setExtractingPlatform(null);
               return;
             }
             if (d.status === "in_progress") {
@@ -244,12 +243,12 @@ export default function SettingsPage() {
           } catch { /* retry */ }
         }
         setExtractMsg("Timed out waiting for login.");
-        setExtracting(false);
+        setExtractingPlatform(null);
       };
       poll();
     } catch {
       setExtractMsg("Network error");
-      setExtracting(false);
+      setExtractingPlatform(null);
     }
   }, [fetchCookieStatus]);
 
@@ -474,10 +473,10 @@ export default function SettingsPage() {
                     ? "h-8 text-xs"
                     : "h-8 text-xs bg-[#1877F2] hover:bg-[#166FE5] text-white"}
                   variant={cookieStatus?.fbConnected ? "outline" : "default"}
-                  disabled={extracting}
+                  disabled={extractingPlatform !== null}
                   onClick={() => handleCookieExtract("facebook")}
                 >
-                  {extracting ? (
+                  {extractingPlatform === "facebook" ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : (
                     <LogIn className="mr-1.5 h-3 w-3" />
@@ -507,10 +506,10 @@ export default function SettingsPage() {
                     ? "h-8 text-xs"
                     : "h-8 text-xs bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90 text-white"}
                   variant={cookieStatus?.igConnected ? "outline" : "default"}
-                  disabled={extracting}
+                  disabled={extractingPlatform !== null}
                   onClick={() => handleCookieExtract("instagram")}
                 >
-                  {extracting ? (
+                  {extractingPlatform === "instagram" ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : (
                     <LogIn className="mr-1.5 h-3 w-3" />
@@ -545,15 +544,15 @@ export default function SettingsPage() {
             </p>
 
             {/* Extraction progress */}
-            {(extracting || extractMsg) && (
+            {(extractingPlatform || extractMsg) && (
               <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-sm ${
                 extractMsg.includes("Done") ? "border-green-200 bg-green-50 text-green-700"
                   : extractMsg.includes("fail") || extractMsg.includes("error") || extractMsg.includes("closed") || extractMsg.includes("Timed")
                   ? "border-red-200 bg-red-50 text-red-700"
                   : "border-blue-200 bg-blue-50 text-blue-700"
               }`}>
-                {extracting && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
-                {!extracting && extractMsg.includes("Done") && <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                {extractingPlatform && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+                {!extractingPlatform && extractMsg.includes("Done") && <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
                 <span className="text-xs">{extractMsg}</span>
               </div>
             )}

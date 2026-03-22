@@ -20,13 +20,20 @@ const CHROME_PATHS: Record<string, string[]> = {
   win32: [
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    `${process.env.LOCALAPPDATA ?? ""}\\Google\\Chrome\\Application\\chrome.exe`,
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
   ],
 };
 
 function findChrome(): string | null {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
   const candidates = CHROME_PATHS[process.platform] ?? [];
   const fsSync = require("fs") as typeof import("fs");
   for (const p of candidates) {
+    if (!p || p.startsWith("\\")) continue;
     if (fsSync.existsSync(p)) return p;
   }
   return null;
@@ -147,10 +154,13 @@ export async function extractPlatformCookies(
           c.domain.includes("facebook.com") || c.domain.includes("instagram.com"),
         );
 
-        // Log progress every 10 seconds
         if (i % 5 === 4) {
-          const names = fbCookies.map((c) => c.name).join(", ");
-          console.log(`[cookie-check ${i * 2}s] FB/IG cookies (${fbCookies.length}): ${names.slice(0, 200)}`);
+          const fbOnly = fbCookies.filter((c) => c.domain.includes("facebook.com"));
+          const igOnly = fbCookies.filter((c) => c.domain.includes("instagram.com"));
+          const plat = platform === "instagram" ? "IG" : "FB";
+          const relevant = platform === "instagram" ? igOnly : fbOnly;
+          const names = relevant.map((c) => c.name).join(", ");
+          console.log(`[cookie-check ${i * 2}s] [${plat}] cookies (${relevant.length}): ${names.slice(0, 200)}`);
         }
 
         // Detect login: c_user for FB, sessionid for IG - the definitive cookie
