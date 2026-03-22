@@ -753,7 +753,9 @@ export default function ClipRepurposePage() {
             </button>
             <CardTitle className="text-base leading-snug line-clamp-2 flex-1 min-w-0">
               <Scissors className="h-4 w-4 text-blue-500 inline mr-1.5 align-text-bottom" />
-              {auto.name}
+              <Link href={`/dashboard/clip-repurpose/${auto.id}`} className="hover:underline underline-offset-2 hover:text-primary transition-colors">
+                {auto.name}
+              </Link>
             </CardTitle>
           </div>
           <div className="flex items-center gap-1.5 pt-1 flex-wrap">
@@ -809,8 +811,8 @@ export default function ClipRepurposePage() {
                 </div>
                 <div>
                   <Label className="text-[11px] font-medium text-muted-foreground">Duration (s)</Label>
-                  <Input className="h-7 text-xs mt-0.5" type="number" min={15} max={90} value={editForm.clipDurationSec}
-                    onChange={(e) => setEditForm((p) => ({ ...p, clipDurationSec: parseInt(e.target.value) || 45 }))} />
+                  <Input className="h-7 text-xs mt-0.5" type="number" min={30} max={90} value={editForm.clipDurationSec}
+                    onChange={(e) => setEditForm((p) => ({ ...p, clipDurationSec: Math.max(30, parseInt(e.target.value) || 45) }))} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1262,7 +1264,7 @@ export default function ClipRepurposePage() {
               </div>
               <div>
                 <Label>Clip Duration (seconds)</Label>
-                <Input type="number" min={15} max={90} value={formDuration} onChange={(e) => setFormDuration(parseInt(e.target.value) || 45)} />
+                <Input type="number" min={30} max={90} value={formDuration} onChange={(e) => setFormDuration(Math.max(30, parseInt(e.target.value) || 45))} />
               </div>
             </div>
 

@@ -223,21 +223,15 @@ export async function searchFbVideos(
 
     const intercepted = new Map<string, FbInterceptedVideo>();
 
-    // Intercept GraphQL / API responses before navigating
+    // Intercept ALL JSON responses (FB uses many internal API endpoints)
     page.on("response", async (response) => {
       try {
-        const url = response.url();
-        if (
-          !url.includes("/api/graphql") &&
-          !url.includes("/graphql") &&
-          !url.includes("search") &&
-          !url.includes("/ajax/")
-        ) return;
         const ct = response.headers()["content-type"] ?? "";
         if (!ct.includes("json") && !ct.includes("javascript")) return;
-
+        const status = response.status();
+        if (status < 200 || status >= 400) return;
         const text = await response.text();
-        // FB sometimes returns multiple JSON objects separated by newlines
+        if (!text.includes("video") && !text.includes("play_count") && !text.includes("view_count")) return;
         for (const chunk of text.split("\n")) {
           const trimmed = chunk.trim();
           if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
@@ -251,13 +245,12 @@ export async function searchFbVideos(
 
     const searchUrl = `https://www.facebook.com/search/videos/?q=${encodeURIComponent(query)}`;
     log.log(`[FB] Searching: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40_000 });
-    await new Promise((r) => setTimeout(r, 4000));
+    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 45_000 });
+    await new Promise((r) => setTimeout(r, 5000));
 
-    // Scroll aggressively to trigger more GraphQL loads
-    for (let i = 0; i < 6; i++) {
-      await page.evaluate(() => window.scrollBy(0, 2000));
-      await new Promise((r) => setTimeout(r, 2500));
+    for (let i = 0; i < 12; i++) {
+      await page.evaluate(() => window.scrollBy(0, 2500));
+      await new Promise((r) => setTimeout(r, 2000));
     }
 
     log.log(`[FB] Intercepted ${intercepted.size} video(s) from API responses`);
@@ -431,7 +424,7 @@ export async function searchIgReels(
 }
 
 // ---------------------------------------------------------------------------
-// Facebook page discovery (legacy, kept for direct URL scraping)
+// Facebook page discovery (response interception + DOM fallback)
 // ---------------------------------------------------------------------------
 export async function discoverFbPageVideos(
   pageUrl: string,
@@ -442,85 +435,164 @@ export async function discoverFbPageVideos(
     browser = await launchBrowser();
     const page = await prepPage(browser, "facebook.com");
 
-    log.log(`[FB] Navigating to ${pageUrl}`);
-    await page.goto(pageUrl, { waitUntil: "networkidle2", timeout: 30_000 });
-    await new Promise((r) => setTimeout(r, 3000));
+    const intercepted = new Map<string, FbInterceptedVideo>();
 
-    // Scroll aggressively to load more content and find high-view videos
-    for (let i = 0; i < 6; i++) {
-      await page.evaluate(() => window.scrollBy(0, 2000));
+    // Widen interception: capture ALL JSON responses (FB uses many internal endpoints)
+    page.on("response", async (response) => {
+      try {
+        const ct = response.headers()["content-type"] ?? "";
+        if (!ct.includes("json") && !ct.includes("javascript") && !ct.includes("text/html")) return;
+        const status = response.status();
+        if (status < 200 || status >= 400) return;
+        const text = await response.text();
+        if (!text.includes("video") && !text.includes("play_count") && !text.includes("view_count")) return;
+        for (const chunk of text.split("\n")) {
+          const trimmed = chunk.trim();
+          if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
+          try {
+            const json = JSON.parse(trimmed);
+            extractVideosFromFbJson(json, intercepted, maxItems);
+          } catch { /* not JSON */ }
+        }
+      } catch { /* response body unavailable */ }
+    });
+
+    log.log(`[FB] Navigating to ${pageUrl}`);
+    await page.goto(pageUrl, { waitUntil: "networkidle2", timeout: 45_000 });
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const currentUrl = page.url();
+    if (currentUrl.includes("/login") || currentUrl.includes("checkpoint")) {
+      log.warn(`[FB] Login wall detected (redirected to ${currentUrl})`);
+      return [];
+    }
+
+    for (let i = 0; i < 14; i++) {
+      await page.evaluate(() => window.scrollBy(0, 2500));
       await new Promise((r) => setTimeout(r, 2000));
     }
 
-    const fbExtractScript = `
-      (function() {
-        var max = ${maxItems};
-        var results = [];
-        var seenIds = {};
+    log.log(`[FB] Intercepted ${intercepted.size} video(s) from API responses on ${pageUrl}`);
 
-        var links = document.querySelectorAll('a[href*="/watch/"], a[href*="/reel/"], a[href*="/videos/"]');
-        for (var i = 0; i < links.length; i++) {
-          if (results.length >= max) break;
-          var href = links[i].href || "";
-          if (!href) continue;
-
-          var vidMatch = href.match(/(?:\\/watch\\/\\?v=|\\/reel\\/|\\/videos\\/)(\\d+)/);
-          if (!vidMatch) continue;
-          var vidId = vidMatch[1];
-          if (seenIds[vidId]) continue;
-          seenIds[vidId] = true;
-
-          // Stay close to the video link — use article or walk up max 3 levels
-          var container = links[i].closest('[role="article"]');
-          if (!container) {
-            container = links[i].parentElement;
-            for (var p = 0; p < 3 && container && container.parentElement; p++) container = container.parentElement;
-          }
-          var text = container ? container.textContent || "" : "";
-
-          // Only match "X views" or "X plays" patterns (not page-level totals)
-          var views = "";
-          var vPats = [
-            /(\\d[\\d,.]*\\s*[KkMmBb])\\s*(?:views|Views|plays|Plays)/,
-            /(\\d[\\d,.]+)\\s*(?:views|Views|plays|Plays)/,
-          ];
-          for (var vi = 0; vi < vPats.length; vi++) {
-            var vm = text.match(vPats[vi]);
-            if (vm) { views = vm[1]; break; }
-          }
-
-          var spans = container ? container.querySelectorAll("span") : [];
-          var title = "";
-          for (var si = 0; si < spans.length; si++) {
-            var t = (spans[si].textContent || "").trim();
-            if (t.length > 15 && t.length < 300
-              && !/^(All reactions|\\d+ comment|\\d+ share|Like|Comment|Share|Verified)/i.test(t)
-              && !/^\\d+[KkMmBb]?$/.test(t)
-              && !/(reels$|'s reels$)/i.test(t)) {
-              title = t;
-              break;
-            }
-          }
-
-          results.push({ url: href, title: title, views: views, vidId: vidId });
-        }
-        return results;
-      })()
-    `;
-    const videos = await page.evaluate(fbExtractScript) as Array<{
-      url: string; title: string; views: string; vidId: string;
-    }>;
-
-    // Extract page name from URL
     const pageNameMatch = pageUrl.match(/facebook\.com\/([^/?]+)/);
     const pageName = pageNameMatch ? pageNameMatch[1] : "Unknown";
 
-    return videos.map((v) => {
-      // Strip FB date/view suffixes from titles: "Title text3 days ago  · 1.1M views"
+    if (intercepted.size > 0) {
+      return [...intercepted.values()].slice(0, maxItems).map((v) => {
+        let title = (v.title || "").replace(/\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago.*$/i, "").trim();
+        if (!title || title.length < 5) title = `Video from ${pageName}`;
+        return {
+          videoId: v.id,
+          url: v.url,
+          title,
+          channelName: v.channelName || pageName,
+          viewCount: v.viewCount,
+          durationSec: 0,
+          platform: "facebook" as const,
+        };
+      });
+    }
+
+    // --- DOM + HTML source fallback ---
+    log.log(`[FB] Falling back to DOM + HTML extraction for ${pageUrl}...`);
+    const domResult = await page.evaluate((max: number) => {
+      const results: Array<{ url: string; title: string; views: string; vidId: string }> = [];
+      const seenIds: Record<string, boolean> = {};
+      const bodyText = document.body?.textContent ?? "";
+      const html = document.documentElement.innerHTML;
+      const htmlLen = html.length;
+
+      // Strategy 1: Standard link selectors
+      const links = document.querySelectorAll(
+        'a[href*="/watch/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="fb.watch"]',
+      );
+      for (const link of links) {
+        if (results.length >= max) break;
+        const href = (link as HTMLAnchorElement).href || "";
+        if (!href) continue;
+        const vidMatch = href.match(/(?:\/watch\/?\?v=|\/reel\/|\/videos\/|fb\.watch\/)(\d+)/);
+        if (!vidMatch) continue;
+        const vidId = vidMatch[1];
+        if (seenIds[vidId]) continue;
+        seenIds[vidId] = true;
+
+        let container: Element | null =
+          link.closest('[role="article"]') ?? link.closest('[role="listitem"]') ??
+          link.closest('[data-pagelet]');
+        if (!container) {
+          container = link.parentElement;
+          for (let p = 0; p < 5 && container?.parentElement; p++) container = container.parentElement;
+        }
+        const text = container?.textContent ?? "";
+        let views = "";
+        for (const pat of [
+          /(\d[\d,.]*\s*[KkMmBb])\s*(?:views|Views|plays|Plays)/,
+          /(\d[\d,.]+)\s*(?:views|Views|plays|Plays)/,
+        ]) {
+          const m = text.match(pat);
+          if (m) { views = m[1]; break; }
+        }
+        const spans = container?.querySelectorAll("span") ?? [];
+        let title = "";
+        for (const span of spans) {
+          const t = span.textContent?.trim() ?? "";
+          if (t.length > 15 && t.length < 300
+            && !/^(All reactions|\d+ comment|\d+ share|Like|Comment|Share|Verified)/i.test(t)
+            && !/^\d+[KkMmBb]?$/.test(t)
+            && !/(reels$|'s reels$)/i.test(t)) { title = t; break; }
+        }
+        results.push({ url: href, title, views, vidId });
+      }
+
+      // Strategy 2: Extract video IDs from HTML source (FB embeds them in JSON data in scripts)
+      if (results.length < max) {
+        const vidIdPat = /\"videoId\"\s*:\s*\"(\d{10,})\"|\"video_id\"\s*:\s*\"(\d{10,})\"|\/videos\/(\d{10,})/g;
+        let m2;
+        while ((m2 = vidIdPat.exec(html)) !== null && results.length < max) {
+          const vid = m2[1] || m2[2] || m2[3];
+          if (!vid || seenIds[vid]) continue;
+          seenIds[vid] = true;
+          results.push({
+            url: `https://www.facebook.com/watch/?v=${vid}`,
+            title: "",
+            views: "",
+            vidId: vid,
+          });
+        }
+      }
+
+      const linkSample = Array.from(document.querySelectorAll("a"))
+        .slice(0, 200)
+        .map((a) => (a as HTMLAnchorElement).href)
+        .filter((h) => h && (h.includes("video") || h.includes("watch") || h.includes("reel")))
+        .slice(0, 10);
+
+      return {
+        results,
+        htmlLen,
+        hasLogin: bodyText.includes("Log in") || bodyText.includes("Log Into"),
+        linkSample,
+      };
+    }, maxItems) as {
+      results: Array<{ url: string; title: string; views: string; vidId: string }>;
+      htmlLen: number;
+      hasLogin: boolean;
+      linkSample: string[];
+    };
+
+    log.log(`[FB] DOM+HTML extraction found ${domResult.results.length} video(s), HTML=${domResult.htmlLen} chars, loginPrompt=${domResult.hasLogin}`);
+    if (domResult.linkSample.length > 0) {
+      log.log(`[FB] Sample video-related links: ${domResult.linkSample.join(" | ")}`);
+    }
+    if (domResult.results.length === 0 && domResult.hasLogin) {
+      log.warn(`[FB] Page appears to require login — cookies may be expired`);
+    }
+
+    return domResult.results.map((v) => {
       let title = (v.title || "").replace(/\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*ago.*$/i, "").trim();
       if (!title || title.length < 5) title = `Video from ${pageName}`;
       return {
-        videoId: v.vidId || (v.url.match(/(?:\/watch\/?\?v=|\/reel\/|\/videos\/)(\d+)/) || [])[1] || "",
+        videoId: v.vidId || "",
         url: v.url,
         title,
         channelName: pageName,
@@ -682,8 +754,53 @@ export async function downloadFbVideo(
 }
 
 // ---------------------------------------------------------------------------
-// Instagram discovery: scrape profile reels
+// Instagram discovery: scrape profile reels (API interception + DOM fallback)
 // ---------------------------------------------------------------------------
+
+interface IgInterceptedReel {
+  id: string;
+  url: string;
+  playCount: number;
+}
+
+function extractReelsFromIgJson(
+  json: unknown,
+  results: Map<string, IgInterceptedReel>,
+  maxItems: number,
+): void {
+  if (results.size >= maxItems || !json || typeof json !== "object") return;
+
+  const obj = json as Record<string, unknown>;
+
+  // IG GraphQL node shapes: clips (reels) have code/shortcode + play_count/video_view_count
+  const code = obj.code ?? obj.shortcode;
+  const playCount =
+    (obj.play_count as number) ??
+    (obj.video_play_count as number) ??
+    (obj.video_view_count as number) ??
+    (typeof obj.media === "object" && obj.media
+      ? (obj.media as Record<string, unknown>).play_count as number
+      : undefined);
+
+  if (code && typeof code === "string" && code.length > 5 && typeof playCount === "number" && playCount > 0) {
+    if (!results.has(code)) {
+      results.set(code, {
+        id: code,
+        url: `https://www.instagram.com/reel/${code}/`,
+        playCount,
+      });
+    }
+  }
+
+  for (const val of Object.values(obj)) {
+    if (Array.isArray(val)) {
+      for (const item of val) extractReelsFromIgJson(item, results, maxItems);
+    } else if (val && typeof val === "object") {
+      extractReelsFromIgJson(val, results, maxItems);
+    }
+  }
+}
+
 export async function discoverIgReels(
   profileUrl: string,
   maxItems = 15,
@@ -693,52 +810,118 @@ export async function discoverIgReels(
     browser = await launchBrowser();
     const page = await prepPage(browser, "instagram.com");
 
-    // Navigate to reels tab
+    const intercepted = new Map<string, IgInterceptedReel>();
+
+    // Widen interception: capture ALL JSON responses
+    page.on("response", async (response) => {
+      try {
+        const ct = response.headers()["content-type"] ?? "";
+        if (!ct.includes("json") && !ct.includes("javascript")) return;
+        const status = response.status();
+        if (status < 200 || status >= 400) return;
+        const text = await response.text();
+        if (!text.includes("shortcode") && !text.includes("play_count") && !text.includes("video_")) return;
+        for (const chunk of text.split("\n")) {
+          const trimmed = chunk.trim();
+          if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
+          try {
+            const json = JSON.parse(trimmed);
+            extractReelsFromIgJson(json, intercepted, maxItems);
+          } catch { /* not JSON */ }
+        }
+      } catch { /* response body unavailable */ }
+    });
+
     const reelsUrl = profileUrl.replace(/\/?$/, "/reels/");
     log.log(`[IG] Navigating to ${reelsUrl}`);
-    await page.goto(reelsUrl, { waitUntil: "networkidle2", timeout: 30_000 });
-    await new Promise((r) => setTimeout(r, 3000));
+    await page.goto(reelsUrl, { waitUntil: "networkidle2", timeout: 40_000 });
+    await new Promise((r) => setTimeout(r, 4000));
 
-    // Scroll to load more
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 1200));
-      await new Promise((r) => setTimeout(r, 2000));
+    const currentUrl = page.url();
+    if (currentUrl.includes("/accounts/login") || currentUrl.includes("/challenge")) {
+      log.warn(`[IG] Login wall detected (redirected to ${currentUrl})`);
+      return [];
     }
 
-    const reels = await page.evaluate((max: number) => {
-      const results: Array<{ url: string; views: string }> = [];
-      const seen = new Set<string>();
-
-      // IG reels are links to /reel/SHORTCODE/
-      const links = document.querySelectorAll('a[href*="/reel/"]');
-      for (const link of links) {
-        if (results.length >= max) break;
-        const href = (link as HTMLAnchorElement).href;
-        if (seen.has(href)) continue;
-        seen.add(href);
-
-        // View count is often in an overlay or nearby span
-        const container = link.closest("div");
-        const viewSpans = container?.querySelectorAll("span") || [];
-        let views = "";
-        for (const span of viewSpans) {
-          const text = span.textContent?.trim() || "";
-          if (/[\d,.]+[KkMm]?/.test(text) && text.length < 20) {
-            views = text;
-            break;
-          }
-        }
-
-        results.push({ url: href, views });
-      }
-
-      return results;
-    }, maxItems);
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => window.scrollBy(0, 1500));
+      await new Promise((r) => setTimeout(r, 2500));
+    }
 
     const profileName = (profileUrl.match(/instagram\.com\/([^/?]+)/) || [])[1] || "Unknown";
 
-    return reels.map((r) => ({
-      videoId: (r.url.match(/\/reel\/([^/]+)/) || [])[1] || "",
+    log.log(`[IG] Intercepted ${intercepted.size} reel(s) from API responses for @${profileName}`);
+
+    if (intercepted.size > 0) {
+      return [...intercepted.values()].slice(0, maxItems).map((r) => ({
+        videoId: r.id,
+        url: r.url,
+        title: `Reel by @${profileName}`,
+        channelName: profileName,
+        viewCount: r.playCount,
+        durationSec: 0,
+        platform: "instagram" as const,
+      }));
+    }
+
+    // --- DOM + HTML source fallback ---
+    log.log(`[IG] Falling back to DOM + HTML extraction for @${profileName}...`);
+    const domResult = await page.evaluate((max: number) => {
+      const results: Array<{ url: string; views: string; code: string }> = [];
+      const seen = new Set<string>();
+      const html = document.documentElement.innerHTML;
+      const htmlLen = html.length;
+      const hasLogin = (document.body?.textContent ?? "").includes("Log in") ||
+        (document.body?.textContent ?? "").includes("Sign up");
+
+      // Strategy 1: Standard link selectors
+      const links = document.querySelectorAll('a[href*="/reel/"], a[href*="/p/"]');
+      for (const link of links) {
+        if (results.length >= max) break;
+        const href = (link as HTMLAnchorElement).href;
+        if (!href.includes("/reel/") && !href.includes("/p/")) continue;
+        const code = (href.match(/\/reel\/([^/]+)/) || href.match(/\/p\/([^/]+)/) || [])[1] || "";
+        if (!code || seen.has(code)) continue;
+        seen.add(code);
+
+        let container: Element | null = link;
+        for (let p = 0; p < 4 && container?.parentElement; p++) container = container.parentElement;
+        const spans = container?.querySelectorAll("span") ?? [];
+        let views = "";
+        for (const span of spans) {
+          const text = span.textContent?.trim() ?? "";
+          if (/^[\d,.]+[KkMmBb]?$/.test(text) && text.length < 15) { views = text; break; }
+        }
+        results.push({ url: href, views, code });
+      }
+
+      // Strategy 2: Extract shortcodes from HTML source (IG embeds them in JSON data)
+      if (results.length < max) {
+        const codePat = /\"shortcode\"\s*:\s*\"([A-Za-z0-9_-]{8,})\"/g;
+        let m;
+        while ((m = codePat.exec(html)) !== null && results.length < max) {
+          const code = m[1];
+          if (seen.has(code)) continue;
+          seen.add(code);
+          results.push({
+            url: `https://www.instagram.com/reel/${code}/`,
+            views: "",
+            code,
+          });
+        }
+      }
+
+      return { results, htmlLen, hasLogin };
+    }, maxItems) as { results: Array<{ url: string; views: string; code: string }>; htmlLen: number; hasLogin: boolean };
+
+    log.log(`[IG] DOM+HTML extraction found ${domResult.results.length} reel(s), HTML=${domResult.htmlLen} chars, loginPrompt=${domResult.hasLogin}`);
+
+    if (domResult.results.length === 0 && domResult.hasLogin) {
+      log.warn(`[IG] Profile page requires login — cookies may be expired`);
+    }
+
+    return domResult.results.map((r) => ({
+      videoId: r.code || (r.url.match(/\/reel\/([^/]+)/) || r.url.match(/\/p\/([^/]+)/) || [])[1] || "",
       url: r.url,
       title: `Reel by @${profileName}`,
       channelName: profileName,

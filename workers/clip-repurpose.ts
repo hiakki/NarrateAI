@@ -200,7 +200,8 @@ const worker = new Worker<ClipRepurposeJobData>(
       await updateStage(videoId, "HEATMAP");
       log.log(`[HEATMAP]`, `Finding peak segment...`);
 
-      const maxClipDur = clipConfig.clipDurationSec || 45;
+      const maxClipDur = Math.max(30, clipConfig.clipDurationSec || 45);
+      const minClipDur = Math.max(30, Math.floor(maxClipDur * 0.8));
       // Find the core peak using ~60% of target duration, then expand with context
       const coreDur = Math.min(Math.floor(maxClipDur * 0.6), maxClipDur);
       let peak;
@@ -237,6 +238,25 @@ const worker = new Worker<ClipRepurposeJobData>(
           startSec: Math.floor(peak.startSec - finalPrePad),
           endSec: Math.floor(Math.min(peak.endSec + postPad, videoInfo.duration)),
         };
+      }
+
+      // Guarantee minimum clip duration — extend if too short
+      let actualDur = peak.endSec - peak.startSec;
+      if (actualDur < minClipDur && videoInfo.duration >= minClipDur) {
+        const deficit = minClipDur - actualDur;
+        const postRoom = Math.floor(videoInfo.duration) - peak.endSec;
+        const preRoom = peak.startSec;
+        const addPost = Math.min(deficit, postRoom);
+        const addPre = Math.min(deficit - addPost, preRoom);
+        peak = {
+          ...peak,
+          startSec: peak.startSec - addPre,
+          endSec: peak.endSec + addPost,
+        };
+        postContextSec += addPost;
+        preContextSec += addPre;
+        actualDur = peak.endSec - peak.startSec;
+        log.log(`[HEATMAP]`, `Extended clip to meet ${minClipDur}s minimum (added ${addPre}s pre + ${addPost}s post)`);
       }
 
       const timingBreakdown = {
@@ -285,7 +305,7 @@ const worker = new Worker<ClipRepurposeJobData>(
       }
 
       const enhancedPath = path.join(tmpDir, "enhanced.mp4");
-      await enhanceClip(croppedPath, enhancedPath, assContent, tmpDir, clipConfig.enableBgm ?? false);
+      const { bgmTrack, bgmInfo } = await enhanceClip(croppedPath, enhancedPath, assContent, tmpDir, clipConfig.enableBgm ?? false);
 
       // ── Metadata generation (part of enhance stage) ──
       log.log(`[METADATA]`, `Generating title and description...`);
@@ -339,6 +359,8 @@ const worker = new Worker<ClipRepurposeJobData>(
             source: discovered.source,
             peakSegment: peak,
             timingBreakdown,
+            bgmTrack,
+            bgmInfo,
             discovery: { candidates, totalConsidered, platformBreakdown, rejectedSample },
           } as never,
         },

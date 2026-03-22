@@ -142,6 +142,28 @@ function ProviderSection({
   );
 }
 
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function timeUntil(iso: string): { text: string; warn: boolean } {
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff <= 0) return { text: "expired", warn: true };
+  const days = Math.floor(diff / 86_400_000);
+  if (days < 1) return { text: "expires today", warn: true };
+  if (days < 3) return { text: `expires in ${days}d`, warn: true };
+  if (days < 30) return { text: `expires in ${days}d`, warn: false };
+  return { text: `expires in ${Math.floor(days / 30)}mo`, warn: false };
+}
+
 export default function SettingsPage() {
   const { data: session } = useSession();
   const [providers, setProviders] = useState<ProvidersData | null>(null);
@@ -155,7 +177,7 @@ export default function SettingsPage() {
   const [imageProvider, setImageProvider] = useState<string | null>(null);
   const [imageToVideoProvider, setImageToVideoProvider] = useState<string | null>(null);
 
-  const [cookieStatus, setCookieStatus] = useState<{ exists: boolean; lineCount: number; envConfigured: boolean; fbConnected?: boolean; igConnected?: boolean; fbCookieCount?: number; igCookieCount?: number } | null>(null);
+  const [cookieStatus, setCookieStatus] = useState<{ exists: boolean; lineCount: number; envConfigured: boolean; fbConnected?: boolean; igConnected?: boolean; fbCookieCount?: number; igCookieCount?: number; fbSavedAt?: string | null; igSavedAt?: string | null; fbEarliestExpiry?: string | null; igEarliestExpiry?: string | null } | null>(null);
   const [cookieText, setCookieText] = useState("");
   const [cookieSaving, setCookieSaving] = useState(false);
   const [cookieMsg, setCookieMsg] = useState("");
@@ -467,6 +489,15 @@ export default function SettingsPage() {
                     ? `Connected (${cookieStatus.fbCookieCount} cookies)`
                     : "Not connected"}
                 </p>
+                {cookieStatus?.fbConnected && (
+                  <div className="text-[11px] text-muted-foreground space-y-0.5">
+                    {cookieStatus.fbSavedAt && <p>Saved: {timeAgo(cookieStatus.fbSavedAt)}</p>}
+                    {cookieStatus.fbEarliestExpiry && (() => {
+                      const exp = timeUntil(cookieStatus.fbEarliestExpiry!);
+                      return <p className={exp.warn ? "text-amber-600 font-medium" : ""}>{exp.text}</p>;
+                    })()}
+                  </div>
+                )}
                 <Button
                   size="sm"
                   className={cookieStatus?.fbConnected
@@ -500,6 +531,15 @@ export default function SettingsPage() {
                     ? `Connected (${cookieStatus.igCookieCount} cookies)`
                     : "Not connected"}
                 </p>
+                {cookieStatus?.igConnected && (
+                  <div className="text-[11px] text-muted-foreground space-y-0.5">
+                    {cookieStatus.igSavedAt && <p>Saved: {timeAgo(cookieStatus.igSavedAt)}</p>}
+                    {cookieStatus.igEarliestExpiry && (() => {
+                      const exp = timeUntil(cookieStatus.igEarliestExpiry!);
+                      return <p className={exp.warn ? "text-amber-600 font-medium" : ""}>{exp.text}</p>;
+                    })()}
+                  </div>
+                )}
                 <Button
                   size="sm"
                   className={cookieStatus?.igConnected

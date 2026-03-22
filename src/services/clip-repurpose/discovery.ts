@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { createLogger } from "@/lib/logger";
 import { getCookieFilePath } from "@/lib/cookie-path";
-import { searchFbVideos } from "./browser-scraper";
+import { searchFbVideos, discoverFbPageVideos, discoverIgReels } from "./browser-scraper";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipDiscovery");
@@ -79,6 +79,48 @@ const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
   comedy:        ["funny viral video", "comedy sketch hilarious"],
   music:         ["music performance viral amazing", "dance trending choreography"],
   auto:          ["trending viral video today", "most viewed video this week"],
+};
+
+// ── Niche → Facebook pages (verified working scraper targets) ────────────────
+const NICHE_FB_PAGES: Record<string, string[]> = {
+  "viral-repost": ["https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/UNILAD/videos/", "https://www.facebook.com/TheEllenShow/videos/"],
+  films:         ["https://www.facebook.com/RottenTomatoes/videos/", "https://www.facebook.com/IGN/videos/", "https://www.facebook.com/20thCenturyStudios/videos/"],
+  anime:         ["https://www.facebook.com/Crunchyroll/videos/", "https://www.facebook.com/AnimeUproar/videos/", "https://www.facebook.com/Funimation/videos/"],
+  serials:       ["https://www.facebook.com/netflix/videos/", "https://www.facebook.com/HBO/videos/", "https://www.facebook.com/PrimeVideo/videos/"],
+  entertainment: ["https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/UNILAD/videos/", "https://www.facebook.com/BuzzFeedVideo/videos/"],
+  nature:        ["https://www.facebook.com/BBCEarth/videos/", "https://www.facebook.com/NationalGeographic/videos/", "https://www.facebook.com/DiscoveryChannel/videos/"],
+  science:       ["https://www.facebook.com/NASA/videos/", "https://www.facebook.com/TED/videos/", "https://www.facebook.com/ScienceChannel/videos/"],
+  sports:        ["https://www.facebook.com/ESPN/videos/", "https://www.facebook.com/bleacherreport/videos/", "https://www.facebook.com/NFL/videos/"],
+  gaming:        ["https://www.facebook.com/IGN/videos/", "https://www.facebook.com/GameSpot/videos/", "https://www.facebook.com/playstation/videos/"],
+  food:          ["https://www.facebook.com/buzzfeedtasty/videos/", "https://www.facebook.com/GordonRamsay/videos/", "https://www.facebook.com/SoYummy/videos/"],
+  travel:        ["https://www.facebook.com/BeautifulDestinations/videos/", "https://www.facebook.com/NationalGeographic/videos/", "https://www.facebook.com/LonelyPlanet/videos/"],
+  news:          ["https://www.facebook.com/BBCNews/videos/", "https://www.facebook.com/Vox/videos/", "https://www.facebook.com/NowThisNews/videos/"],
+  education:     ["https://www.facebook.com/TED/videos/", "https://www.facebook.com/Vox/videos/", "https://www.facebook.com/NatGeo/videos/"],
+  motivation:    ["https://www.facebook.com/Goalcast/videos/", "https://www.facebook.com/motivationhub/videos/", "https://www.facebook.com/PrinceEa/videos/"],
+  comedy:        ["https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/UNILAD/videos/"],
+  music:         ["https://www.facebook.com/MTV/videos/", "https://www.facebook.com/Vevo/videos/", "https://www.facebook.com/Spotify/videos/"],
+  auto:          ["https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/UNILAD/videos/"],
+};
+
+// ── Niche → Instagram profiles (working scraper targets) ─────────────────────
+const NICHE_IG_PROFILES: Record<string, string[]> = {
+  "viral-repost": ["https://www.instagram.com/pubity/", "https://www.instagram.com/bestvines/", "https://www.instagram.com/dailydoseofinternet/", "https://www.instagram.com/theshaderoom/"],
+  films:         ["https://www.instagram.com/rottentomatoes/", "https://www.instagram.com/ign/", "https://www.instagram.com/cinema.magic/"],
+  anime:         ["https://www.instagram.com/crunchyroll/", "https://www.instagram.com/anime/", "https://www.instagram.com/funimation/"],
+  serials:       ["https://www.instagram.com/netflix/", "https://www.instagram.com/hbo/", "https://www.instagram.com/primevideo/"],
+  entertainment: ["https://www.instagram.com/ladbible/", "https://www.instagram.com/9gag/", "https://www.instagram.com/unilad/", "https://www.instagram.com/complex/"],
+  nature:        ["https://www.instagram.com/natgeo/", "https://www.instagram.com/bbcearth/", "https://www.instagram.com/discoverearth/"],
+  science:       ["https://www.instagram.com/nasa/", "https://www.instagram.com/sciencechannel/", "https://www.instagram.com/ifuckinglovescience/"],
+  sports:        ["https://www.instagram.com/espn/", "https://www.instagram.com/bleacherreport/", "https://www.instagram.com/sportscenter/"],
+  gaming:        ["https://www.instagram.com/ign/", "https://www.instagram.com/gamespot/", "https://www.instagram.com/playstation/"],
+  food:          ["https://www.instagram.com/buzzfeedtasty/", "https://www.instagram.com/gordonramsay/", "https://www.instagram.com/foodnetwork/"],
+  travel:        ["https://www.instagram.com/beautifuldestinations/", "https://www.instagram.com/natgeotravel/", "https://www.instagram.com/earthpix/"],
+  news:          ["https://www.instagram.com/bbcnews/", "https://www.instagram.com/cnn/", "https://www.instagram.com/nowthisnews/"],
+  education:     ["https://www.instagram.com/ted/", "https://www.instagram.com/vox/", "https://www.instagram.com/natgeo/"],
+  motivation:    ["https://www.instagram.com/goalcast/", "https://www.instagram.com/garyvee/", "https://www.instagram.com/tonytrobbins/"],
+  comedy:        ["https://www.instagram.com/9gag/", "https://www.instagram.com/ladbible/", "https://www.instagram.com/unilad/"],
+  music:         ["https://www.instagram.com/mtv/", "https://www.instagram.com/spotify/", "https://www.instagram.com/billboard/"],
+  auto:          ["https://www.instagram.com/pubity/", "https://www.instagram.com/9gag/", "https://www.instagram.com/theshaderoom/"],
 };
 
 const YT_API_BASE = "https://www.googleapis.com/youtube/v3";
@@ -468,41 +510,28 @@ export async function discoverVideo(config: {
   preferPlatform?: "youtube" | "facebook" | "instagram";
 }): Promise<DiscoveryResult | null> {
   const ytApiKey = getYouTubeApiKey();
-  const minViews = config.minViewCount ?? 100_000;
-  const fbMinViews = 50_000;
-  const igMinViews = 5_000;
-  const minDur = config.minDurationSec ?? 5;
+  const minViews = config.minViewCount ?? 500_000;
+  const fbMinViews = 100_000;
+  const igMinViews = 50_000;
+  const minDur = config.minDurationSec ?? 60;
   const maxDur = config.maxDurationSec ?? 3600;
   const nowMs = Date.now();
 
   const allCandidates: DiscoveredVideo[] = [];
   const queries = NICHE_SEARCH_QUERIES[config.niche] ?? NICHE_SEARCH_QUERIES["auto"];
 
-  // Per-platform tracking for visibility
-  const platformCounts: Record<string, { found: number; qualified: number; rejected: number }> = {
-    youtube: { found: 0, qualified: 0, rejected: 0 },
-    facebook: { found: 0, qualified: 0, rejected: 0 },
-    instagram: { found: 0, qualified: 0, rejected: 0 },
-  };
   const rejectedSample: Array<{ title: string; platform: string; viewCount: number; reason: string }> = [];
   const MAX_REJECTED_SAMPLE = 10;
-
-  function trackRejected(platform: string, title: string, viewCount: number, reason: string) {
-    platformCounts[platform] = platformCounts[platform] ?? { found: 0, qualified: 0, rejected: 0 };
-    platformCounts[platform].rejected++;
-    if (rejectedSample.length < MAX_REJECTED_SAMPLE) {
-      rejectedSample.push({ title: title || "(untitled)", platform, viewCount, reason });
-    }
-  }
 
   log.log(`[DISCOVER] Niche "${config.niche}"`);
 
   // ── 1. YouTube search-based trending discovery ──
   log.log(`[SEARCH-YT] Running search for "${config.niche}"...`);
   const searchResults = await discoverViaSearch(config.niche, 10);
+  let ytSearchCount = 0;
   for (const e of searchResults) {
     if (e.id) {
-      platformCounts.youtube.found++;
+      ytSearchCount++;
       allCandidates.push({
         videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
         title: e.title, channelId: e.channel_id, channelName: e.channel,
@@ -511,21 +540,20 @@ export async function discoverVideo(config: {
       });
     }
   }
-  log.log(`[SEARCH-YT] Got ${platformCounts.youtube.found} candidates`);
+  log.log(`[SEARCH-YT] Got ${ytSearchCount} candidates`);
 
-  // ── 2. Facebook search-based discovery ──
+  // ── 2. Facebook discovery (search + page scraping) ──
   const fbQuery = queries[0];
+  const fbPages = NICHE_FB_PAGES[config.niche] ?? NICHE_FB_PAGES["auto"];
+
+  // 2a. Try search first
   log.log(`[SEARCH-FB] Searching Facebook for "${fbQuery}"...`);
+  let fbSearchCount = 0;
   try {
-    const fbVideos = await searchFbVideos(fbQuery, 15);
-    platformCounts.facebook.found = fbVideos.length;
-    for (const v of fbVideos) {
-      if (!v.videoId) {
-        trackRejected("facebook", v.title, v.viewCount, "missing video ID");
-      } else if (v.viewCount < fbMinViews) {
-        trackRejected("facebook", v.title, v.viewCount, `below ${fbMinViews.toLocaleString()} min views`);
-      } else {
-        platformCounts.facebook.qualified++;
+    const fbSearchResults = await searchFbVideos(fbQuery, 10);
+    for (const v of fbSearchResults) {
+      if (v.videoId) {
+        fbSearchCount++;
         allCandidates.push({
           videoId: v.videoId, url: v.url, title: v.title,
           channelId: "", channelName: v.channelName,
@@ -534,51 +562,83 @@ export async function discoverVideo(config: {
         });
       }
     }
-    const topRejectedFb = rejectedSample.filter((r) => r.platform === "facebook").slice(0, 3).map((r) => `"${r.title}" ${r.viewCount.toLocaleString()}`).join(", ");
-    log.log(`[SEARCH-FB] Found ${fbVideos.length} videos, ${platformCounts.facebook.qualified} qualified (>= ${fbMinViews.toLocaleString()} views), ${platformCounts.facebook.rejected} rejected${topRejectedFb ? ` (top rejected: ${topRejectedFb})` : ""}`);
+    log.log(`[SEARCH-FB] Search returned ${fbSearchCount} videos`);
   } catch (err) {
-    log.warn(`[SEARCH-FB] Failed: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[SEARCH-FB] Search failed: ${err instanceof Error ? err.message : err}`);
   }
 
-  // ── 3. Instagram tag-based discovery (via yt-dlp) ──
-  const igTag = config.niche === "auto" ? "trending" : config.niche.replace(/-/g, "");
-  const igTagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(igTag)}/`;
-  log.log(`[SEARCH-IG] Discovering via yt-dlp: ${igTagUrl}`);
-  try {
-    const igEntries = await discoverViaYtDlp(igTagUrl, 15);
-    platformCounts.instagram.found = igEntries.length;
-    for (const e of igEntries) {
-      if (!e.id) {
-        trackRejected("instagram", e.title, e.view_count, "missing ID");
-      } else if (e.view_count < igMinViews) {
-        trackRejected("instagram", e.title, e.view_count, `below ${igMinViews.toLocaleString()} min views`);
-      } else {
-        platformCounts.instagram.qualified++;
+  // 2b. Scrape niche pages in parallel (+ /reels/ tab for each page)
+  let fbPageCount = 0;
+  const fbScrapeTargets: string[] = [];
+  for (const pageUrl of fbPages) {
+    fbScrapeTargets.push(pageUrl);
+    const reelsUrl = pageUrl.replace(/\/videos\/?$/, "/reels/");
+    if (reelsUrl !== pageUrl) fbScrapeTargets.push(reelsUrl);
+  }
+
+  const fbScrapeResults = await Promise.allSettled(
+    fbScrapeTargets.map(async (url) => {
+      log.log(`[SCRAPE-FB] Scraping ${url}...`);
+      const videos = await discoverFbPageVideos(url, 15);
+      log.log(`[SCRAPE-FB] Got ${videos.length} videos from ${url}`);
+      return { url, videos };
+    }),
+  );
+  for (const result of fbScrapeResults) {
+    if (result.status === "rejected") {
+      log.warn(`[SCRAPE-FB] Failed: ${result.reason}`);
+      continue;
+    }
+    for (const v of result.value.videos) {
+      if (v.videoId) {
+        fbPageCount++;
         allCandidates.push({
-          videoId: e.id,
-          url: e.webpage_url || e.url || `https://www.instagram.com/reel/${e.id}/`,
-          title: e.title || `#${igTag} reel`,
-          channelId: e.channel_id,
-          channelName: e.channel || `#${igTag}`,
-          viewCount: e.view_count,
-          publishedAt: e.upload_date,
-          durationSec: e.duration,
-          platform: "instagram",
-          source: "search",
+          videoId: v.videoId, url: v.url, title: v.title,
+          channelId: "", channelName: v.channelName,
+          viewCount: v.viewCount, publishedAt: "",
+          durationSec: v.durationSec, platform: "facebook", source: "search",
         });
       }
     }
-    const topRejectedIg = rejectedSample.filter((r) => r.platform === "instagram").slice(0, 3).map((r) => `"${r.title}" ${r.viewCount.toLocaleString()}`).join(", ");
-    log.log(`[SEARCH-IG] Got ${igEntries.length} entries, ${platformCounts.instagram.qualified} qualified (>= ${igMinViews.toLocaleString()} views), ${platformCounts.instagram.rejected} rejected${topRejectedIg ? ` (top rejected: ${topRejectedIg})` : ""}`);
-  } catch (err) {
-    log.warn(`[SEARCH-IG] Failed: ${err instanceof Error ? err.message : err}`);
   }
+  log.log(`[FB-TOTAL] ${fbSearchCount + fbPageCount} raw (${fbSearchCount} search + ${fbPageCount} pages from ${fbScrapeTargets.length} URLs)`);
+
+  // ── 3. Instagram discovery (profile reels scraping — parallel) ──
+  const igProfiles = NICHE_IG_PROFILES[config.niche] ?? NICHE_IG_PROFILES["auto"];
+  log.log(`[SEARCH-IG] Scraping ${igProfiles.length} Instagram profiles for "${config.niche}" (parallel)...`);
+  let igCount = 0;
+  const igScrapeResults = await Promise.allSettled(
+    igProfiles.map(async (profileUrl) => {
+      log.log(`[SCRAPE-IG] Scraping ${profileUrl}...`);
+      const reels = await discoverIgReels(profileUrl, 15);
+      log.log(`[SCRAPE-IG] Got ${reels.length} reels from ${profileUrl}`);
+      return { profileUrl, reels };
+    }),
+  );
+  for (const result of igScrapeResults) {
+    if (result.status === "rejected") {
+      log.warn(`[SCRAPE-IG] Failed: ${result.reason}`);
+      continue;
+    }
+    for (const v of result.value.reels) {
+      if (v.videoId) {
+        igCount++;
+        allCandidates.push({
+          videoId: v.videoId, url: v.url, title: v.title,
+          channelId: "", channelName: v.channelName,
+          viewCount: v.viewCount, publishedAt: "",
+          durationSec: v.durationSec, platform: "instagram", source: "search",
+        });
+      }
+    }
+  }
+  log.log(`[IG-TOTAL] ${igCount} raw from ${igProfiles.length} profiles`);
+
 
   // ── 4. YouTube Trending + Creative Commons (when API key available) ──
   if (ytApiKey) {
     const trendingIds = await fetchTrendingVideoIds(ytApiKey);
     for (const id of trendingIds) {
-      platformCounts.youtube.found++;
       allCandidates.push({
         videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
@@ -588,7 +648,6 @@ export async function discoverVideo(config: {
     }
     const ccIds = await searchCreativeCommons(ytApiKey);
     for (const id of ccIds) {
-      platformCounts.youtube.found++;
       allCandidates.push({
         videoId: id, url: `https://www.youtube.com/watch?v=${id}`,
         title: "", channelId: "", channelName: "",
@@ -665,32 +724,47 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── Filter: platform-specific min views, duration (track rejections) ──
+  // ── Filter + count (single source of truth — all counting happens here) ──
+  const platformCounts: Record<string, { found: number; qualified: number; rejected: number }> = {};
   const filtered: DiscoveredVideo[] = [];
+
+  function trackRejected(platform: string, title: string, viewCount: number, reason: string) {
+    if (rejectedSample.length < MAX_REJECTED_SAMPLE) {
+      rejectedSample.push({ title: title || "(untitled)", platform, viewCount, reason });
+    }
+  }
+
+  // Count found per platform AFTER dedup
   for (const v of unique) {
+    platformCounts[v.platform] = platformCounts[v.platform] ?? { found: 0, qualified: 0, rejected: 0 };
+    platformCounts[v.platform].found++;
+  }
+
+  // Filter and count qualified/rejected — guaranteed: found = qualified + rejected
+  for (const v of unique) {
+    const pc = platformCounts[v.platform]!;
     const platformMin = v.platform === "instagram" ? igMinViews : v.platform === "facebook" ? fbMinViews : minViews;
     if (v.viewCount < platformMin) {
+      pc.rejected++;
       trackRejected(v.platform, v.title, v.viewCount, `below ${platformMin.toLocaleString()} min views`);
       continue;
     }
     if (v.durationSec > 0 && v.durationSec < minDur) {
+      pc.rejected++;
       trackRejected(v.platform, v.title, v.viewCount, `too short (${v.durationSec}s < ${minDur}s)`);
       continue;
     }
     if (v.durationSec > 0 && v.durationSec > maxDur) {
+      pc.rejected++;
       trackRejected(v.platform, v.title, v.viewCount, `too long (${v.durationSec}s > ${maxDur}s)`);
       continue;
     }
-    const pc = platformCounts[v.platform];
-    if (pc) pc.qualified++;
+    pc.qualified++;
     filtered.push(v);
   }
 
-  // Log per-platform summary
   for (const [plat, counts] of Object.entries(platformCounts)) {
-    if (counts.found > 0) {
-      log.log(`[PLATFORM] ${plat}: ${counts.found} found → ${counts.qualified} qualified, ${counts.rejected} rejected`);
-    }
+    log.log(`[PLATFORM] ${plat}: ${counts.found} found → ${counts.qualified} qualified, ${counts.rejected} rejected`);
   }
 
   if (filtered.length === 0) {
@@ -698,55 +772,82 @@ export async function discoverVideo(config: {
     return null;
   }
 
-  // ── 7. QUALITY SCORING ──
+  // ── 7. QUALITY SCORING (0-100 scale) ──
   const scoredWithRank = filtered.map((v) => {
-    let score = 0;
+    // Base: every candidate that survived the view-count filter is at least decent
+    let score = 40;
 
+    // View count tiers (max +35) — continuous from 50K to 100M+
+    if (v.viewCount >= 100_000_000) score += 35;
+    else if (v.viewCount >= 50_000_000) score += 32;
+    else if (v.viewCount >= 20_000_000) score += 28;
+    else if (v.viewCount >= 10_000_000) score += 24;
+    else if (v.viewCount >= 5_000_000) score += 20;
+    else if (v.viewCount >= 2_000_000) score += 15;
+    else if (v.viewCount >= 1_000_000) score += 10;
+    else if (v.viewCount >= 500_000) score += 6;
+    else if (v.viewCount >= 200_000) score += 3;
+    else if (v.viewCount >= 50_000) score += 1;
+
+    // Velocity bonus — only when we have a real publish date (max +10)
     let ageDays = 30;
+    let hasRealDate = false;
     if (v.publishedAt) {
       const pubMs = v.publishedAt.length === 8
         ? new Date(`${v.publishedAt.slice(0, 4)}-${v.publishedAt.slice(4, 6)}-${v.publishedAt.slice(6, 8)}`).getTime()
         : new Date(v.publishedAt).getTime();
-      if (!isNaN(pubMs)) ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
+      if (!isNaN(pubMs)) {
+        ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
+        hasRealDate = true;
+      }
     }
-    const velocity = v.viewCount / ageDays;
-    score += velocity > 0 ? Math.min(35, Math.log10(velocity) * 7) : 0;
+    if (hasRealDate) {
+      const velocity = v.viewCount / ageDays;
+      score += velocity > 0 ? Math.min(10, Math.log10(velocity) * 2) : 0;
+    }
 
+    // Engagement — only contributes when data exists (max +5)
     if (v.likeCount && v.viewCount > 0) {
-      score += Math.min(20, (v.likeCount / v.viewCount) * 500);
+      score += Math.min(3, (v.likeCount / v.viewCount) * 100);
     }
     if (v.commentCount && v.viewCount > 0) {
-      score += Math.min(10, (v.commentCount / v.viewCount) * 2000);
+      score += Math.min(2, (v.commentCount / v.viewCount) * 500);
     }
 
-    if (ageDays <= 3) score += 15;
-    else if (ageDays <= 7) score += 10;
-    else if (ageDays <= 14) score += 5;
-    else if (ageDays > 60) score -= 10;
+    // Recency — only when we have real date (max +8, min -5)
+    if (hasRealDate) {
+      if (ageDays <= 3) score += 8;
+      else if (ageDays <= 7) score += 5;
+      else if (ageDays <= 14) score += 3;
+      else if (ageDays > 180) score -= 5;
+    }
 
-    if (v.licensedContent) score -= 50;
+    // Copyright: penalize known licensed, reward known safe
+    if (v.licensedContent) score -= 40;
     const crInfo = copyrightMap.get(v.videoId);
-    if (crInfo?.license === "creativeCommon") score += 30;
+    if (crInfo?.license === "creativeCommon") score += 10;
 
-    const sourceBonus: Record<string, number> = { search: 5, "creative-commons": 15, trending: 5, direct: 0 };
+    // Source bonus (max +5)
+    const sourceBonus: Record<string, number> = { search: 2, "creative-commons": 5, trending: 3, direct: 0 };
     score += sourceBonus[v.source] ?? 0;
 
+    // Safe-channel bonus
     const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart", "viral hog", "people are awesome"];
-    if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 10;
+    if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 5;
 
+    // Niche relevance (max +8, min -15)
     if (config.niche !== "auto" && config.niche !== "viral-repost") {
       const titleLower = (v.title || "").toLowerCase();
       const signals = NICHE_SIGNALS[config.niche];
       if (signals) {
         const hasPositive = signals.positive.some((kw) => titleLower.includes(kw));
         const hasNegative = signals.negative.some((kw) => titleLower.includes(kw));
-        if (hasPositive) score += 25;
-        if (hasNegative) score -= 40;
-        if (!hasPositive && !hasNegative) score -= 10;
+        if (hasPositive) score += 8;
+        if (hasNegative) score -= 15;
       }
     }
 
-    return { ...v, score: Math.round(score * 100) / 100 };
+    return { ...v, score: Math.round(Math.min(100, Math.max(0, score)) * 100) / 100 };
   });
 
   scoredWithRank.sort((a, b) => b.score - a.score);

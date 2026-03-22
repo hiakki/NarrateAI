@@ -887,6 +887,7 @@ export default function VideoDetailPage() {
             const disc = meta.discovery;
             if (!disc || disc.candidates.length === 0) return null;
             const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+            const platLabel: Record<string, string> = { youtube: "yt", facebook: "fb", instagram: "ig" };
             const pb = disc.platformBreakdown;
             return (
               <div className="mx-6 mb-6 rounded-lg border bg-muted/20 p-3 space-y-2">
@@ -907,12 +908,17 @@ export default function VideoDetailPage() {
                 </div>
                 {pb && Object.keys(pb).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
-                    {Object.entries(pb).map(([plat, counts]) => (
-                      <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-background">
-                        <span className="uppercase font-semibold">{plat.slice(0, 2)}</span>{" "}
-                        {counts.found} found · {counts.qualified} ok · {counts.rejected} rej
-                      </span>
-                    ))}
+                    {Object.entries(pb).map(([plat, counts]) => {
+                      const f = counts.found;
+                      const r = Math.min(counts.rejected, f);
+                      const q = Math.min(counts.qualified, f - r);
+                      return (
+                        <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-background">
+                          <span className="uppercase font-semibold">{platLabel[plat] ?? plat}</span>{" "}
+                          {f} found · {q} ok · {r} rej
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
                 {disc.candidates.length > 1 && (
@@ -1344,6 +1350,7 @@ export default function VideoDetailPage() {
             const timing = meta.timingBreakdown;
             const fmtTime = (s: number) => { const m = Math.floor(s / 60); const sec = s % 60; return m > 0 ? `${m}:${sec.toString().padStart(2, "0")}` : `${sec}s`; };
             const fmtViews = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+            const platLabel: Record<string, string> = { youtube: "yt", facebook: "fb", instagram: "ig" };
 
             if (!disc && !timing) return null;
             const pb = disc?.platformBreakdown;
@@ -1361,12 +1368,17 @@ export default function VideoDetailPage() {
 
                       {pb && Object.keys(pb).length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
-                          {Object.entries(pb).map(([plat, counts]) => (
-                            <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-muted/30">
-                              <span className="uppercase font-semibold">{plat.slice(0, 2)}</span>{" "}
-                              {counts.found} found · {counts.qualified} ok · {counts.rejected} rej
-                            </span>
-                          ))}
+                          {Object.entries(pb).map(([plat, counts]) => {
+                            const f = counts.found;
+                            const r = Math.min(counts.rejected, f);
+                            const q = Math.min(counts.qualified, f - r);
+                            return (
+                              <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-muted/30">
+                                <span className="uppercase font-semibold">{platLabel[plat] ?? plat}</span>{" "}
+                                {f} found · {q} ok · {r} rej
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
 
@@ -1459,6 +1471,7 @@ export default function VideoDetailPage() {
                       </div>
                     </div>
                   )}
+
                 </CardContent>
               </Card>
             );

@@ -420,8 +420,6 @@ const PITCH_TEMPO_COMPENSATION = (1 / PITCH_FACTOR).toFixed(5);
 const PITCH_AF = `asetrate=44100*${PITCH_FACTOR},aresample=44100,atempo=${PITCH_TEMPO_COMPENSATION}`;
 
 const BGM_DIR = path.join(process.cwd(), "assets", "music");
-const BGM_ORIGINAL_VOL = 0.80;
-const BGM_MIX_VOL = 0.20;
 const BGM_FADE_SEC = 2;
 
 async function pickRandomBgm(): Promise<string | null> {
@@ -443,6 +441,35 @@ async function getAudioDuration(filePath: string): Promise<number> {
 }
 
 /**
+ * Analyze the original video's audio loudness (mean + peak) using ffmpeg loudnorm.
+ * Returns { meanLUFS, peakDB } or defaults if analysis fails.
+ */
+async function analyzeAudioLoudness(filePath: string): Promise<{ meanLUFS: number; peakDB: number }> {
+  try {
+    const { stderr } = await execFileAsync("ffmpeg", [
+      "-i", filePath, "-af", "loudnorm=print_format=json", "-f", "null", "-",
+    ], { timeout: 20_000 });
+    const jsonMatch = stderr.match(/\{[\s\S]*"input_i"[\s\S]*\}/);
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      return {
+        meanLUFS: parseFloat(data.input_i) || -24,
+        peakDB: parseFloat(data.input_tp) || -3,
+      };
+    }
+  } catch { /* analysis failed, use defaults */ }
+  return { meanLUFS: -24, peakDB: -3 };
+}
+
+/**
+ * Target: BGM exactly DB_BELOW dB quieter than the original audio.
+ * Measures both tracks' loudness and computes the precise linear gain
+ * so the BGM is imperceptible but present in the waveform for
+ * copyright fingerprint alteration.
+ */
+const BGM_DB_BELOW = 28;
+
+/**
  * Apply captions, hook text overlay, audio pitch shift, and optional BGM mix.
  * When enableBgm is true, a random royalty-free track from assets/music/ is
  * mixed underneath the original audio at low volume to further break the
@@ -454,7 +481,7 @@ export async function enhanceClip(
   assContent: string,
   tmpDir: string,
   enableBgm = false,
-): Promise<void> {
+): Promise<{ bgmTrack: string | null; bgmInfo: { origVol: number; bgmVol: number; meanLUFS: number; peakDB: number } | null }> {
   const assPath = path.join(tmpDir, "captions.ass");
   await fs.writeFile(assPath, assContent, "utf-8");
 
@@ -462,6 +489,7 @@ export async function enhanceClip(
   const escapedFonts = FONTS_DIR.replace(/\\/g, "/").replace(/:/g, "\\:");
 
   const bgmPath = enableBgm ? await pickRandomBgm() : null;
+  let bgmInfo: { origVol: number; bgmVol: number; meanLUFS: number; peakDB: number } | null = null;
 
   if (!bgmPath) {
     const args = [
@@ -486,12 +514,24 @@ export async function enhanceClip(
     const bgmStart = bgmDur > clipDur + 5 ? Math.floor(Math.random() * (bgmDur - clipDur - 2)) : 0;
     const fadeOut = Math.max(0, clipDur - BGM_FADE_SEC);
 
-    // filter_complex: pitch-shift original, trim+fade BGM, mix both
+    const origLoud = await analyzeAudioLoudness(inputPath);
+    const bgmLoud = await analyzeAudioLoudness(bgmPath);
+
+    // Compute exact dB attenuation so BGM sits BGM_DB_BELOW dB under original
+    // targetBgmLUFS = origLUFS - 28  →  attenuation = targetBgmLUFS - bgmLUFS
+    const targetBgmLUFS = origLoud.meanLUFS - BGM_DB_BELOW;
+    const attenuationDb = targetBgmLUFS - bgmLoud.meanLUFS;
+    const bgmGain = Math.pow(10, attenuationDb / 20);
+    // Clamp: never amplify BGM, and floor at -60dB
+    const bgmVolSafe = Math.min(1.0, Math.max(0.001, bgmGain));
+
+    bgmInfo = { origVol: 1.0, bgmVol: bgmVolSafe, meanLUFS: origLoud.meanLUFS, peakDB: origLoud.peakDB };
+
+    // normalize=0 prevents amix from auto-boosting the quieter input
     const fc = [
       `[0:a]${PITCH_AF}[orig]`,
-      `[orig]volume=${BGM_ORIGINAL_VOL}[origv]`,
-      `[1:a]atrim=start=${bgmStart},asetpts=PTS-STARTPTS,volume=${BGM_MIX_VOL},afade=t=in:d=${BGM_FADE_SEC},afade=t=out:st=${fadeOut}:d=${BGM_FADE_SEC}[bgm]`,
-      `[origv][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+      `[1:a]atrim=start=${bgmStart},asetpts=PTS-STARTPTS,volume=${bgmVolSafe.toFixed(4)},afade=t=in:d=${BGM_FADE_SEC},afade=t=out:st=${fadeOut}:d=${BGM_FADE_SEC}[bgm]`,
+      `[orig][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
     ].join(";");
 
     const args = [
@@ -512,10 +552,11 @@ export async function enhanceClip(
       "-y",
       outputPath,
     ];
-    log.log(`Applying captions + pitch shift + BGM mix (orig=${BGM_ORIGINAL_VOL}, bgm=${BGM_MIX_VOL}, track=${path.basename(bgmPath)})...`);
+    log.log(`BGM mix: orig=${origLoud.meanLUFS.toFixed(1)} LUFS, bgm=${bgmLoud.meanLUFS.toFixed(1)} LUFS, target=${targetBgmLUFS.toFixed(1)} LUFS (${BGM_DB_BELOW}dB below), gain=${bgmVolSafe.toFixed(4)}, track=${path.basename(bgmPath)}`);
     await execFileAsync("ffmpeg", args, { timeout: 120_000 });
   }
 
   const stat = await fs.stat(outputPath);
   log.log(`Enhanced clip: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);
+  return { bgmTrack: bgmPath ? path.basename(bgmPath) : null, bgmInfo };
 }
