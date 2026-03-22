@@ -526,7 +526,7 @@ export function generateVideoSEO(
   originalTitle: string,
   niche: string,
   scriptText?: string,
-  includeAiTags = true,
+  includeAiTags = false,
   previousVideoUrl?: string,
 ): VideoSEO {
   const cfg = NICHE_SEO[niche] ?? FALLBACK;
@@ -615,7 +615,7 @@ export function generateInstagramCaption(
   originalTitle: string,
   niche: string,
   scriptText?: string,
-  _includeAiTags = true,
+  _includeAiTags = false,
 ): string {
   const cfg = NICHE_SEO[niche] ?? FALLBACK;
 
@@ -735,7 +735,7 @@ export function generateFacebookCaption(
   originalTitle: string,
   niche: string,
   scriptText?: string,
-  _includeAiTags = true,
+  _includeAiTags = false,
 ): string {
   const cfg = NICHE_SEO[niche] ?? FALLBACK;
 

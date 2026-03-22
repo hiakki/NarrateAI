@@ -1517,19 +1517,34 @@ export default function VideoDetailPage() {
                       <Clock className="h-4 w-4 text-amber-600" />
                       {isPast ? "Scheduled (posting soon)" : `Scheduled for ${timeStr} · ${dateStr}`}
                     </h3>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-red-600 hover:text-red-700 text-xs"
-                      disabled={cancellingPlatforms.size > 0}
-                      onClick={() => handleCancelSchedule()}
-                    >
-                      {cancellingPlatforms.has("__all__") ? (
-                        <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Cancelling...</>
-                      ) : (
-                        <><XCircle className="mr-1 h-3 w-3" /> Cancel All</>
-                      )}
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="text-xs"
+                        disabled={publishingPlatforms.size > 0 || cancellingPlatforms.size > 0}
+                        onClick={() => handlePublishAll(scheduled, true)}
+                      >
+                        {publishingPlatforms.size > 0 ? (
+                          <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Posting...</>
+                        ) : (
+                          <><Send className="mr-1 h-3 w-3" /> Post Now</>
+                        )}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-red-600 hover:text-red-700 text-xs"
+                        disabled={cancellingPlatforms.size > 0}
+                        onClick={() => handleCancelSchedule()}
+                      >
+                        {cancellingPlatforms.has("__all__") ? (
+                          <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Cancelling...</>
+                        ) : (
+                          <><XCircle className="mr-1 h-3 w-3" /> Cancel All</>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                   {scheduled.map((key) => {
                     const meta = PLAT_META[key];
@@ -1542,15 +1557,26 @@ export default function VideoDetailPage() {
                           <span className="text-sm">{meta.label}</span>
                           <span className="text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">{timeStr}</span>
                         </div>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          className="text-red-500 hover:text-red-600"
-                          disabled={cancellingPlatforms.has(key)}
-                          onClick={() => handleCancelSchedule([key])}
-                        >
-                          {cancellingPlatforms.has(key) ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="text-xs"
+                            disabled={publishingPlatforms.has(key) || cancellingPlatforms.has(key)}
+                            onClick={() => handlePublishPlatform(key, true)}
+                          >
+                            {publishingPlatforms.has(key) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            className="text-red-500 hover:text-red-600"
+                            disabled={cancellingPlatforms.has(key)}
+                            onClick={() => handleCancelSchedule([key])}
+                          >
+                            {cancellingPlatforms.has(key) ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                          </Button>
+                        </div>
                       </div>
                     );
                   })}

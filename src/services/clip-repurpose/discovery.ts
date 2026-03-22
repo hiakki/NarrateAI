@@ -2,7 +2,6 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { createLogger } from "@/lib/logger";
 import { getCookieFilePath } from "@/lib/cookie-path";
-import { discoverFbPageVideos, discoverIgReels } from "./browser-scraper";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipDiscovery");
@@ -78,60 +77,6 @@ const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
   music:         ["music performance viral amazing", "dance trending choreography"],
   auto:          ["trending viral video today", "most viewed video this week"],
 };
-
-// ── Fallback: YT channel lists (only used when search returns < 5 results) ──
-const NICHE_YT_HANDLES: Partial<Record<ClipNiche, string[]>> = {
-  "viral-repost": ["https://www.youtube.com/@DailyDoseOfInternet", "https://www.youtube.com/@ViralHog", "https://www.youtube.com/@PeopleAreAwesome"],
-  entertainment:  ["https://www.youtube.com/@MrBeast", "https://www.youtube.com/@dudeperfect", "https://www.youtube.com/@Airrack"],
-  nature:         ["https://www.youtube.com/@NatGeo", "https://www.youtube.com/@BBCEarth", "https://www.youtube.com/@TheDodo"],
-  science:        ["https://www.youtube.com/@veritasium", "https://www.youtube.com/@kurzgesagt"],
-  sports:         ["https://www.youtube.com/@ESPN", "https://www.youtube.com/@HouseofHighlights"],
-  comedy:         ["https://www.youtube.com/@failarmy", "https://www.youtube.com/@LADbible"],
-  motivation:     ["https://www.youtube.com/@Goalcast", "https://www.youtube.com/@MotivationHub"],
-  education:      ["https://www.youtube.com/@TEDEd", "https://www.youtube.com/@khanacademy"],
-  food:           ["https://www.youtube.com/@BabishCulinaryUniverse"],
-};
-
-// FB/IG pages — kept for cross-platform discovery (safer for reposting to YT)
-const NICHE_FB_PAGES: Partial<Record<ClipNiche, string[]>> = {
-  "viral-repost": ["https://www.facebook.com/DailyDoseOfInternet/videos/", "https://www.facebook.com/ViralHog/videos/", "https://www.facebook.com/PeopleAreAwesome/videos/"],
-  entertainment:  ["https://www.facebook.com/MrBeast6000/videos/", "https://www.facebook.com/DudePerfect/videos/", "https://www.facebook.com/RedBull/videos/"],
-  nature:         ["https://www.facebook.com/NatGeo/videos/", "https://www.facebook.com/BBCEarth/videos/"],
-  science:        ["https://www.facebook.com/NASAEarth/videos/"],
-  sports:         ["https://www.facebook.com/ESPN/videos/"],
-  food:           ["https://www.facebook.com/BuzzFeedTasty/videos/"],
-  education:      ["https://www.facebook.com/TEDEd/videos/", "https://www.facebook.com/BrightSide/videos/"],
-  motivation:     ["https://www.facebook.com/Goalcast/videos/"],
-  comedy:         ["https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/FailArmy/videos/", "https://www.facebook.com/LADbible/videos/"],
-};
-
-const NICHE_IG_PROFILES: Partial<Record<ClipNiche, string[]>> = {
-  "viral-repost": ["https://www.instagram.com/dailydoseofinternet/", "https://www.instagram.com/viralhog/", "https://www.instagram.com/peopleareawesome/"],
-  entertainment:  ["https://www.instagram.com/mrbeast/", "https://www.instagram.com/dudeperfect/", "https://www.instagram.com/redbull/"],
-  nature:         ["https://www.instagram.com/natgeo/", "https://www.instagram.com/bbcearth/"],
-  science:        ["https://www.instagram.com/nasa/"],
-  sports:         ["https://www.instagram.com/espn/"],
-  food:           ["https://www.instagram.com/buzzfeedtasty/"],
-  education:      ["https://www.instagram.com/ted/"],
-  motivation:     ["https://www.instagram.com/goalcast/"],
-  comedy:         ["https://www.instagram.com/9gag/", "https://www.instagram.com/failarmy/", "https://www.instagram.com/ladbible/"],
-};
-
-function getChannelsForNiche(niche: ClipNiche): { yt: string[]; fb: string[]; ig: string[] } {
-  const fb = [...(NICHE_FB_PAGES[niche] ?? [])];
-  const ig = [...(NICHE_IG_PROFILES[niche] ?? [])];
-  if (niche === "auto") {
-    const allYt = Object.values(NICHE_YT_HANDLES).flat();
-    const allFb = Object.values(NICHE_FB_PAGES).flat();
-    const allIg = Object.values(NICHE_IG_PROFILES).flat();
-    return {
-      yt: [...new Set(allYt)].sort(() => Math.random() - 0.5).slice(0, 5),
-      fb: [...new Set(allFb)].slice(0, 3),
-      ig: [...new Set(allIg)].slice(0, 2),
-    };
-  }
-  return { yt: [...(NICHE_YT_HANDLES[niche] ?? [])], fb, ig };
-}
 
 const YT_API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -503,10 +448,10 @@ const NICHE_SIGNALS: Record<string, { positive: string[]; negative: string[] }> 
  * Discover a single best video to clip.
  *
  * Pipeline:
- *   1. SEARCH — yt-dlp ytsearch for trending niche content (primary)
- *   2. CHANNEL FALLBACK — scrape known channels if search yields < 5 results
- *   3. FB/IG — browser scraper with view-count enforcement
- *   4. COPYRIGHT SCREEN — YouTube API checks licensedContent (when key available)
+ *   1. SEARCH — yt-dlp ytsearch for trending niche content
+ *   2. TRENDING + CC — YouTube API trending & Creative Commons (when key available)
+ *   3. ENRICH — fill in metadata for API-sourced candidates
+ *   4. COPYRIGHT SCREEN — YouTube API licensedContent check
  *   5. QUALITY SCORE — engagement, recency, velocity, niche relevance, copyright risk
  */
 export async function discoverVideo(config: {
@@ -518,56 +463,32 @@ export async function discoverVideo(config: {
   preferPlatform?: "youtube" | "facebook" | "instagram";
 }): Promise<DiscoveryResult | null> {
   const ytApiKey = getYouTubeApiKey();
-  const pref = config.preferPlatform;
   const minViews = config.minViewCount ?? 100_000;
-  const fbMinViews = 50_000;
-  const igMinViews = 5_000;
   const minDur = config.minDurationSec ?? 5;
   const maxDur = config.maxDurationSec ?? 3600;
   const nowMs = Date.now();
 
   const allCandidates: DiscoveredVideo[] = [];
-  const { yt: ytChannels, fb: fbPages, ig: igProfiles } = getChannelsForNiche(config.niche);
 
-  log.log(`[DISCOVER] Niche "${config.niche}"${pref ? ` (prefer: ${pref})` : ""}`);
+  log.log(`[DISCOVER] Niche "${config.niche}"`);
 
-  // ── 1. PRIMARY: YouTube search-based trending discovery ──
-  if (!pref || pref === "youtube") {
-    log.log(`[SEARCH] Running search-based discovery for "${config.niche}"...`);
-    const searchResults = await discoverViaSearch(config.niche, 10);
-    for (const e of searchResults) {
-      if (e.id) {
-        allCandidates.push({
-          videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
-          title: e.title, channelId: e.channel_id, channelName: e.channel,
-          viewCount: e.view_count, publishedAt: e.upload_date,
-          durationSec: e.duration, platform: "youtube", source: "search",
-        });
-      }
-    }
-    log.log(`[SEARCH] Got ${allCandidates.length} candidates from search`);
-
-    // ── 2. FALLBACK: Channel scraping only if search returned too few ──
-    if (allCandidates.length < 5) {
-      log.log(`[FALLBACK] Search returned < 5, scraping ${ytChannels.length} channels...`);
-      for (const handleUrl of ytChannels) {
-        const entries = await discoverViaYtDlp(handleUrl, 5);
-        for (const e of entries) {
-          if (e.id) {
-            allCandidates.push({
-              videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
-              title: e.title, channelId: e.channel_id, channelName: e.channel,
-              viewCount: e.view_count, publishedAt: e.upload_date,
-              durationSec: e.duration, platform: "youtube", source: "channel",
-            });
-          }
-        }
-      }
+  // ── 1. YouTube search-based trending discovery ──
+  log.log(`[SEARCH] Running search-based discovery for "${config.niche}"...`);
+  const searchResults = await discoverViaSearch(config.niche, 10);
+  for (const e of searchResults) {
+    if (e.id) {
+      allCandidates.push({
+        videoId: e.id, url: e.webpage_url || e.url || `https://www.youtube.com/watch?v=${e.id}`,
+        title: e.title, channelId: e.channel_id, channelName: e.channel,
+        viewCount: e.view_count, publishedAt: e.upload_date,
+        durationSec: e.duration, platform: "youtube", source: "search",
+      });
     }
   }
+  log.log(`[SEARCH] Got ${allCandidates.length} candidates from search`);
 
-  // ── 3. YouTube Trending + Creative Commons (when API key available) ──
-  if (ytApiKey && (!pref || pref === "youtube")) {
+  // ── 2. YouTube Trending + Creative Commons (when API key available) ──
+  if (ytApiKey) {
     const trendingIds = await fetchTrendingVideoIds(ytApiKey);
     for (const id of trendingIds) {
       allCandidates.push({
@@ -588,69 +509,26 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── 4. Facebook Pages (browser scraper, with view-count floor) ──
-  if (!pref || pref === "facebook") {
-    for (const fbUrl of fbPages) {
-      try {
-        const fbVideos = await discoverFbPageVideos(fbUrl, 10);
-        for (const v of fbVideos) {
-          if (v.videoId && v.viewCount >= fbMinViews) {
-            allCandidates.push({
-              videoId: v.videoId, url: v.url, title: v.title,
-              channelId: "", channelName: v.channelName,
-              viewCount: v.viewCount, publishedAt: "",
-              durationSec: v.durationSec, platform: "facebook", source: "channel",
-            });
-          }
-        }
-      } catch (err) {
-        log.warn(`FB scrape failed for ${fbUrl}: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-  }
-
-  // ── 5. Instagram Profiles (browser scraper, with view-count floor) ──
-  if (!pref || pref === "instagram") {
-    for (const igUrl of igProfiles) {
-      try {
-        const igReels = await discoverIgReels(igUrl, 10);
-        for (const v of igReels) {
-          if (v.videoId && v.viewCount >= igMinViews) {
-            allCandidates.push({
-              videoId: v.videoId, url: v.url, title: v.title,
-              channelId: "", channelName: v.channelName,
-              viewCount: v.viewCount, publishedAt: "",
-              durationSec: v.durationSec, platform: "instagram", source: "channel",
-            });
-          }
-        }
-      } catch (err) {
-        log.warn(`IG scrape failed for ${igUrl}: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-  }
-
   // ── Deduplicate and exclude already-processed ──
   const seen = new Set<string>();
   const unique = allCandidates.filter((v) => {
-    const key = `${v.platform}:${v.videoId}`;
-    if (seen.has(key) || config.excludeVideoIds.has(v.videoId) || config.excludeVideoIds.has(v.url)) return false;
-    seen.add(key);
+    if (seen.has(v.videoId) || config.excludeVideoIds.has(v.videoId) || config.excludeVideoIds.has(v.url)) return false;
+    seen.add(v.videoId);
     return true;
   });
 
   if (unique.length === 0) {
-    log.warn("No candidate videos found from any source");
+    log.warn("No candidate videos found");
     return null;
   }
 
   const copyrightMap = new Map<string, CopyrightInfo>();
 
-  // ── Enrich YouTube candidates (metadata + engagement + copyright in one call) ──
-  const ytNeedEnrich = unique.filter((v) => v.platform === "youtube" && !v.title);
-  if (ytNeedEnrich.length > 0 && ytApiKey) {
-    const details = await enrichYouTubeVideoDetails(ytNeedEnrich.map((v) => v.videoId), ytApiKey);
-    for (const v of ytNeedEnrich) {
+  // ── 3. Enrich candidates via YouTube API ──
+  const needEnrich = unique.filter((v) => !v.title);
+  if (needEnrich.length > 0 && ytApiKey) {
+    const details = await enrichYouTubeVideoDetails(needEnrich.map((v) => v.videoId), ytApiKey);
+    for (const v of needEnrich) {
       const d = details.get(v.videoId);
       if (d) {
         v.title = d.title; v.viewCount = d.viewCount; v.durationSec = d.durationSec;
@@ -677,18 +555,17 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── 6. COPYRIGHT SCREEN (YouTube only, when API key available) ──
-  const ytCandidateIds = unique.filter((v) => v.platform === "youtube" && v.videoId).map((v) => v.videoId);
-  if (ytApiKey && ytCandidateIds.length > 0) {
-    log.log(`[COPYRIGHT] Screening ${ytCandidateIds.length} YouTube candidates...`);
-    const crMap = await copyrightPreScreen(ytCandidateIds, ytApiKey);
+  // ── 4. COPYRIGHT SCREEN ──
+  const candidateIds = unique.filter((v) => v.videoId).map((v) => v.videoId);
+  if (ytApiKey && candidateIds.length > 0) {
+    log.log(`[COPYRIGHT] Screening ${candidateIds.length} candidates...`);
+    const crMap = await copyrightPreScreen(candidateIds, ytApiKey);
     for (const [id, info] of crMap) { copyrightMap.set(id, info); }
     const licensed = [...crMap.values()].filter((c) => c.licensedContent).length;
     const cc = [...crMap.values()].filter((c) => c.license === "creativeCommon").length;
     log.log(`[COPYRIGHT] ${licensed} licensed (risky), ${cc} Creative Commons (safe)`);
   }
 
-  // Apply copyright data + engagement to candidates
   for (const v of unique) {
     const cr = copyrightMap.get(v.videoId);
     if (cr) {
@@ -698,10 +575,9 @@ export async function discoverVideo(config: {
     }
   }
 
-  // ── Filter: min views, duration, skip fully-licensed (hard block) ──
+  // ── Filter: min views, duration ──
   const filtered = unique.filter((v) => {
-    const platformMinViews = v.platform === "instagram" ? igMinViews : v.platform === "facebook" ? fbMinViews : minViews;
-    if (v.viewCount < platformMinViews) return false;
+    if (v.viewCount < minViews) return false;
     if (v.durationSec > 0 && (v.durationSec < minDur || v.durationSec > maxDur)) return false;
     return true;
   });
@@ -711,11 +587,10 @@ export async function discoverVideo(config: {
     return null;
   }
 
-  // ── 7. QUALITY SCORING ──
+  // ── 5. QUALITY SCORING ──
   const scoredWithRank = filtered.map((v) => {
     let score = 0;
 
-    // --- View velocity: views/day since upload (rewards fast-growing content) ---
     let ageDays = 30;
     if (v.publishedAt) {
       const pubMs = v.publishedAt.length === 8
@@ -724,43 +599,30 @@ export async function discoverVideo(config: {
       if (!isNaN(pubMs)) ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
     }
     const velocity = v.viewCount / ageDays;
-    const velocityScore = velocity > 0 ? Math.min(35, Math.log10(velocity) * 7) : 0;
-    score += velocityScore;
+    score += velocity > 0 ? Math.min(35, Math.log10(velocity) * 7) : 0;
 
-    // --- Engagement ratio (YouTube only, when data available) ---
     if (v.likeCount && v.viewCount > 0) {
-      const likeRatio = v.likeCount / v.viewCount;
-      score += Math.min(20, likeRatio * 500);
+      score += Math.min(20, (v.likeCount / v.viewCount) * 500);
     }
     if (v.commentCount && v.viewCount > 0) {
-      const commentRatio = v.commentCount / v.viewCount;
-      score += Math.min(10, commentRatio * 2000);
+      score += Math.min(10, (v.commentCount / v.viewCount) * 2000);
     }
 
-    // --- Recency bonus/penalty ---
     if (ageDays <= 3) score += 15;
     else if (ageDays <= 7) score += 10;
     else if (ageDays <= 14) score += 5;
     else if (ageDays > 60) score -= 10;
 
-    // --- Copyright risk ---
     if (v.licensedContent) score -= 50;
     const crInfo = copyrightMap.get(v.videoId);
     if (crInfo?.license === "creativeCommon") score += 30;
 
-    // --- Platform bonus: FB/IG are already short-form and safer for cross-platform ---
-    const platformBonus: Record<string, number> = { facebook: 10, instagram: 8, youtube: 0, tiktok: 5, other: 0 };
-    score += platformBonus[v.platform] ?? 0;
-
-    // --- Source quality ---
-    const sourceBonus: Record<string, number> = { search: 5, "creative-commons": 15, channel: 3, trending: 5, direct: 0 };
+    const sourceBonus: Record<string, number> = { search: 5, "creative-commons": 15, trending: 5, direct: 0 };
     score += sourceBonus[v.source] ?? 0;
 
-    // --- Non-copyright creator bonus ---
     const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart", "viral hog", "people are awesome"];
     if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 10;
 
-    // --- Niche relevance ---
     if (config.niche !== "auto" && config.niche !== "viral-repost") {
       const titleLower = (v.title || "").toLowerCase();
       const signals = NICHE_SIGNALS[config.niche];
@@ -788,6 +650,6 @@ export async function discoverVideo(config: {
     score: v.score,
   }));
 
-  log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.platform}/${best.source}] from ${unique.length} candidates`);
+  log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.source}] from ${unique.length} candidates`);
   return { selected: best, candidates: candidatesSummary, totalConsidered: unique.length };
 }
