@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next dev",
-    "dev:all": "concurrently -n app,worker,sched -c blue,green,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm scheduler\"",
+    "dev:all": "concurrently -n app,worker,clip,sched -c blue,green,magenta,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm worker:clip\" \"pnpm scheduler\"",
     "dev:tunnel": "node scripts/run-dev-tunnel.js",
     "tunnel": "node scripts/run-tunnel-only.js",
     "build": "next build",
@@ -15,7 +15,6 @@
     "worker": "tsx workers/video-generation.ts",
     "worker:clip": "tsx workers/clip-repurpose.ts",
     "scheduler": "tsx workers/scheduler.ts",
-    "dev:all:clip": "concurrently -n app,worker,clip,sched -c blue,green,magenta,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm worker:clip\" \"pnpm scheduler\"",
     "db:push": "pnpm prisma db push",
     "db:generate": "pnpm prisma generate"
   },
