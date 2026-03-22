@@ -25,6 +25,7 @@ set "NODE_MAJOR=22"
 set "SKIP_PREREQS=0"
 set "RESTORE_FILE="
 set "ACTION=deploy"
+set "ORIGINAL_PATH=%PATH%"
 
 :parse_args
 if "%~1"=="" goto :done_args
@@ -62,9 +63,11 @@ exit /b 0
 
 :: ─────────────────────────────────────────────────────────────────────────────
 :refresh_path
+:: Merge registry PATH with original session PATH so newly-installed tools
+:: are found without losing entries like Docker Desktop, winget, etc.
 for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "_SYSPATH=%%b"
 for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "_USRPATH=%%b"
-set "PATH=!_SYSPATH!;!_USRPATH!"
+set "PATH=!_SYSPATH!;!_USRPATH!;!ORIGINAL_PATH!"
 for /f "tokens=*" %%p in ('npm config get prefix 2^>nul') do set "PATH=%%p;!PATH!"
 goto :eof
 
@@ -106,9 +109,11 @@ if not errorlevel 1 (
     goto :eof
 )
 echo [INFO]  Installing Docker Desktop...
-if "!PKG!"=="winget" winget install -e --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install docker-desktop -y
-if "!PKG!"=="none" (
+if "!PKG!"=="winget" (
+    winget install -e --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
+) else if "!PKG!"=="choco" (
+    choco install docker-desktop -y
+) else (
     echo [ERR ] Cannot auto-install Docker. Get it from https://docker.com
     exit /b 1
 )
@@ -133,9 +138,11 @@ if !_NV! GEQ %NODE_MAJOR% (
 echo [WARN]  Node.js too old, need v%NODE_MAJOR%+
 :do_install_node
 echo [INFO]  Installing Node.js %NODE_MAJOR% LTS...
-if "!PKG!"=="winget" winget install -e --id OpenJS.NodeJS.%NODE_MAJOR% --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install nodejs-lts -y
-if "!PKG!"=="none" (
+if "!PKG!"=="winget" (
+    winget install -e --id OpenJS.NodeJS.%NODE_MAJOR% --accept-package-agreements --accept-source-agreements
+) else if "!PKG!"=="choco" (
+    choco install nodejs-lts -y
+) else (
     echo [ERR ] Cannot auto-install Node.js. Install v%NODE_MAJOR% from https://nodejs.org
     exit /b 1
 )
@@ -169,9 +176,11 @@ if not errorlevel 1 (
     goto :eof
 )
 echo [INFO]  Installing FFmpeg...
-if "!PKG!"=="winget" winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install ffmpeg -y
-if "!PKG!"=="none" (
+if "!PKG!"=="winget" (
+    winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
+) else if "!PKG!"=="choco" (
+    choco install ffmpeg -y
+) else (
     echo [ERR ] Install FFmpeg manually from https://ffmpeg.org
     exit /b 1
 )
@@ -187,18 +196,25 @@ if not errorlevel 1 (
     goto :eof
 )
 echo [INFO]  Installing yt-dlp...
-if "!PKG!"=="winget" winget install -e --id yt-dlp.yt-dlp --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install yt-dlp -y
-if "!PKG!"=="none" (
+if "!PKG!"=="winget" (
+    winget install -e --id yt-dlp.yt-dlp --accept-package-agreements --accept-source-agreements
+) else if "!PKG!"=="choco" (
+    choco install yt-dlp -y
+) else (
     where pip >nul 2>nul
     if not errorlevel 1 (
         pip install yt-dlp
     ) else (
-        echo [ERR ] Install yt-dlp manually: pip install yt-dlp  or  winget install yt-dlp
+        echo [WARN]  Install yt-dlp manually: pip install yt-dlp  or  winget install yt-dlp
         goto :eof
     )
 )
 call :refresh_path
+where yt-dlp >nul 2>nul
+if errorlevel 1 (
+    echo [WARN]  yt-dlp installed but not in PATH yet. Restart your terminal after setup.
+    goto :eof
+)
 echo [ OK ]  yt-dlp installed
 goto :eof
 
@@ -223,13 +239,20 @@ if not errorlevel 1 (
     goto :eof
 )
 echo [INFO]  Installing cloudflared...
-if "!PKG!"=="winget" winget install -e --id Cloudflare.cloudflared --accept-package-agreements --accept-source-agreements
-if "!PKG!"=="choco" choco install cloudflared -y
-if "!PKG!"=="none" (
-    echo [WARN]  Install cloudflared manually. Skipping.
+if "!PKG!"=="winget" (
+    winget install -e --id Cloudflare.cloudflared --accept-package-agreements --accept-source-agreements
+) else if "!PKG!"=="choco" (
+    choco install cloudflared -y
+) else (
+    echo [WARN]  Install cloudflared manually from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
     goto :eof
 )
 call :refresh_path
+where cloudflared >nul 2>nul
+if errorlevel 1 (
+    echo [WARN]  cloudflared installed but not in PATH yet. Restart your terminal after setup.
+    goto :eof
+)
 echo [ OK ]  cloudflared installed
 goto :eof
 
