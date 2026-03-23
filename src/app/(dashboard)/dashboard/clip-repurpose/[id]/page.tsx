@@ -5,10 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Loader2, ArrowLeft, Scissors, Clock, Film, Eye, TrendingUp,
   ExternalLink, CheckCircle2, XCircle, AlertCircle, Instagram,
-  Youtube, Facebook, Share2, Smartphone, Zap,
+  Youtube, Facebook, Share2, Smartphone, Zap, Search, X,
 } from "lucide-react";
 
 interface PlatformEntry {
@@ -83,18 +84,24 @@ function formatViews(n: number) {
   return String(n);
 }
 
+const ALL_STATUSES = ["QUEUED", "GENERATING", "READY", "POSTED", "FAILED"] as const;
+
 export default function ClipAutomationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [auto, setAuto] = useState<AutomationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [totalVideos, setTotalVideos] = useState(0);
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch(`/api/automations/${id}`, { cache: "no-store" });
+      const res = await fetch(`/api/automations/${id}?limit=200`, { cache: "no-store" });
       const json = await res.json();
       if (json.data) setAuto(json.data);
+      if (json.totalVideos != null) setTotalVideos(json.totalVideos);
     } catch { /* ignore */ }
     setLoading(false);
   }, [id]);
@@ -134,7 +141,24 @@ export default function ClipAutomationDetailPage() {
     );
   }
 
-  const videos = auto.series?.videos ?? [];
+  const allVideos = auto.series?.videos ?? [];
+
+  const query = searchQuery.toLowerCase().trim();
+  const filteredVideos = allVideos.filter((v) => {
+    if (statusFilter && v.status !== statusFilter) return false;
+    if (!query) return true;
+    const titleMatch = v.title?.toLowerCase().includes(query);
+    const channelMatch = v.sourceMetadata?.channelName?.toLowerCase().includes(query);
+    const originalTitleMatch = v.sourceMetadata?.originalTitle?.toLowerCase().includes(query);
+    const platformMatch = v.sourceMetadata?.platform?.toLowerCase().includes(query);
+    const idMatch = v.id.toLowerCase().includes(query);
+    return titleMatch || channelMatch || originalTitleMatch || platformMatch || idMatch;
+  });
+
+  const statusCounts = ALL_STATUSES.reduce((acc, s) => {
+    acc[s] = allVideos.filter((v) => v.status === s).length;
+    return acc;
+  }, {} as Record<string, number>);
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
@@ -150,7 +174,7 @@ export default function ClipAutomationDetailPage() {
           </h1>
           <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
             <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {auto.frequency} at {auto.postTime}</span>
-            <span className="flex items-center gap-1"><Film className="w-3.5 h-3.5" /> {videos.length} clips</span>
+            <span className="flex items-center gap-1"><Film className="w-3.5 h-3.5" /> {totalVideos || allVideos.length} clips</span>
             {auto.clipConfig?.clipNiche && (
               <Badge variant="outline" className="text-xs">{auto.clipConfig.clipNiche}</Badge>
             )}
@@ -165,16 +189,89 @@ export default function ClipAutomationDetailPage() {
         </Button>
       </div>
 
+      {/* Search & Filters */}
+      {allVideos.length > 0 && (
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by title, channel, source platform, or video ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-9"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setStatusFilter(null)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                !statusFilter
+                  ? "bg-foreground text-background border-foreground"
+                  : "bg-background text-muted-foreground border-border hover:border-foreground/30"
+              }`}
+            >
+              All ({allVideos.length})
+            </button>
+            {ALL_STATUSES.map((s) => {
+              const cfg = STATUS_CFG[s];
+              const count = statusCounts[s] || 0;
+              if (count === 0) return null;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatusFilter(statusFilter === s ? null : s)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    statusFilter === s
+                      ? `${cfg.cls} border-current font-medium`
+                      : "bg-background text-muted-foreground border-border hover:border-foreground/30"
+                  }`}
+                >
+                  {cfg.label} ({count})
+                </button>
+              );
+            })}
+            {(searchQuery || statusFilter) && (
+              <span className="text-xs text-muted-foreground ml-1">
+                {filteredVideos.length} result{filteredVideos.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Videos Grid */}
-      {videos.length === 0 ? (
+      {allVideos.length === 0 ? (
         <div className="border border-dashed rounded-lg p-12 flex flex-col items-center justify-center text-center">
           <Scissors className="w-10 h-10 text-zinc-300 mb-3" />
           <p className="text-muted-foreground">No clips generated yet.</p>
           <p className="text-xs text-muted-foreground mt-1">Click &quot;Generate Clip&quot; to create your first clip.</p>
         </div>
+      ) : filteredVideos.length === 0 ? (
+        <div className="border border-dashed rounded-lg p-12 flex flex-col items-center justify-center text-center">
+          <Search className="w-10 h-10 text-zinc-300 mb-3" />
+          <p className="text-muted-foreground">No clips match your search.</p>
+          <button
+            type="button"
+            className="text-xs text-blue-500 hover:underline mt-2"
+            onClick={() => { setSearchQuery(""); setStatusFilter(null); }}
+          >
+            Clear filters
+          </button>
+        </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {videos.map((v) => {
+          {filteredVideos.map((v) => {
             const st = STATUS_CFG[v.status] ?? STATUS_CFG.QUEUED;
             const StIcon = st.icon;
             const posted = (v.postedPlatforms ?? []).map((p) =>

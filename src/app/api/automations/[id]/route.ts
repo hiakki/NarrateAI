@@ -43,7 +43,7 @@ async function verifyOwnership(id: string, userId: string, role: string) {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -52,13 +52,17 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await params;
+    const url = new URL(req.url);
+    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "100", 10) || 100, 500);
+    const offset = Math.max(parseInt(url.searchParams.get("offset") ?? "0", 10) || 0, 0);
 
     const automation = await db.automation.findUnique({
       where: { id },
       include: {
         series: {
           include: {
-            videos: { orderBy: { createdAt: "desc" }, take: 20 },
+            videos: { orderBy: { createdAt: "desc" }, take: limit, skip: offset },
+            _count: { select: { videos: true } },
           },
         },
       },
@@ -69,7 +73,8 @@ export async function GET(
     if (automation.userId !== session.user.id && session.user.role === "USER")
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    return NextResponse.json({ data: automation });
+    const totalVideos = (automation.series as unknown as { _count?: { videos: number } })?._count?.videos ?? 0;
+    return NextResponse.json({ data: automation, totalVideos });
   } catch (error) {
     console.error("Get automation error:", error);
     return NextResponse.json(
