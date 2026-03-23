@@ -1,15 +1,19 @@
 import "dotenv/config";
 import cron from "node-cron";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { enqueueVideoGeneration, enqueueClipRepurpose } from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { refreshInsightsForUser } from "../src/services/insights";
+import { getYouTubeVideoPrivacy } from "../src/lib/social/youtube";
+import { getFacebookVideoPublished, getFreshFacebookToken } from "../src/lib/social/facebook";
+import { decrypt } from "../src/lib/social/encrypt";
 
 import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
 import { resolveProviders } from "../src/services/providers/resolve";
 import { getDefaultVoiceId } from "../src/config/voices";
 import { createLogger, runWithAutomationIdAsync } from "../src/lib/logger";
+import { getAutomationFileLogger, cleanupOldLogs } from "../src/lib/file-logger";
 
 const db = new PrismaClient();
 const logger = createLogger("Scheduler");
@@ -25,6 +29,16 @@ const BUILD_ALL_TIME = process.env.BUILD_ALL_TIME ?? "04:00";
 const BUILD_ALL_TIMEZONE = process.env.BUILD_ALL_TIMEZONE ?? "Asia/Kolkata";
 const BUILD_WINDOW_MINUTES = 60;
 
+interface AutoUser {
+  id: string;
+  name: string | null;
+  email: string;
+  defaultLlmProvider: string | null;
+  defaultTtsProvider: string | null;
+  defaultImageProvider: string | null;
+  defaultImageToVideoProvider: string | null;
+}
+
 interface AutoRow {
   id: string;
   name: string;
@@ -37,20 +51,41 @@ interface AutoRow {
   llmProvider: string | null;
   ttsProvider: string | null;
   imageProvider: string | null;
-  targetPlatforms: string[];
+  imageToVideoProvider?: string | null;
+  targetPlatforms: string[] | unknown;
   frequency: string;
   postTime: string;
   timezone: string;
   lastRunAt: Date | null;
   seriesId: string | null;
-  user: {
-    id: string;
-    name: string | null;
-    email: string;
-    defaultLlmProvider: string | null;
-    defaultTtsProvider: string | null;
-    defaultImageProvider: string | null;
-    defaultImageToVideoProvider: string | null;
+  characterId?: string | null;
+  automationType?: string;
+  clipConfig?: unknown;
+  enableBgm?: boolean;
+  enableHflip?: boolean;
+  user: AutoUser;
+}
+
+interface FailedVideoRow {
+  id: string;
+  seriesId: string;
+  title: string | null;
+  scriptText: string | null;
+  scenesJson: unknown;
+  checkpointData: unknown;
+  targetDuration: number | null;
+  duration: number | null;
+  series: {
+    artStyle: string;
+    niche: string;
+    tone: string;
+    voiceId: string | null;
+    language: string;
+    llmProvider: string | null;
+    ttsProvider: string | null;
+    imageProvider: string | null;
+    character?: { fullPrompt: string } | null;
+    user: AutoUser;
   };
 }
 
@@ -179,18 +214,26 @@ async function writeSchedulerLog(
   }
 }
 
-async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
+async function processAutomation(auto: AutoRow) {
   return runWithAutomationIdAsync(auto.id, async () => {
   const runStart = Date.now();
-  const { build, reason } = shouldBuildNow(auto as unknown as AutoRow);
+  const fl = getAutomationFileLogger(
+    auto.user.id,
+    auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+    auto.id,
+    auto.name,
+  );
+  const { build, reason } = shouldBuildNow(auto);
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
+    fl.scheduler(`SKIP: ${reason}`);
     await writeSchedulerLog(auto.id, "skipped", reason, { durationMs: Date.now() - runStart });
     return;
   }
 
   log(`[BUILD]`, `"${auto.name}" — ${reason}`);
+  fl.scheduler(`BUILD: "${auto.name}" — ${reason}`);
 
   if (!auto.seriesId) {
     log(`[AUTO]`, `No linked series, creating one...`);
@@ -216,15 +259,16 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     log(`[AUTO]`, `Created series "${newSeries.name}" (${newSeries.id})`);
   }
 
-  const pendingVideo = await db.video.findFirst({
+  const pendingVideo = auto.seriesId ? await db.video.findFirst({
     where: {
       seriesId: auto.seriesId,
       status: { in: ["QUEUED", "GENERATING", "SCHEDULED"] },
     },
-  });
+  }) : null;
   if (pendingVideo) {
     const msg = `Video ${pendingVideo.id} is ${pendingVideo.status}`;
     log(`[SKIP]`, msg);
+    fl.scheduler(`SKIP: pending video ${pendingVideo.id} (${pendingVideo.status})`);
     await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: pendingVideo.id });
     return;
   }
@@ -232,10 +276,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   // If the most recent video is READY but not posted to all target platforms, skip new generation
   const targets = (auto.targetPlatforms ?? []) as string[];
   if (targets.length > 0) {
-    const readyVideo = await db.video.findFirst({
+    const readyVideo = auto.seriesId ? await db.video.findFirst({
       where: { seriesId: auto.seriesId, status: "READY" },
       orderBy: { createdAt: "desc" },
-    });
+    }) : null;
     if (readyVideo) {
       const rawPosted = (readyVideo.postedPlatforms ?? []) as (
         | string
@@ -252,6 +296,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       if (!allPosted) {
         const msg = `Video ${readyVideo.id} READY but not posted to all platforms yet`;
         log(`[SKIP]`, msg);
+        fl.scheduler(`SKIP: ${msg}`);
         await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
         return;
       }
@@ -259,10 +304,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   }
 
   // ── Route by automationType BEFORE retry logic to avoid cross-pipeline retries ──
-  const autoType = ((auto as Record<string, unknown>).automationType as string) ?? "original";
+  const autoType = auto.automationType ?? "original";
 
   if (autoType === "clip-repurpose") {
-    const clipConfig = ((auto as Record<string, unknown>).clipConfig as Record<string, unknown>) ?? {};
+    const clipConfig = (auto.clipConfig as Record<string, unknown>) ?? {};
     const postSlot = auto.postTime.split(",")[0].trim();
     let scheduledPostTime = localTimeToUTC(postSlot, auto.timezone);
     if (scheduledPostTime.getTime() < Date.now() + 15 * 60 * 1000) {
@@ -271,7 +316,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     try {
       const video = await db.video.create({
         data: {
-          seriesId: auto.seriesId,
+          seriesId: auto.seriesId!,
           targetDuration: auto.duration,
           status: "QUEUED",
           scheduledPostTime,
@@ -281,9 +326,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
 
       await enqueueClipRepurpose({
         videoId: video.id,
-        seriesId: auto.seriesId,
+        seriesId: auto.seriesId!,
         userId: auto.user.id,
         userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+        automationId: auto.id,
         automationName: auto.name,
         niche: auto.niche,
         language: auto.language,
@@ -293,8 +339,8 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
           clipDurationSec: (clipConfig.clipDurationSec as number) ?? 45,
           cropMode: (clipConfig.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
           creditOriginal: (clipConfig.creditOriginal as boolean) ?? true,
-          enableBgm: (auto as Record<string, unknown>).enableBgm as boolean ?? true,
-          enableHflip: (auto as Record<string, unknown>).enableHflip as boolean ?? false,
+          enableBgm: auto.enableBgm ?? true,
+          enableHflip: auto.enableHflip ?? false,
         },
         targetPlatforms: (auto.targetPlatforms ?? []) as string[],
       });
@@ -306,10 +352,12 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
 
       const msg = `Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
       log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
+      fl.scheduler(`ENQUEUE: clip-repurpose video=${video.id}, postAt=${scheduledPostTime.toISOString()}`);
       await writeSchedulerLog(auto.id, "enqueued", msg, { durationMs: Date.now() - runStart, videoId: video.id });
     } catch (qErr: unknown) {
       const errMsg = qErr instanceof Error ? qErr.message : String(qErr);
       err(`[ERR]`, `Failed to enqueue clip-repurpose for "${auto.name}":`, qErr);
+      fl.scheduler(`ERROR: Failed to enqueue clip-repurpose — ${errMsg.slice(0, 500)}`);
       await writeSchedulerLog(auto.id, "error", `Failed to enqueue clip-repurpose: ${errMsg.slice(0, 200)}`, {
         errorDetail: qErr instanceof Error ? qErr.stack : errMsg,
         durationMs: Date.now() - runStart,
@@ -321,7 +369,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   // ── ORIGINAL pipeline: AI-generated video ──
 
   // Retry FAILED videos for original pipeline only
-  const failedVideo = await db.video.findFirst({
+  const failedVideoRaw = auto.seriesId ? await db.video.findFirst({
     where: { seriesId: auto.seriesId, status: "FAILED" },
     orderBy: { updatedAt: "desc" },
     include: {
@@ -338,7 +386,8 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
         },
       },
     },
-  });
+  }) : null;
+  const failedVideo = failedVideoRaw as FailedVideoRow | null;
   if (failedVideo) {
     const completedStages = (failedVideo.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
     const scenes = (failedVideo.scenesJson as { text: string; visualDescription: string }[]) ?? [];
@@ -357,6 +406,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       seriesId: failedVideo.seriesId,
       userId: usr.id,
       userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
+      automationId: auto.id,
       automationName: auto.name,
       title: failedVideo.title || undefined,
       scriptText: failedVideo.scriptText || undefined,
@@ -385,14 +435,15 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
 
     const retryMsg = `Re-enqueued failed video (resumes from [${completedStages.join(",")}])`;
     log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
+    fl.scheduler(`RETRY: re-enqueued failed video=${failedVideo.id}, stages=[${completedStages.join(",")}]`);
     await writeSchedulerLog(auto.id, "enqueued", retryMsg, { durationMs: Date.now() - runStart, videoId: failedVideo.id });
     return;
   }
 
   let characterPrompt: string | undefined;
-  if ((auto as Record<string, unknown>).characterId) {
+  if (auto.characterId) {
     const char = await db.character.findUnique({
-      where: { id: (auto as Record<string, unknown>).characterId as string },
+      where: { id: auto.characterId },
       select: { fullPrompt: true },
     });
     if (char) characterPrompt = char.fullPrompt;
@@ -415,7 +466,7 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   try {
     const video = await db.video.create({
       data: {
-        seriesId: auto.seriesId,
+        seriesId: auto.seriesId!,
         targetDuration: auto.duration,
         status: "QUEUED",
         scheduledPostTime: origScheduledPostTime,
@@ -425,9 +476,10 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
 
     await enqueueVideoGeneration({
       videoId: video.id,
-      seriesId: auto.seriesId,
+      seriesId: auto.seriesId!,
       userId: auto.user.id,
       userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+      automationId: auto.id,
       automationName: auto.name,
       artStyle: auto.artStyle,
       artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",
@@ -451,10 +503,12 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     });
 
     log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
+    fl.scheduler(`ENQUEUE: AI video=${video.id}, postAt=${origScheduledPostTime.toISOString()}`);
     await writeSchedulerLog(auto.id, "enqueued", `Queued AI video, post at ${origScheduledPostTime.toISOString()}`, { durationMs: Date.now() - runStart, videoId: video.id });
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
     err(`[ERR]`, `Failed to auto-generate: ${msg}`);
+    fl.scheduler(`ERROR: Failed to auto-generate — ${msg}`);
     await writeSchedulerLog(auto.id, "error", `Failed to auto-generate: ${msg}`, {
       errorDetail: e instanceof Error ? e.stack : String(e),
       durationMs: Date.now() - runStart,
@@ -491,7 +545,7 @@ async function checkSchedules() {
 
     debug(`${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
-    await runInBatches(automations, SCHEDULER_CONCURRENCY, processAutomation);
+    await runInBatches(automations as unknown as AutoRow[], SCHEDULER_CONCURRENCY, processAutomation);
   } catch (e) {
     err("Error in schedule check:", e);
   }
@@ -505,7 +559,15 @@ async function checkReadyVideosForPosting() {
       where: {
         status: "READY",
         scheduledPostTime: { lte: now },
-        NOT: { scheduledPlatforms: { equals: null } },
+        NOT: { scheduledPlatforms: { equals: Prisma.JsonNull } },
+      },
+      include: {
+        series: {
+          select: {
+            automation: { select: { id: true, name: true } },
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
       },
       take: 15,
     });
@@ -549,23 +611,34 @@ async function checkReadyVideosForPosting() {
       log(`Scheduling ${postTasks.length} ready video(s) on native platforms`);
       await Promise.allSettled(
         postTasks.map(async ({ videoId, remaining }) => {
-          // Skip if video became READY very recently (< 30s) — clip worker is likely still posting
+          const vidRow = readyVideos.find((rv) => rv.id === videoId) as
+            (typeof readyVideos[number] & { series?: { automation?: { id: string; name: string } | null; user?: { id: string; name: string | null; email: string } | null } }) | undefined;
+          const autoInfo = vidRow?.series?.automation;
+          const userInfo = vidRow?.series?.user;
+          const fl = autoInfo && userInfo
+            ? getAutomationFileLogger(userInfo.id, userInfo.name ?? userInfo.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
+            : null;
+
           const v = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true, updatedAt: true } });
           const age = Date.now() - new Date(v?.updatedAt ?? 0).getTime();
           if (age < 30_000) {
             debug(`Skipping ${videoId} — became READY ${Math.round(age / 1000)}s ago, clip worker may still be posting`);
+            fl?.scheduler(`POST-SKIP: video=${videoId} became READY ${Math.round(age / 1000)}s ago, waiting for worker`);
             return;
           }
           const scheduledAt = v?.scheduledPostTime
             ? new Date(v.scheduledPostTime)
             : new Date(Date.now() + 60 * 60 * 1000);
           log(`Scheduling video ${videoId} to ${remaining.join(", ")} for ${scheduledAt.toISOString()}`);
-          const results = await postVideoToSocials(videoId, remaining, scheduledAt);
-          // If all platforms posted/scheduled, transition to SCHEDULED
+          fl?.poster(`POST: video=${videoId} to [${remaining.join(", ")}] at ${scheduledAt.toISOString()}`);
+          const results = await postVideoToSocials(videoId, remaining, scheduledAt, fl ?? undefined);
           const ok = results.filter((r) => r.success);
           if (ok.length >= remaining.length) {
             await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
             log(`Video ${videoId} → SCHEDULED (all platforms done)`);
+            fl?.poster(`DONE: video=${videoId} → SCHEDULED (${ok.length}/${remaining.length} platforms OK)`);
+          } else {
+            fl?.poster(`PARTIAL: video=${videoId} — ${ok.length}/${remaining.length} platforms OK, will retry`);
           }
           return results;
         }),
@@ -585,13 +658,14 @@ async function checkDeferredInstagramPosts() {
   try {
     const now = new Date();
 
-    // Find videos that may have deferred IG entries (stored in postedPlatforms JSON)
+    // Only check SCHEDULED videos (deferred IG posts always move to SCHEDULED)
+    // and filter to recent updatedAt to avoid scanning entire history
     const candidates = await db.video.findMany({
       where: {
-        status: { in: ["READY", "SCHEDULED", "POSTED"] },
+        status: "SCHEDULED",
       },
       select: { id: true, postedPlatforms: true },
-      take: 100,
+      orderBy: { updatedAt: "desc" },
     });
 
     const igPostTasks: string[] = [];
@@ -750,6 +824,7 @@ async function recoverStuckVideos() {
           seriesId: video.seriesId,
           userId: usr.id,
           userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
+          automationId: video.series.automation?.id,
           automationName: video.series.automation?.name,
           title: video.title || undefined,
           scriptText: video.scriptText || undefined,
@@ -785,6 +860,118 @@ async function recoverStuckVideos() {
   }
 }
 
+/**
+ * Reconcile "scheduled" platform entries with actual platform status.
+ * YouTube and Facebook support native scheduling — after the scheduled time,
+ * the post goes live on their end. This function checks and flips
+ * success:"scheduled" → success:true once the post is confirmed public.
+ */
+async function reconcileScheduledPosts() {
+  try {
+    const videos = await db.video.findMany({
+      where: { status: "SCHEDULED" },
+      select: {
+        id: true,
+        postedPlatforms: true,
+        scheduledPostTime: true,
+        series: {
+          select: {
+            user: {
+              select: {
+                id: true,
+                socialAccounts: {
+                  select: {
+                    id: true, platform: true, accessTokenEnc: true, refreshTokenEnc: true,
+                    platformUserId: true, pageId: true, tokenExpiresAt: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (videos.length === 0) return;
+
+    const now = Date.now();
+
+    for (const video of videos) {
+      if (video.scheduledPostTime && new Date(video.scheduledPostTime).getTime() > now) continue;
+
+      const entries = (video.postedPlatforms ?? []) as {
+        platform: string;
+        success?: boolean | string;
+        postId?: string | null;
+        url?: string | null;
+        scheduledFor?: string;
+      }[];
+
+      const scheduledEntries = entries.filter(
+        (e) => e.success === "scheduled" && e.platform !== "INSTAGRAM" && e.postId,
+      );
+      if (scheduledEntries.length === 0) continue;
+
+      const user = video.series?.user;
+      if (!user) continue;
+
+      let changed = false;
+
+      for (const entry of scheduledEntries) {
+        const account = user.socialAccounts.find((a) => a.platform === entry.platform);
+        if (!account) continue;
+
+        let isLive = false;
+
+        if (entry.platform === "YOUTUBE") {
+          const accessToken = decrypt(account.accessTokenEnc);
+          const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+          const privacy = await getYouTubeVideoPrivacy(
+            accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+          );
+          isLive = privacy === "public";
+        } else if (entry.platform === "FACEBOOK") {
+          let accessToken = decrypt(account.accessTokenEnc);
+          if (account.refreshTokenEnc && account.pageId) {
+            try {
+              accessToken = await getFreshFacebookToken(
+                account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+              );
+            } catch { /* use existing token */ }
+          }
+          const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+          isLive = published === true;
+        }
+
+        if (isLive) {
+          entry.success = true;
+          delete entry.scheduledFor;
+          changed = true;
+          log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
+        }
+      }
+
+      if (changed) {
+        const allPosted = entries.every(
+          (e) => e.success === true || (typeof e.success === "string" && e.success === "deleted"),
+        );
+        await db.video.update({
+          where: { id: video.id },
+          data: {
+            postedPlatforms: entries as never,
+            ...(allPosted ? { status: "POSTED" } : {}),
+          },
+        });
+        if (allPosted) {
+          log(`Video ${video.id} → POSTED (all platforms confirmed live)`);
+        }
+      }
+    }
+  } catch (e) {
+    err("reconcileScheduledPosts error:", e);
+  }
+}
+
 let running = false;
 
 async function tick() {
@@ -798,6 +985,7 @@ async function tick() {
     await checkSchedules();
     await checkReadyVideosForPosting();
     await checkDeferredInstagramPosts();
+    await reconcileScheduledPosts();
   } finally {
     running = false;
   }
@@ -864,4 +1052,5 @@ async function backfillLastRunAt() {
 }
 
 log(`Started. Build window: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min). Posts scheduled per-video. Tick every 5 min.`);
+cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
 backfillLastRunAt().then(() => tick());

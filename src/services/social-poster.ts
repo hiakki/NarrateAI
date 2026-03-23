@@ -7,6 +7,7 @@ import { uploadShareChatVideo } from "@/lib/social/sharechat";
 import { uploadMojVideo } from "@/lib/social/moj";
 import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
 import { createLogger } from "@/lib/logger";
+import type { AutomationFileLogger } from "@/lib/file-logger";
 import path from "path";
 
 const log = createLogger("SocialPoster");
@@ -267,6 +268,7 @@ export async function postVideoToSocials(
   videoId: string,
   platformOverride?: string[],
   scheduledAt?: Date,
+  fileLogger?: AutomationFileLogger,
 ): Promise<PostResult[]> {
   const video = await db.video.findUnique({
     where: { id: videoId },
@@ -284,11 +286,13 @@ export async function postVideoToSocials(
 
   if (!video || !video.videoUrl) {
     log.log(`Skipping ${videoId}: no video URL`);
+    fileLogger?.poster(`SKIP: video=${videoId} — no video URL`);
     return [];
   }
 
   if (!["READY", "POSTED", "SCHEDULED"].includes(video.status)) {
     log.log(`Skipping ${videoId}: status is ${video.status}`);
+    fileLogger?.poster(`SKIP: video=${videoId} — status=${video.status}`);
     return [];
   }
 
@@ -378,6 +382,7 @@ export async function postVideoToSocials(
   async function postToPlatform(platform: string): Promise<PostResult> {
     const claimed = await claimPlatform(videoId, platform);
     if (!claimed) {
+      fileLogger?.poster(`${platform}: already claimed/handled`);
       return { platform, success: true, postId: "already-handled" };
     }
 
@@ -417,6 +422,7 @@ export async function postVideoToSocials(
           const remainingMin = Math.ceil((gapMs - elapsedMs) / 60000);
           const msg = `Platform cooldown active: wait ~${remainingMin}m before next ${platform} post`;
           log.warn(`${msg} (video=${videoId})`);
+          fileLogger?.poster(`${platform}: COOLDOWN — ${msg}`);
           await finalizePlatform(videoId, { platform, success: false, error: msg });
           return { platform, success: false, error: msg };
         }
@@ -450,6 +456,7 @@ export async function postVideoToSocials(
       // Instagram doesn't support native Reel scheduling — defer to internal scheduler
       if (platform === "INSTAGRAM" && scheduledAt) {
         log.log(`Deferring Instagram publish for ${videoId} to ${scheduledAt.toISOString()} (native scheduling not supported for Reels)`);
+        fileLogger?.poster(`INSTAGRAM: DEFERRED to ${scheduledAt.toISOString()} (native scheduling not supported)`);
         await finalizePlatformEx(videoId, {
           platform: "INSTAGRAM",
           success: "scheduled",
@@ -564,6 +571,7 @@ export async function postVideoToSocials(
         await finalizePlatformEx(videoId, {
           platform, success: successStatus, postId: result.postId ?? null, url: url ?? null,
         });
+        fileLogger?.poster(`${platform}: ${successStatus === "scheduled" ? "SCHEDULED" : "POSTED"} postId=${result.postId ?? "?"}`);
         return { platform, ...result };
       } else {
         const errMsg = result.error ?? "Unknown error";
@@ -574,6 +582,7 @@ export async function postVideoToSocials(
         await finalizePlatform(videoId, {
           platform, success: false, error: displayError,
         });
+        fileLogger?.poster(`${platform}: FAILED — ${cleanMsg}`);
         return { platform, success: false, error: displayError };
       }
     }

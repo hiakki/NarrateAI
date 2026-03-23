@@ -368,6 +368,33 @@ export async function deleteFacebookVideo(
   }
 }
 
+/**
+ * Check if a scheduled Facebook reel/video is now published.
+ * Returns true if published, false if still scheduled/processing, null on error.
+ */
+export async function getFacebookVideoPublished(
+  videoId: string,
+  pageAccessToken: string,
+): Promise<boolean | null> {
+  try {
+    const res = await fetch(
+      `${GRAPH_API}/${videoId}?fields=published,status&access_token=${pageAccessToken}`,
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      log.warn(`getFacebookVideoPublished(${videoId}) failed:`, JSON.stringify(err));
+      return null;
+    }
+    const data = await res.json();
+    if (data.published === true) return true;
+    if (data.status?.video_status === "ready") return true;
+    return false;
+  } catch (err) {
+    log.warn(`getFacebookVideoPublished(${videoId}) error:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 /** Post a first comment on a published Facebook video/reel. */
 export async function postFacebookComment(
   videoId: string,

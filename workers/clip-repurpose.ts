@@ -9,6 +9,7 @@ import { extractAndCrop, parseVttForSegment, buildAssFile, enhanceClip, detectSp
 import { postVideoToSocials } from "../src/services/social-poster";
 import { buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath } from "../src/lib/video-paths";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
+import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
 import type { ClipRepurposeJobData } from "../src/services/queue";
 import fs from "fs/promises";
 import path from "path";
@@ -120,6 +121,7 @@ const worker = new Worker<ClipRepurposeJobData>(
       seriesId,
       userId,
       userName,
+      automationId,
       automationName,
       clipConfig,
       tone,
@@ -130,25 +132,32 @@ const worker = new Worker<ClipRepurposeJobData>(
     await runWithVideoIdAsync(videoId, async () => {
     const jobStart = Date.now();
     log.log(`[START]`, `Clip-repurpose job ${videoId}`);
+    const fl: AutomationFileLogger | null = automationId
+      ? getAutomationFileLogger(userId, userName ?? "user", automationId, automationName ?? "clip")
+      : null;
+    fl?.worker(`JOB START: video=${videoId}, niche=${clipConfig.clipNiche}, dur=${clipConfig.clipDurationSec}s`);
 
     try {
       // ── Guard: if video is already READY (BullMQ retry after posting failure), skip to posting ──
       const existingVideo = await db.video.findUnique({ where: { id: videoId }, select: { status: true, videoUrl: true } });
       if (existingVideo?.status === "READY" && existingVideo?.videoUrl) {
         log.log(`[RETRY-POST]`, `Video ${videoId} already READY, skipping reprocessing — going straight to posting`);
+        fl?.worker(`RETRY-POST: video=${videoId} already READY, skipping to posting`);
         const jobTargets = (targetPlatforms ?? []) as string[];
         if (process.env.DRY_RUN === "1") {
           log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
+          fl?.worker(`DRY_RUN: skipping post/schedule`);
         } else if (jobTargets.length > 0) {
           const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
           const scheduledAt = freshVideo?.scheduledPostTime
             ? new Date(freshVideo.scheduledPostTime)
             : new Date(Date.now() + 60 * 60 * 1000);
-          const results = await postVideoToSocials(videoId, undefined, scheduledAt);
+          const results = await postVideoToSocials(videoId, undefined, scheduledAt, fl ?? undefined);
           const ok = results.filter((r) => r.success).map((r) => r.platform);
           if (ok.length > 0) {
             await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
             log.log(`[SCHEDULE]`, `Retry-post SCHEDULED → ${ok.join(", ")}`);
+            fl?.worker(`RETRY-POST DONE: SCHEDULED → ${ok.join(", ")}`);
           }
         }
         return;
@@ -184,11 +193,13 @@ const worker = new Worker<ClipRepurposeJobData>(
       });
 
       if (!discoveryResult) {
+        fl?.worker(`DISCOVER FAIL: No suitable video found from any configured source`);
         throw new Error("No suitable video found from any configured source");
       }
 
       const { selected: discovered, candidates, totalConsidered, platformBreakdown, rejectedSample } = discoveryResult;
       log.log(`[DISCOVER]`, `Selected: "${discovered.title}" (${discovered.viewCount.toLocaleString()} views) [${discovered.platform}] from ${totalConsidered} candidates`);
+      fl?.worker(`DISCOVER: ${totalConsidered} candidates → selected "${discovered.title}" (${discovered.viewCount.toLocaleString()} views) [${discovered.platform}] from ${discovered.source}`);
 
       await db.video.update({
         where: { id: videoId },
@@ -217,6 +228,7 @@ const worker = new Worker<ClipRepurposeJobData>(
 
       const videoInfo = await parseVideoInfo(infoJsonPath);
       log.log(`[DOWNLOAD]`, `Got: ${videoInfo.duration}s, heatmap: ${videoInfo.heatmap ? `${videoInfo.heatmap.length} points` : "none"}`);
+      fl?.worker(`DOWNLOAD: ${discovered.url} → ${videoInfo.duration}s, heatmap=${videoInfo.heatmap ? videoInfo.heatmap.length + " pts" : "none"}`);
 
       // ── Stage 3: HEATMAP analysis ──
       await updateStage(videoId, "HEATMAP");
@@ -390,6 +402,7 @@ const worker = new Worker<ClipRepurposeJobData>(
 
       const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
       log.log(`[READY]`, `${videoId} → ${relVideoUrl} (${(stat.size / 1024 / 1024).toFixed(1)}MB, ${clipDuration}s) in ${elapsed}s`);
+      fl?.worker(`READY: ${clipDuration}s clip (${(stat.size / 1024 / 1024).toFixed(1)}MB) in ${elapsed}s`);
 
       // Clean up tmp
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
@@ -398,8 +411,10 @@ const worker = new Worker<ClipRepurposeJobData>(
       const jobTargets = (targetPlatforms ?? []) as string[];
       if (process.env.DRY_RUN === "1") {
         log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
+        fl?.worker(`DRY_RUN: skipping post/schedule`);
       } else if (jobTargets.length === 0) {
         log.log(`[POST]`, `Skipped — no target platforms in job`);
+        fl?.worker(`SCHEDULE: no target platforms`);
       } else {
         try {
           const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
@@ -407,26 +422,32 @@ const worker = new Worker<ClipRepurposeJobData>(
             ? new Date(freshVideo.scheduledPostTime)
             : new Date(Date.now() + 60 * 60 * 1000);
           log.log(`[SCHEDULE]`, `Scheduling for ${scheduledAt.toISOString()} on ${jobTargets.join(", ")}`);
-          const results = await postVideoToSocials(videoId, undefined, scheduledAt);
+          fl?.poster(`SCHEDULE: video=${videoId} to [${jobTargets.join(", ")}] at ${scheduledAt.toISOString()}`);
+          const results = await postVideoToSocials(videoId, undefined, scheduledAt, fl ?? undefined);
           if (results.length > 0) {
             const ok = results.filter((r) => r.success).map((r) => r.platform);
             const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
             if (ok.length > 0) {
               log.log(`[SCHEDULE]`, `SCHEDULED → ${ok.join(", ")}`);
-              // Transition to SCHEDULED so the scheduler tick doesn't re-post
               await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
+              fl?.poster(`DONE: video=${videoId} → SCHEDULED (${ok.join(", ")})`);
             }
-            if (failed.length > 0) log.warn(`[SCHEDULE]`, `SCHEDULE_FAIL: ${failed.join("; ")}`);
+            if (failed.length > 0) {
+              log.warn(`[SCHEDULE]`, `SCHEDULE_FAIL: ${failed.join("; ")}`);
+              fl?.poster(`PARTIAL_FAIL: ${failed.join("; ")}`);
+            }
           }
         } catch (postErr) {
           log.warn(`[SCHEDULE]`, `SCHEDULE_ERR:`, postErr);
-          // Status stays READY — scheduler will retry posting on next tick
+          fl?.poster(`ERROR: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
         }
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       log.error(`[ERR]`, `FAILED: ${msg}`);
       if (error instanceof Error && error.stack) log.error(`[ERR]`, error.stack);
+      fl?.worker(`ERROR: ${msg}`);
+      if (error instanceof Error && error.stack) fl?.worker(`STACK: ${error.stack}`);
 
       try {
         await db.video.update({

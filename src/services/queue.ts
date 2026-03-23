@@ -9,6 +9,7 @@ export interface VideoJobData {
   seriesId: string;
   userId: string;
   userName: string;
+  automationId?: string;
   automationName?: string;
   title?: string;
   scriptText?: string;
@@ -98,6 +99,7 @@ export interface ClipRepurposeJobData {
   seriesId: string;
   userId: string;
   userName: string;
+  automationId?: string;
   automationName?: string;
   niche: string;
   language: string;

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Loader2, RefreshCw, Clock, AlertTriangle, CheckCircle2,
   ExternalLink, Bot, Scissors, XCircle, Pause, Play,
-  ChevronDown, Timer, History, Terminal,
+  ChevronDown, Timer, History, Terminal, FileText, ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 /* ─────────────────────────── Types ─────────────────────────── */
@@ -103,6 +103,22 @@ function autoLink(auto: SchedulerAutomation) {
     : `/dashboard/automations/${auto.id}`;
 }
 
+function isMissed(auto: SchedulerAutomation): boolean {
+  if (!auto.enabled) return false;
+  if (!auto.lastRunAt) return true;
+  const ms = Date.now() - new Date(auto.lastRunAt).getTime();
+  return ms > 24 * 60 * 60 * 1000;
+}
+
+function missedSeverity(auto: SchedulerAutomation): "none" | "warning" | "critical" {
+  if (!auto.enabled) return "none";
+  if (!auto.lastRunAt) return "critical";
+  const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (60 * 60 * 1000);
+  if (hours > 72) return "critical";
+  if (hours > 24) return "warning";
+  return "none";
+}
+
 function outcomeColor(outcome: string): string {
   switch (outcome) {
     case "enqueued": return "text-green-600";
@@ -191,6 +207,7 @@ export default function SchedulerPage() {
   const pausedAutomations = data.filter((a) => !a.enabled);
   const totalStuck = data.reduce((n, a) => n + a.stuckVideos.length, 0);
   const totalScheduled = data.reduce((n, a) => n + a.scheduledVideos.length, 0);
+  const totalMissed = activeAutomations.filter(isMissed).length;
 
   return (
     <div className="space-y-6">
@@ -208,14 +225,20 @@ export default function SchedulerPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <SummaryCard label="Active" value={activeAutomations.length} icon={<Play className="h-4 w-4 text-green-600" />} />
         <SummaryCard label="Paused" value={pausedAutomations.length} icon={<Pause className="h-4 w-4 text-muted-foreground" />} />
+        <SummaryCard
+          label="Missed (24h+)"
+          value={totalMissed}
+          icon={<AlertTriangle className={`h-4 w-4 ${totalMissed > 0 ? "text-amber-500" : "text-muted-foreground"}`} />}
+          highlight={totalMissed > 0 ? "amber" : undefined}
+        />
         <SummaryCard
           label="Stuck / Failed"
           value={totalStuck}
           icon={<AlertTriangle className={`h-4 w-4 ${totalStuck > 0 ? "text-red-500" : "text-muted-foreground"}`} />}
-          highlight={totalStuck > 0}
+          highlight={totalStuck > 0 ? "red" : undefined}
         />
         <SummaryCard label="Awaiting Post" value={totalScheduled} icon={<Clock className="h-4 w-4 text-blue-500" />} />
       </div>
@@ -257,14 +280,20 @@ export default function SchedulerPage() {
 
 /* ──────────────────── Small components ──────────────────── */
 
-function SummaryCard({ label, value, icon, highlight }: { label: string; value: number; icon: React.ReactNode; highlight?: boolean }) {
+function SummaryCard({ label, value, icon, highlight }: { label: string; value: number; icon: React.ReactNode; highlight?: "red" | "amber" }) {
+  const border = highlight === "red" ? "border-red-300 bg-red-50/50"
+    : highlight === "amber" ? "border-amber-300 bg-amber-50/50"
+    : "bg-card";
+  const text = highlight === "red" ? "text-red-600"
+    : highlight === "amber" ? "text-amber-600"
+    : "";
   return (
-    <div className={`rounded-lg border p-3 ${highlight ? "border-red-300 bg-red-50/50" : "bg-card"}`}>
+    <div className={`rounded-lg border p-3 ${border}`}>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         {icon}
         {label}
       </div>
-      <div className={`text-2xl font-bold mt-1 ${highlight ? "text-red-600" : ""}`}>{value}</div>
+      <div className={`text-2xl font-bold mt-1 ${text}`}>{value}</div>
     </div>
   );
 }
@@ -293,16 +322,26 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
   const isClip = auto.automationType === "clip-repurpose";
   const TypeIcon = isClip ? Scissors : Bot;
   const hasIssues = auto.stuckVideos.length > 0;
+  const missed = missedSeverity(auto);
   const nextRunLabel = useCountdown(auto.nextRunAt);
   const nextPostLabel = useCountdown(auto.nextPostAt);
   const lastError = auto.schedulerLogs.find((l) => l.outcome === "error");
 
+  const borderCls = hasIssues ? "border-red-300"
+    : missed === "critical" ? "border-red-400"
+    : missed === "warning" ? "border-amber-300"
+    : "border-border";
+  const bgCls = hasIssues ? "bg-red-50/30"
+    : missed === "critical" ? "bg-red-50/20"
+    : missed === "warning" ? "bg-amber-50/30"
+    : "";
+
   return (
-    <div className={`rounded-lg border ${hasIssues ? "border-red-300" : "border-border"} overflow-hidden`}>
+    <div className={`rounded-lg border ${borderCls} overflow-hidden`}>
       {/* Header row */}
       <button
         type="button"
-        className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors ${hasIssues ? "bg-red-50/30" : ""}`}
+        className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors ${bgCls}`}
         onClick={() => setExpanded((e) => !e)}
       >
         {/* Icon + Name */}
@@ -315,6 +354,8 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
             </Link>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0">{auto.niche}</Badge>
             {!auto.enabled && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Paused</Badge>}
+            {missed === "critical" && <Badge variant="destructive" className="text-[10px] px-1.5 py-0 animate-pulse">MISSED 72h+</Badge>}
+            {missed === "warning" && <Badge className="text-[10px] px-1.5 py-0 bg-amber-500 hover:bg-amber-600 text-white">MISSED</Badge>}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
             <span className="font-mono">{auto.postTime}</span>
@@ -330,7 +371,14 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1 justify-end">
               <History className="h-3 w-3" /> Last ran
             </div>
-            <div className="text-xs font-medium" title={auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : undefined}>
+            <div
+              className={`text-xs font-medium ${
+                missed === "critical" ? "text-red-600 font-bold"
+                : missed === "warning" ? "text-amber-600 font-semibold"
+                : ""
+              }`}
+              title={auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : undefined}
+            >
               {auto.lastRunAt ? timeAgo(auto.lastRunAt) : "Never"}
             </div>
           </div>
@@ -359,6 +407,10 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
           <div className="w-8 flex justify-center">
             {hasIssues ? (
               <AlertTriangle className="h-4 w-4 text-red-500" />
+            ) : missed === "critical" ? (
+              <AlertTriangle className="h-4 w-4 text-red-500 animate-pulse" />
+            ) : missed === "warning" ? (
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
             ) : lastError ? (
               <XCircle className="h-4 w-4 text-amber-500" />
             ) : (
@@ -429,15 +481,52 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
               <Terminal className="h-3 w-3" /> Scheduler Run History
             </div>
-            {auto.schedulerLogs.length === 0 ? (
-              <div className="text-xs text-muted-foreground italic py-2">No scheduler runs recorded yet</div>
-            ) : (
-              <div className="space-y-0">
-                {auto.schedulerLogs.map((entry) => (
-                  <SchedulerLogRow key={entry.id} entry={entry} tz={auto.timezone} />
-                ))}
+            {!auto.enabled && auto.schedulerLogs.length === 0 ? (
+              <div className="text-xs text-muted-foreground italic py-2">
+                Automation is paused — scheduler is not processing it. Enable it to start recording runs.
+                {auto.lastRunAt && (
+                  <span className="block mt-1">Last known run was {timeAgo(auto.lastRunAt)} (before logging was added).</span>
+                )}
               </div>
+            ) : auto.schedulerLogs.length === 0 ? (
+              <div className="text-xs text-muted-foreground italic py-2">No scheduler runs recorded yet. Logs will appear after the next scheduler tick.</div>
+            ) : (
+              <>
+                {missed !== "none" && (
+                  <div className={`text-xs px-3 py-2 rounded-md mb-2 flex items-center gap-2 ${
+                    missed === "critical"
+                      ? "bg-red-50 border border-red-200 text-red-700"
+                      : "bg-amber-50 border border-amber-200 text-amber-700"
+                  }`}>
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {missed === "critical"
+                        ? "This automation hasn't produced a successful run in over 72 hours. Check errors below or review full logs."
+                        : "This automation hasn't produced a successful run in over 24 hours. Recent history may reveal the cause."
+                      }
+                    </span>
+                  </div>
+                )}
+                <div className="space-y-0">
+                  {auto.schedulerLogs.map((entry, idx) => {
+                    const isLatest = idx === 0;
+                    return (
+                      <SchedulerLogRow
+                        key={entry.id}
+                        entry={entry}
+                        tz={auto.timezone}
+                        highlight={isLatest && missed !== "none" ? missed : undefined}
+                      />
+                    );
+                  })}
+                </div>
+              </>
             )}
+          </div>
+
+          {/* File Log Viewer */}
+          <div className="px-4 py-2">
+            <FileLogViewer automationId={auto.id} />
           </div>
         </div>
       )}
@@ -447,11 +536,138 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
 
 /* ──────────────────── Scheduler Log Row ──────────────────── */
 
-function SchedulerLogRow({ entry, tz }: { entry: SchedulerLogEntry; tz: string }) {
-  const [showDetail, setShowDetail] = useState(false);
+/* ──────────────────── File Log Viewer ──────────────────── */
+
+function FileLogViewer({ automationId }: { automationId: string }) {
+  const [open, setOpen] = useState(false);
+  const [dates, setDates] = useState<string[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [content, setContent] = useState<string>("");
+  const [loadingDates, setLoadingDates] = useState(false);
+  const [loadingContent, setLoadingContent] = useState(false);
+
+  const fetchDates = useCallback(async () => {
+    setLoadingDates(true);
+    try {
+      const res = await fetch(`/api/scheduler/logs?automationId=${automationId}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      const d = (json.dates ?? []) as string[];
+      setDates(d);
+      if (d.length > 0 && !selectedDate) setSelectedDate(d[0]);
+    } finally {
+      setLoadingDates(false);
+    }
+  }, [automationId, selectedDate]);
+
+  const fetchContent = useCallback(async (date: string) => {
+    setLoadingContent(true);
+    try {
+      const res = await fetch(`/api/scheduler/logs?automationId=${automationId}&date=${date}`);
+      if (!res.ok) { setContent("Failed to load log."); return; }
+      const json = await res.json();
+      setContent(json.content || "(empty)");
+    } finally {
+      setLoadingContent(false);
+    }
+  }, [automationId]);
+
+  useEffect(() => {
+    if (open && dates.length === 0) fetchDates();
+  }, [open, dates.length, fetchDates]);
+
+  useEffect(() => {
+    if (open && selectedDate) fetchContent(selectedDate);
+  }, [open, selectedDate, fetchContent]);
+
+  const dateIdx = selectedDate ? dates.indexOf(selectedDate) : -1;
+  const canPrev = dateIdx >= 0 && dateIdx < dates.length - 1;
+  const canNext = dateIdx > 0;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+        onClick={() => setOpen(true)}
+      >
+        <FileText className="h-3 w-3" />
+        View Full Log
+      </button>
+    );
+  }
 
   return (
-    <div className="py-1.5 group">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          <FileText className="h-3 w-3" /> Full Log
+        </div>
+        <div className="flex items-center gap-1.5">
+          {loadingDates && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+          {dates.length > 0 && (
+            <div className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                disabled={!canPrev}
+                className="p-0.5 rounded hover:bg-muted disabled:opacity-30"
+                onClick={() => canPrev && setSelectedDate(dates[dateIdx + 1])}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <select
+                value={selectedDate ?? ""}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="text-xs bg-transparent border rounded px-1.5 py-0.5"
+              >
+                {dates.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!canNext}
+                className="p-0.5 rounded hover:bg-muted disabled:opacity-30"
+                onClick={() => canNext && setSelectedDate(dates[dateIdx - 1])}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground ml-2"
+            onClick={() => setOpen(false)}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      {loadingContent ? (
+        <div className="flex items-center justify-center py-4">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : dates.length === 0 && !loadingDates ? (
+        <div className="text-xs text-muted-foreground italic py-2">No log files yet. Logs appear after the next scheduler run.</div>
+      ) : (
+        <pre className="p-3 rounded-md bg-zinc-950 text-zinc-200 text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[400px] overflow-y-auto whitespace-pre-wrap">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function SchedulerLogRow({ entry, tz, highlight }: { entry: SchedulerLogEntry; tz: string; highlight?: "warning" | "critical" }) {
+  const [showDetail, setShowDetail] = useState(false);
+
+  const rowBg = highlight === "critical" ? "bg-red-50/60 rounded-md px-2 -mx-2"
+    : highlight === "warning" ? "bg-amber-50/60 rounded-md px-2 -mx-2"
+    : "";
+
+  return (
+    <div className={`py-1.5 group ${rowBg}`}>
       <div className="flex items-start gap-2 text-xs">
         {/* Timeline dot */}
         <div className="flex flex-col items-center pt-1.5 shrink-0">

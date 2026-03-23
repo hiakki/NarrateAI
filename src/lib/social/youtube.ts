@@ -250,6 +250,31 @@ export async function getYouTubeVideoStatistics(
   }
 }
 
+/**
+ * Check if a scheduled YouTube video is now public.
+ * Returns the privacy status string ("public", "private", "unlisted") or null on error.
+ */
+export async function getYouTubeVideoPrivacy(
+  accessToken: string,
+  refreshToken: string | null,
+  videoId: string,
+  platformUserId?: string,
+  userId?: string,
+): Promise<string | null> {
+  try {
+    const token = await getFreshAccessToken(accessToken, refreshToken, platformUserId, userId);
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({ access_token: token, refresh_token: refreshToken ?? undefined });
+    const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+    const res = await youtube.videos.list({ part: ["status"], id: [videoId] });
+    const item = res.data.items?.[0];
+    return item?.status?.privacyStatus ?? null;
+  } catch (err) {
+    log.warn(`getYouTubeVideoPrivacy(${videoId}) failed:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 /** Channel subscriber count for insights. */
 export async function getYouTubeChannelSubscribers(
   accessToken: string,

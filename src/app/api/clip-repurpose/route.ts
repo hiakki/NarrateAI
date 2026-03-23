@@ -238,6 +238,7 @@ export async function POST(req: NextRequest) {
         seriesId,
         userId: auto.user.id,
         userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+        automationId: auto.id,
         automationName: auto.name,
         niche: "clip-repurpose",
         language: auto.language,
