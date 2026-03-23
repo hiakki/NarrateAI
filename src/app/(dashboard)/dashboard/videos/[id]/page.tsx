@@ -1682,16 +1682,12 @@ export default function VideoDetailPage() {
                           <Button size="sm" variant="outline" disabled>
                             <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> Scheduling...
                           </Button>
-                        ) : anyFailed ? (
-                          <Button size="sm" variant="destructive" disabled={allBusy} onClick={() => handlePublishAll(availableKeys)}>
-                            <RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry All
-                          </Button>
                         ) : (
                           <>
-                            <Button size="sm" variant="outline" onClick={() => handlePublishAll(availableKeys)}>
+                            <Button size="sm" variant="outline" disabled={someBusy} onClick={() => handlePublishAll(availableKeys)}>
                               <Clock className="mr-1 h-3.5 w-3.5" /> Schedule All
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => handlePublishAll(availableKeys, true)}>
+                            <Button size="sm" variant="ghost" disabled={someBusy} onClick={() => handlePublishAll(availableKeys, true)}>
                               <Send className="mr-1 h-3.5 w-3.5" /> Post All Now
                             </Button>
                           </>
@@ -1820,10 +1816,10 @@ export default function VideoDetailPage() {
                                   </Button>
                                 ) : (
                                   <>
-                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                    <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
                                       <Clock className="h-3.5 w-3.5" /> Schedule
                                     </Button>
-                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
                                       <Send className="h-3.5 w-3.5" /> Post Now
                                     </Button>
                                   </>
@@ -1902,10 +1898,10 @@ export default function VideoDetailPage() {
                                 <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
                                   Stuck
                                 </span>
-                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
                                   <Clock className="h-3 w-3" /> Schedule
                                 </Button>
-                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
                                   <Send className="h-3 w-3" /> Post Now
                                 </Button>
                               </div>
@@ -1915,10 +1911,10 @@ export default function VideoDetailPage() {
                               </Button>
                             ) : connected || entry ? (
                               <div className="flex items-center gap-1.5">
-                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
                                   <Clock className="h-3.5 w-3.5" /> Schedule
                                 </Button>
-                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
                                   <Send className="h-3.5 w-3.5" /> Post Now
                                 </Button>
                               </div>

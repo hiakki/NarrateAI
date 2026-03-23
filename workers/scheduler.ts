@@ -959,9 +959,15 @@ async function reconcileScheduledPosts() {
 
       // Step 1: for "scheduled" entries, check platform API if post time has passed
       if (scheduledEntries.length > 0) {
-        const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
-        if (pastSchedule && user) {
+        const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
+        if (user) {
           for (const entry of scheduledEntries) {
+            const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
+            const effectiveSchedTime = entrySchedTime || videoSchedTime;
+            if (effectiveSchedTime > now) {
+              debug(`  ${video.id}/${entry.platform}: scheduled for ${new Date(effectiveSchedTime).toISOString()}, not yet due`);
+              continue;
+            }
             let isLive = false;
 
             if (entry.platform === "YOUTUBE") {
@@ -1005,8 +1011,6 @@ async function reconcileScheduledPosts() {
               log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
             }
           }
-        } else if (!pastSchedule) {
-          debug(`  ${video.id}: scheduled time not yet reached, skipping API check`);
         }
       }
 

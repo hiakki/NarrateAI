@@ -573,6 +573,14 @@ export async function postVideoToSocials(
         await finalizePlatformEx(videoId, {
           platform, success: successStatus, postId: result.postId ?? null, url: url ?? null,
         });
+        if (scheduledAt) {
+          const entries = await getPlatformEntries(videoId);
+          const platEntry = entries.get(platform);
+          if (platEntry) {
+            platEntry.scheduledFor = scheduledAt.toISOString();
+            await db.video.update({ where: { id: videoId }, data: { postedPlatforms: [...entries.values()] as never } });
+          }
+        }
         fileLogger?.poster(`${platform}: ${successStatus === "scheduled" ? "SCHEDULED" : "POSTED"} postId=${result.postId ?? "?"}`);
         return { platform, ...result };
       } else {

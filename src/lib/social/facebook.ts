@@ -386,8 +386,10 @@ export async function getFacebookVideoPublished(
       return null;
     }
     const data = await res.json();
+    log.log(`getFacebookVideoPublished(${videoId}): published=${data.published}, video_status=${data.status?.video_status}`);
     if (data.published === true) return true;
-    if (data.status?.video_status === "ready") return true;
+    // video_status "ready" only means processing is done, NOT that the post is live.
+    // For scheduled posts, published will be false even when video_status is "ready".
     return false;
   } catch (err) {
     log.warn(`getFacebookVideoPublished(${videoId}) error:`, err instanceof Error ? err.message : err);

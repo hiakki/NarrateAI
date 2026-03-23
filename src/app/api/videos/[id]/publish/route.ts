@@ -75,6 +75,13 @@ export async function POST(
       }
     }
 
+    if (scheduledAt) {
+      await db.video.update({
+        where: { id },
+        data: { scheduledPostTime: scheduledAt },
+      });
+    }
+
     const results = await postVideoToSocials(id, platforms, scheduledAt);
 
     return NextResponse.json({ data: results, scheduledAt: scheduledAt ?? null, immediate });
