@@ -861,19 +861,23 @@ async function recoverStuckVideos() {
 }
 
 /**
- * Reconcile "scheduled" platform entries with actual platform status.
- * YouTube and Facebook support native scheduling — after the scheduled time,
- * the post goes live on their end. This function checks and flips
- * success:"scheduled" → success:true once the post is confirmed public.
+ * Reconcile platform post status with the app's video status.
+ *
+ * Two cases handled:
+ * 1. SCHEDULED videos with "scheduled" platform entries → check YT/FB API to see
+ *    if the post went live, then flip success:"scheduled" → success:true.
+ * 2. READY or SCHEDULED videos where at least one platform already has success:true
+ *    but the video status was never promoted to POSTED.
  */
 async function reconcileScheduledPosts() {
   try {
     const videos = await db.video.findMany({
-      where: { status: "SCHEDULED" },
+      where: { status: { in: ["READY", "SCHEDULED"] } },
       select: {
         id: true,
         postedPlatforms: true,
         scheduledPostTime: true,
+        scheduledPlatforms: true,
         series: {
           select: {
             user: {
@@ -897,8 +901,6 @@ async function reconcileScheduledPosts() {
     const now = Date.now();
 
     for (const video of videos) {
-      if (video.scheduledPostTime && new Date(video.scheduledPostTime).getTime() > now) continue;
-
       const entries = (video.postedPlatforms ?? []) as {
         platform: string;
         success?: boolean | string;
@@ -906,65 +908,82 @@ async function reconcileScheduledPosts() {
         url?: string | null;
         scheduledFor?: string;
       }[];
+      if (entries.length === 0) continue;
 
+      const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
+      let changed = false;
+
+      // Case 1: flip "scheduled" → true by checking live status on YT/FB
       const scheduledEntries = entries.filter(
         (e) => e.success === "scheduled" && e.platform !== "INSTAGRAM" && e.postId,
       );
-      if (scheduledEntries.length === 0) continue;
+      if (scheduledEntries.length > 0 && user) {
+        const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
+        if (pastSchedule) {
+          for (const entry of scheduledEntries) {
+            const account = user.socialAccounts.find((a) => a.platform === entry.platform);
+            if (!account) continue;
 
-      const user = video.series?.user;
-      if (!user) continue;
+            let isLive = false;
 
-      let changed = false;
-
-      for (const entry of scheduledEntries) {
-        const account = user.socialAccounts.find((a) => a.platform === entry.platform);
-        if (!account) continue;
-
-        let isLive = false;
-
-        if (entry.platform === "YOUTUBE") {
-          const accessToken = decrypt(account.accessTokenEnc);
-          const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
-          const privacy = await getYouTubeVideoPrivacy(
-            accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
-          );
-          isLive = privacy === "public";
-        } else if (entry.platform === "FACEBOOK") {
-          let accessToken = decrypt(account.accessTokenEnc);
-          if (account.refreshTokenEnc && account.pageId) {
-            try {
-              accessToken = await getFreshFacebookToken(
-                account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+            if (entry.platform === "YOUTUBE") {
+              const accessToken = decrypt(account.accessTokenEnc);
+              const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+              const privacy = await getYouTubeVideoPrivacy(
+                accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
               );
-            } catch { /* use existing token */ }
-          }
-          const published = await getFacebookVideoPublished(entry.postId!, accessToken);
-          isLive = published === true;
-        }
+              isLive = privacy === "public";
+            } else if (entry.platform === "FACEBOOK") {
+              let accessToken = decrypt(account.accessTokenEnc);
+              if (account.refreshTokenEnc && account.pageId) {
+                try {
+                  accessToken = await getFreshFacebookToken(
+                    account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                  );
+                } catch { /* use existing token */ }
+              }
+              const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+              isLive = published === true;
+            }
 
-        if (isLive) {
-          entry.success = true;
-          delete entry.scheduledFor;
-          changed = true;
-          log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
+            if (isLive) {
+              entry.success = true;
+              delete entry.scheduledFor;
+              changed = true;
+              log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
+            }
+          }
         }
       }
 
-      if (changed) {
-        const allPosted = entries.every(
-          (e) => e.success === true || (typeof e.success === "string" && e.success === "deleted"),
-        );
+      // Case 2: if any platform entry already has success:true, promote video to POSTED
+      const targeted = (video.scheduledPlatforms ?? []) as string[];
+      const hasSuccess = entries.some((e) => e.success === true);
+      if (!hasSuccess) continue;
+
+      const allTargetedDone = targeted.length === 0 || targeted.every((plat) => {
+        const e = entries.find((x) => x.platform === plat);
+        return e && (e.success === true || e.success === "deleted");
+      });
+
+      const allEntriesDone = entries.every(
+        (e) => e.success === true || e.success === "deleted",
+      );
+
+      if (allTargetedDone || allEntriesDone) {
         await db.video.update({
           where: { id: video.id },
           data: {
-            postedPlatforms: entries as never,
-            ...(allPosted ? { status: "POSTED" } : {}),
+            status: "POSTED",
+            ...(changed ? { postedPlatforms: entries as never } : {}),
           },
         });
-        if (allPosted) {
-          log(`Video ${video.id} → POSTED (all platforms confirmed live)`);
-        }
+        log(`Video ${video.id} → POSTED (platforms confirmed: ${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+      } else if (changed) {
+        await db.video.update({
+          where: { id: video.id },
+          data: { postedPlatforms: entries as never },
+        });
       }
     }
   } catch (e) {
