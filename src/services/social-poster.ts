@@ -593,11 +593,19 @@ export async function postVideoToSocials(
   log.log(`${scheduledAt ? "Scheduling" : "Posting"} video ${videoId} to ${targetPlatforms.join(", ")}${scheduledAt ? ` for ${scheduledAt.toISOString()} (unix=${Math.floor(scheduledAt.getTime() / 1000)})` : " immediately"}`);
   const settled = await Promise.allSettled(targetPlatforms.map(postToPlatform));
 
-  const results: PostResult[] = settled.map((s, i) => {
-    if (s.status === "fulfilled") return s.value;
-    log.error(`Platform ${targetPlatforms[i]} threw:`, s.reason);
-    return { platform: targetPlatforms[i], success: false, error: sanitizeErrorForUi(String(s.reason)) };
-  });
+  const results: PostResult[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === "fulfilled") {
+      results.push(s.value);
+    } else {
+      const platform = targetPlatforms[i];
+      const errMsg = sanitizeErrorForUi(String(s.reason));
+      log.error(`Platform ${platform} threw unhandled:`, s.reason);
+      await finalizePlatform(videoId, { platform, success: false, error: errMsg });
+      results.push({ platform, success: false, error: errMsg });
+    }
+  }
 
   return results;
 }

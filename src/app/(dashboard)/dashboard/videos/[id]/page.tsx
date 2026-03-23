@@ -1893,7 +1893,16 @@ export default function VideoDetailPage() {
                                   )}
                                 </Button>
                               </div>
-                            ) : isUploading || isPublishing ? (
+                            ) : isUploading && !isPublishing ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
+                                </span>
+                                <Button size="sm" variant="destructive" className="gap-1 text-xs ml-1" onClick={() => handlePublishPlatform(key)}>
+                                  <RefreshCw className="h-3 w-3" /> Retry
+                                </Button>
+                              </div>
+                            ) : isPublishing ? (
                               <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
                               </span>

@@ -696,28 +696,45 @@ async function checkDeferredInstagramPosts() {
 
     await Promise.allSettled(
       igPostTasks.map(async (videoId) => {
-        log(`Deferred IG publish: video ${videoId} — resetting entry and posting immediately`);
+        try {
+          log(`Deferred IG publish: video ${videoId} — resetting entry and posting immediately`);
 
-        // Reset IG entry from "scheduled" to allow postVideoToSocials to proceed
-        const video = await db.video.findUnique({
-          where: { id: videoId },
-          select: { postedPlatforms: true },
-        });
-        if (video) {
-          const entries = (video.postedPlatforms ?? []) as { platform: string; success?: unknown; scheduledFor?: string }[];
-          const updated = entries.map((e) => {
-            if (e.platform === "INSTAGRAM" && e.success === "scheduled") {
-              return { ...e, success: false, scheduledFor: undefined };
-            }
-            return e;
-          });
-          await db.video.update({
+          // Reset IG entry from "scheduled" to allow postVideoToSocials to proceed
+          const video = await db.video.findUnique({
             where: { id: videoId },
-            data: { postedPlatforms: updated as never },
+            select: { postedPlatforms: true },
           });
-        }
+          if (video) {
+            const entries = (video.postedPlatforms ?? []) as { platform: string; success?: unknown; scheduledFor?: string }[];
+            const updated = entries.map((e) => {
+              if (e.platform === "INSTAGRAM" && e.success === "scheduled") {
+                return { ...e, success: false, scheduledFor: undefined };
+              }
+              return e;
+            });
+            await db.video.update({
+              where: { id: videoId },
+              data: { postedPlatforms: updated as never },
+            });
+          }
 
-        return postVideoToSocials(videoId, ["INSTAGRAM"]);
+          return await postVideoToSocials(videoId, ["INSTAGRAM"]);
+        } catch (e) {
+          err(`Deferred IG publish failed for ${videoId}:`, e);
+          // Ensure the entry doesn't stay stuck at "uploading"
+          try {
+            const v = await db.video.findUnique({ where: { id: videoId }, select: { postedPlatforms: true } });
+            if (v) {
+              const entries = (v.postedPlatforms ?? []) as { platform: string; success?: unknown; error?: string }[];
+              const fixed = entries.map((ent) =>
+                ent.platform === "INSTAGRAM" && ent.success === "uploading"
+                  ? { ...ent, success: false, error: `Posting failed: ${e instanceof Error ? e.message : "unknown error"}` }
+                  : ent,
+              );
+              await db.video.update({ where: { id: videoId }, data: { postedPlatforms: fixed as never } });
+            }
+          } catch { /* best effort */ }
+        }
       }),
     );
   } catch (e) {
@@ -881,6 +898,7 @@ async function reconcileScheduledPosts() {
       select: {
         id: true,
         status: true,
+        updatedAt: true,
         postedPlatforms: true,
         scheduledPostTime: true,
         scheduledPlatforms: true,
@@ -903,15 +921,20 @@ async function reconcileScheduledPosts() {
     });
 
     // Gather videos that need reconciliation
-    type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string };
+    type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string; error?: string };
     const toCheck: { video: typeof videos[number]; entries: PlatEntry[]; scheduledEntries: PlatEntry[] }[] = [];
+
+    const now = Date.now();
+    const UPLOADING_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
     for (const video of videos) {
       const entries = (video.postedPlatforms ?? []) as PlatEntry[];
       if (entries.length === 0) continue;
       const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
       const hasUnpromotedSuccess = video.status !== "POSTED" && entries.some((e) => e.success === true);
-      if (scheduledEntries.length > 0 || hasUnpromotedSuccess) {
+      const hasStuckUploading = entries.some((e) => e.success === "uploading") &&
+        (now - new Date(video.updatedAt).getTime()) > UPLOADING_STALE_MS;
+      if (scheduledEntries.length > 0 || hasUnpromotedSuccess || hasStuckUploading) {
         toCheck.push({ video, entries, scheduledEntries });
       }
     }
@@ -919,11 +942,20 @@ async function reconcileScheduledPosts() {
     log(`Reconcile: ${videos.length} total, ${toCheck.length} need attention`);
     if (toCheck.length === 0) return;
 
-    const now = Date.now();
-
     for (const { video, entries, scheduledEntries } of toCheck) {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
       let changed = false;
+
+      // Step 0: mark "uploading" entries as failed if stuck for >10 min
+      const videoAge = now - new Date(video.updatedAt).getTime();
+      for (const entry of entries) {
+        if (entry.success === "uploading" && videoAge > UPLOADING_STALE_MS) {
+          entry.success = false;
+          entry.error = "Upload timed out (stuck for >10 min)";
+          changed = true;
+          log(`  Reconciled ${entry.platform} for ${video.id}: uploading → failed (stale ${Math.round(videoAge / 60000)}m)`);
+        }
+      }
 
       // Step 1: for "scheduled" entries, check platform API if post time has passed
       if (scheduledEntries.length > 0) {
