@@ -961,18 +961,16 @@ async function reconcileScheduledPosts() {
         }
       }
 
-      // Step 1: for "scheduled" entries, check platform API if post time has passed
+      // Step 1: for "scheduled" entries, check platform API.
+      // We check ALL entries (even future ones) because the platform may have
+      // published early or the stored scheduledTime might be wrong.
       const FORCE_PROMOTE_MS = 90 * 60 * 1000; // 90 min past scheduled time → force-promote
       if (scheduledEntries.length > 0) {
         const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
         for (const entry of scheduledEntries) {
           const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
           const effectiveSchedTime = entrySchedTime || videoSchedTime;
-          if (effectiveSchedTime > now) {
-            debug(`  ${video.id}/${entry.platform}: scheduled for ${new Date(effectiveSchedTime).toISOString()}, not yet due`);
-            continue;
-          }
-
+          const isPastSchedule = effectiveSchedTime <= now || effectiveSchedTime === 0;
           const overdueMins = effectiveSchedTime > 0 ? Math.round((now - effectiveSchedTime) / 60000) : 0;
           let isLive = false;
           let apiChecked = false;
@@ -987,7 +985,7 @@ async function reconcileScheduledPosts() {
                 const privacy = await getYouTubeVideoPrivacy(
                   accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
                 );
-                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"} (overdue ${overdueMins}m)`);
+                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"} (scheduled ${isPastSchedule ? `${overdueMins}m overdue` : `in ${-overdueMins}m`})`);
                 isLive = privacy === "public";
               } else {
                 log(`  YT: no account found for video ${video.id}`);
@@ -1005,7 +1003,7 @@ async function reconcileScheduledPosts() {
                   } catch { /* use existing token */ }
                 }
                 const published = await getFacebookVideoPublished(entry.postId, accessToken);
-                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (overdue ${overdueMins}m)`);
+                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (scheduled ${isPastSchedule ? `${overdueMins}m overdue` : `in ${-overdueMins}m`})`);
                 isLive = published === true;
               } else {
                 log(`  FB: no account found for video ${video.id}`);
@@ -1016,12 +1014,11 @@ async function reconcileScheduledPosts() {
             }
           }
 
-          // Force-promote if >90 min past scheduled time and API couldn't confirm
-          // Platforms publish within minutes of scheduled time; if we can't verify, trust the schedule.
-          if (!isLive && !apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+          // Force-promote only for OVERDUE entries (past scheduled time + buffer)
+          if (!isLive && isPastSchedule && !apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
             log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, no API check possible (no postId or account)`);
             isLive = true;
-          } else if (!isLive && apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+          } else if (!isLive && isPastSchedule && apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
             log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, API returned not-live but trusting schedule`);
             isLive = true;
           }
