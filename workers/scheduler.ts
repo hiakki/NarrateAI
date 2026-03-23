@@ -863,11 +863,14 @@ async function recoverStuckVideos() {
 /**
  * Reconcile platform post status with the app's video status.
  *
- * Two cases handled:
- * 1. SCHEDULED videos with "scheduled" platform entries → check YT/FB API to see
- *    if the post went live, then flip success:"scheduled" → success:true.
- * 2. READY or SCHEDULED videos where at least one platform already has success:true
- *    but the video status was never promoted to POSTED.
+ * Runs every tick for all READY/SCHEDULED videos:
+ *   1. For each platform entry with success:"scheduled" + postId, query the
+ *      platform API to check if the post is now live. If so, flip to success:true.
+ *      - YouTube: check privacyStatus === "public"
+ *      - Facebook: check published === true
+ *      - Instagram: handled by checkDeferredInstagramPosts (posts on our behalf)
+ *   2. After resolving scheduled entries, if all targeted platforms show
+ *      success:true (or deleted), promote the video status to POSTED.
  */
 async function reconcileScheduledPosts() {
   try {
@@ -913,27 +916,27 @@ async function reconcileScheduledPosts() {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
       let changed = false;
 
-      // Case 1: flip "scheduled" → true by checking live status on YT/FB
-      const scheduledEntries = entries.filter(
-        (e) => e.success === "scheduled" && e.platform !== "INSTAGRAM" && e.postId,
-      );
-      if (scheduledEntries.length > 0 && user) {
-        const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
-        if (pastSchedule) {
-          for (const entry of scheduledEntries) {
-            const account = user.socialAccounts.find((a) => a.platform === entry.platform);
-            if (!account) continue;
+      // Step 1: check each "scheduled" platform entry against its native API
+      const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
+      if (pastSchedule && user) {
+        for (const entry of entries) {
+          if (entry.success !== "scheduled" || !entry.postId) continue;
 
-            let isLive = false;
+          let isLive = false;
 
-            if (entry.platform === "YOUTUBE") {
+          if (entry.platform === "YOUTUBE") {
+            const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
+            if (account) {
               const accessToken = decrypt(account.accessTokenEnc);
               const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
               const privacy = await getYouTubeVideoPrivacy(
-                accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+                accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
               );
               isLive = privacy === "public";
-            } else if (entry.platform === "FACEBOOK") {
+            }
+          } else if (entry.platform === "FACEBOOK") {
+            const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+            if (account) {
               let accessToken = decrypt(account.accessTokenEnc);
               if (account.refreshTokenEnc && account.pageId) {
                 try {
@@ -942,31 +945,32 @@ async function reconcileScheduledPosts() {
                   );
                 } catch { /* use existing token */ }
               }
-              const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+              const published = await getFacebookVideoPublished(entry.postId, accessToken);
               isLive = published === true;
             }
+          }
+          // Instagram: skip API check — checkDeferredInstagramPosts handles IG posting
 
-            if (isLive) {
-              entry.success = true;
-              delete entry.scheduledFor;
-              changed = true;
-              log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
-            }
+          if (isLive) {
+            entry.success = true;
+            delete entry.scheduledFor;
+            changed = true;
+            log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
           }
         }
       }
 
-      // Case 2: if any platform entry already has success:true, promote video to POSTED
+      // Step 2: promote video to POSTED if all targeted platforms are done
       const targeted = (video.scheduledPlatforms ?? []) as string[];
-      const hasSuccess = entries.some((e) => e.success === true);
-      if (!hasSuccess) continue;
+      const hasAnySuccess = entries.some((e) => e.success === true);
+      if (!hasAnySuccess && !changed) continue;
 
-      const allTargetedDone = targeted.length === 0 || targeted.every((plat) => {
+      const allTargetedDone = targeted.length > 0 && targeted.every((plat) => {
         const e = entries.find((x) => x.platform === plat);
         return e && (e.success === true || e.success === "deleted");
       });
 
-      const allEntriesDone = entries.every(
+      const allEntriesDone = entries.length > 0 && entries.every(
         (e) => e.success === true || e.success === "deleted",
       );
 
@@ -978,7 +982,7 @@ async function reconcileScheduledPosts() {
             ...(changed ? { postedPlatforms: entries as never } : {}),
           },
         });
-        log(`Video ${video.id} → POSTED (platforms confirmed: ${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+        log(`Video ${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
       } else if (changed) {
         await db.video.update({
           where: { id: video.id },
