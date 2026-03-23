@@ -620,6 +620,24 @@ export default function VideoDetailPage() {
     if (toClear.length > 0) unmarkPublishing(...toClear);
   }, [video, failedPublishes]);
 
+  // Auto-clear stale publish states that have been spinning for too long
+  useEffect(() => {
+    if (publishingPlatforms.size === 0) return;
+    const timer = setInterval(() => {
+      try {
+        const stored = sessionStorage.getItem(publishKeyRef.current);
+        if (!stored) { setPublishingPlatforms(new Set()); return; }
+        const parsed = JSON.parse(stored);
+        const age = Date.now() - (parsed?.ts ?? 0);
+        if (age > PUBLISH_STALE_MS) {
+          sessionStorage.removeItem(publishKeyRef.current);
+          setPublishingPlatforms(new Set());
+        }
+      } catch { /* ignore */ }
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [publishingPlatforms.size]);
+
   // Clear client-side error state when server entry transitions to scheduled/posted
   useEffect(() => {
     if (!video || failedPublishes.size === 0) return;
