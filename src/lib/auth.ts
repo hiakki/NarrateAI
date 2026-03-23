@@ -7,6 +7,10 @@ import { db } from "@/lib/db";
 import { validateEmailDomain } from "@/lib/email/validate";
 import type { UserRole, UserPlan } from "@prisma/client";
 
+if (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXTAUTH_URL) {
+  process.env.NEXTAUTH_URL = process.env.NEXT_PUBLIC_APP_URL;
+}
+
 declare module "next-auth" {
   interface Session {
     user: {

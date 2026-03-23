@@ -92,14 +92,13 @@ Expose the app on a public URL (e.g. for OAuth callbacks or sharing). Two provid
   1. `pnpm tunnel` — start the tunnel, copy the public URL once.
   2. `pnpm dev:all` — run the app; restart anytime without touching the tunnel.
 
-**Important:** When running behind a proxy or tunnel (Cloudflare, Vercel, Railway, etc.), update these two variables in `.env` to your public URL:
+**Important:** When running behind a proxy or tunnel (Cloudflare, Vercel, Railway, etc.), update this variable in `.env` to your public URL:
 
 ```env
 NEXT_PUBLIC_APP_URL=https://your-public-url.example.com
-NEXTAUTH_URL=https://your-public-url.example.com
 ```
 
-If you don't set these, login will redirect to `localhost:3000` instead of your public URL. OAuth callbacks (Google, Meta, YouTube) also rely on these values.
+`NEXTAUTH_URL` is auto-derived from `NEXT_PUBLIC_APP_URL` — no need to set it separately. If you don't update this, login will redirect to `localhost:3000` instead of your public URL. OAuth callbacks (Google, Meta, YouTube) also rely on this value.
 
 If you see a `DEP0169 url.parse()` deprecation warning, it comes from a dependency (e.g. Next.js or ioredis); the dev script suppresses it. Safe to ignore or set `NODE_OPTIONS=--disable-warning=DEP0169` if needed.
 

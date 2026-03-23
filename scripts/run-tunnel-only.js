@@ -20,7 +20,7 @@ if (provider === "cloudflare") {
 
 console.log("[Tunnel] Starting " + provider + " (PORT=" + PORT + ")");
 if (provider === "localtunnel" && SUBDOMAIN) console.log("[Tunnel] Subdomain: " + SUBDOMAIN);
-console.log("[Tunnel] Set NEXT_PUBLIC_APP_URL and NEXTAUTH_URL to the URL below.\n");
+console.log("[Tunnel] Set NEXT_PUBLIC_APP_URL in .env to the URL below (NEXTAUTH_URL is auto-derived).\n");
 
 const child = spawn(command, args, { stdio: "inherit", shell: true });
 child.on("error", (err) => {
