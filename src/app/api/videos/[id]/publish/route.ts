@@ -58,23 +58,14 @@ export async function POST(
       } else if (video.series.automation?.postTime && video.series.automation?.timezone) {
         const auto = video.series.automation;
         const [tH, tM] = auto.postTime.split(":").map(Number);
-        const parts = new Intl.DateTimeFormat("en-US", {
-          timeZone: auto.timezone, year: "numeric", month: "numeric", day: "numeric",
+        const nowParts = new Intl.DateTimeFormat("en-US", {
+          timeZone: auto.timezone, hour: "numeric", minute: "numeric", hour12: false,
         }).formatToParts(new Date());
-        const year = parseInt(parts.find((p) => p.type === "year")!.value);
-        const month = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
-        const day = parseInt(parts.find((p) => p.type === "day")!.value);
-        let guess = new Date(Date.UTC(year, month, day, tH, tM, 0));
-        for (let i = 0; i < 3; i++) {
-          const lp = new Intl.DateTimeFormat("en-US", {
-            timeZone: auto.timezone, hour: "numeric", minute: "numeric", hour12: false,
-          }).formatToParts(guess);
-          const lh = parseInt(lp.find((p) => p.type === "hour")!.value);
-          const lm = parseInt(lp.find((p) => p.type === "minute")!.value);
-          const diff = (tH * 60 + tM) - (lh * 60 + lm);
-          if (diff === 0) break;
-          guess = new Date(guess.getTime() + diff * 60000);
-        }
+        const nowH = parseInt(nowParts.find((p) => p.type === "hour")!.value);
+        const nowM = parseInt(nowParts.find((p) => p.type === "minute")!.value);
+        const targetMin = tH * 60 + tM;
+        const nowMin = nowH * 60 + nowM;
+        let guess = new Date(Date.now() + (targetMin - nowMin) * 60_000);
         if (guess.getTime() < Date.now() + 15 * 60 * 1000) {
           guess = new Date(guess.getTime() + 24 * 60 * 60 * 1000);
         }

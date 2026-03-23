@@ -1814,7 +1814,11 @@ export default function VideoDetailPage() {
                                 <span className="flex items-center gap-1 text-xs text-zinc-400 font-medium">
                                   <Trash2 className="h-4 w-4" /> Deleted
                                 </span>
-                                {connected && !isPublishing && (
+                                {isPublishing ? (
+                                  <Button size="sm" variant="outline" className="gap-1 text-xs" disabled>
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
+                                  </Button>
+                                ) : (
                                   <>
                                     <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
                                       <Clock className="h-3.5 w-3.5" /> Schedule
@@ -1823,9 +1827,6 @@ export default function VideoDetailPage() {
                                       <Send className="h-3.5 w-3.5" /> Post Now
                                     </Button>
                                   </>
-                                )}
-                                {connected && isPublishing && (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
                                 )}
                               </div>
                             ) : isScheduled ? (
@@ -1901,23 +1902,23 @@ export default function VideoDetailPage() {
                                 <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
                                   Stuck
                                 </span>
-                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
                                   <Clock className="h-3 w-3" /> Schedule
                                 </Button>
-                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
                                   <Send className="h-3 w-3" /> Post Now
                                 </Button>
                               </div>
                             ) : isPublishing ? (
-                              <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
+                              <Button size="sm" variant="outline" className="gap-1 text-xs" disabled>
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
-                              </span>
-                            ) : connected ? (
+                              </Button>
+                            ) : connected || entry ? (
                               <div className="flex items-center gap-1.5">
-                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
                                   <Clock className="h-3.5 w-3.5" /> Schedule
                                 </Button>
-                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
                                   <Send className="h-3.5 w-3.5" /> Post Now
                                 </Button>
                               </div>
