@@ -189,13 +189,24 @@ export async function POST(req: NextRequest) {
       if (auto.postTime && auto.timezone && targetPlatforms.length > 0) {
         const [tH, tM] = auto.postTime.split(":").map(Number);
         const now = new Date();
-        const parts = new Intl.DateTimeFormat("en-US", {
+        const dateParts = new Intl.DateTimeFormat("en-US", {
           timeZone: auto.timezone, year: "numeric", month: "numeric", day: "numeric",
         }).formatToParts(now);
-        const year = parseInt(parts.find((p) => p.type === "year")!.value);
-        const month = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
-        const day = parseInt(parts.find((p) => p.type === "day")!.value);
-        let guess = new Date(Date.UTC(year, month, day, tH, tM, 0));
+        const year = parseInt(dateParts.find((p) => p.type === "year")!.value);
+        const month = parseInt(dateParts.find((p) => p.type === "month")!.value) - 1;
+        const day = parseInt(dateParts.find((p) => p.type === "day")!.value);
+
+        // Estimate UTC offset using noon (avoids midnight hour ambiguity)
+        const noonUtc = new Date(Date.UTC(year, month, day, 12, 0, 0));
+        const noonParts = new Intl.DateTimeFormat("en-US", {
+          timeZone: auto.timezone, hour: "numeric", minute: "numeric", hour12: false,
+        }).formatToParts(noonUtc);
+        const noonH = parseInt(noonParts.find((p) => p.type === "hour")!.value);
+        const noonM = parseInt(noonParts.find((p) => p.type === "minute")!.value);
+        const offsetMin = (noonH * 60 + noonM) - 720;
+        const targetUtcMin = tH * 60 + tM - offsetMin;
+        let guess = new Date(Date.UTC(year, month, day, 0, targetUtcMin, 0));
+
         for (let i = 0; i < 3; i++) {
           const lp = new Intl.DateTimeFormat("en-US", {
             timeZone: auto.timezone, hour: "numeric", minute: "numeric", hour12: false,

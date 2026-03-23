@@ -121,8 +121,7 @@ function getClipQueue(): Queue<ClipRepurposeJobData> {
     clipQueueInstance = new Queue<ClipRepurposeJobData>("clip-repurpose", {
       connection: createRedisConnection() as never,
       defaultJobOptions: {
-        attempts: 2,
-        backoff: { type: "exponential", delay: 15000 },
+        attempts: 1,
         removeOnComplete: { count: 100 },
         removeOnFail: { count: 50 },
       },

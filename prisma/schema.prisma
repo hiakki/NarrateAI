@@ -225,10 +225,27 @@ model Automation {
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   character       Character?    @relation(fields: [characterId], references: [id], onDelete: SetNull)
   series          Series?       @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  schedulerLogs   SchedulerLog[]
 
   @@index([userId])
   @@index([enabled])
   @@map("automations")
+}
+
+model SchedulerLog {
+  id             String   @id @default(cuid())
+  automationId   String
+  outcome        String   // "skipped" | "enqueued" | "error" | "posted"
+  message        String
+  errorDetail    String?
+  durationMs     Int      @default(0)
+  videoId        String?
+  createdAt      DateTime @default(now())
+
+  automation     Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, createdAt])
+  @@map("scheduler_logs")
 }
 
 model Video {

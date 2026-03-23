@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +85,7 @@ function formatViews(n: number) {
 
 export default function ClipAutomationDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [auto, setAuto] = useState<AutomationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
@@ -181,7 +182,7 @@ export default function ClipAutomationDetailPage() {
             ) as PlatformEntry[];
 
             return (
-              <Link key={v.id} href={`/dashboard/videos/${v.id}`}>
+              <div key={v.id} className="cursor-pointer" onClick={() => router.push(`/dashboard/videos/${v.id}`)}>
                 <div className="rounded-lg border overflow-hidden hover:border-primary/50 transition-colors group flex flex-col h-full">
                   {/* Thumbnail / video preview */}
                   {v.videoUrl && (v.status === "READY" || v.status === "POSTED") ? (
@@ -276,12 +277,12 @@ export default function ClipAutomationDetailPage() {
                             : "bg-muted border-muted-foreground/20 text-muted-foreground";
                           const linkUrl = p.success !== "deleted" && p.success !== false ? p.url : undefined;
                           return linkUrl ? (
-                            <a key={p.platform} href={linkUrl} target="_blank" rel="noopener noreferrer"
+                            <button key={p.platform} type="button"
                               className={`flex items-center gap-0.5 text-[9px] rounded-full px-1.5 py-0.5 border hover:opacity-80 ${statusCls}`}
-                              onClick={(e) => e.stopPropagation()}>
+                              onClick={(e) => { e.stopPropagation(); window.open(linkUrl, "_blank"); }}>
                               <Icon className="w-2.5 h-2.5" />
                               {statusLabel}
-                            </a>
+                            </button>
                           ) : (
                             <span key={p.platform} className={`flex items-center gap-0.5 text-[9px] rounded-full px-1.5 py-0.5 border ${statusCls}`}>
                               <Icon className="w-2.5 h-2.5" />
@@ -293,7 +294,7 @@ export default function ClipAutomationDetailPage() {
                     )}
                   </div>
                 </div>
-              </Link>
+              </div>
             );
           })}
         </div>

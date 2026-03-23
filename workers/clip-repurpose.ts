@@ -132,6 +132,28 @@ const worker = new Worker<ClipRepurposeJobData>(
     log.log(`[START]`, `Clip-repurpose job ${videoId}`);
 
     try {
+      // ── Guard: if video is already READY (BullMQ retry after posting failure), skip to posting ──
+      const existingVideo = await db.video.findUnique({ where: { id: videoId }, select: { status: true, videoUrl: true } });
+      if (existingVideo?.status === "READY" && existingVideo?.videoUrl) {
+        log.log(`[RETRY-POST]`, `Video ${videoId} already READY, skipping reprocessing — going straight to posting`);
+        const jobTargets = (targetPlatforms ?? []) as string[];
+        if (process.env.DRY_RUN === "1") {
+          log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
+        } else if (jobTargets.length > 0) {
+          const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
+          const scheduledAt = freshVideo?.scheduledPostTime
+            ? new Date(freshVideo.scheduledPostTime)
+            : new Date(Date.now() + 60 * 60 * 1000);
+          const results = await postVideoToSocials(videoId, undefined, scheduledAt);
+          const ok = results.filter((r) => r.success).map((r) => r.platform);
+          if (ok.length > 0) {
+            await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
+            log.log(`[SCHEDULE]`, `Retry-post SCHEDULED → ${ok.join(", ")}`);
+          }
+        }
+        return;
+      }
+
       // ── Stage 1: DISCOVER ──
       await updateStage(videoId, "DISCOVER");
       log.log(`[DISCOVER]`, `Finding trending video...`);
@@ -383,17 +405,22 @@ const worker = new Worker<ClipRepurposeJobData>(
           const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
           const scheduledAt = freshVideo?.scheduledPostTime
             ? new Date(freshVideo.scheduledPostTime)
-            : new Date(Date.now() + 60 * 60 * 1000); // fallback: 1 hour from now
+            : new Date(Date.now() + 60 * 60 * 1000);
           log.log(`[SCHEDULE]`, `Scheduling for ${scheduledAt.toISOString()} on ${jobTargets.join(", ")}`);
           const results = await postVideoToSocials(videoId, undefined, scheduledAt);
           if (results.length > 0) {
             const ok = results.filter((r) => r.success).map((r) => r.platform);
             const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-            if (ok.length > 0) log.log(`[SCHEDULE]`, `SCHEDULED → ${ok.join(", ")}`);
+            if (ok.length > 0) {
+              log.log(`[SCHEDULE]`, `SCHEDULED → ${ok.join(", ")}`);
+              // Transition to SCHEDULED so the scheduler tick doesn't re-post
+              await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
+            }
             if (failed.length > 0) log.warn(`[SCHEDULE]`, `SCHEDULE_FAIL: ${failed.join("; ")}`);
           }
         } catch (postErr) {
           log.warn(`[SCHEDULE]`, `SCHEDULE_ERR:`, postErr);
+          // Status stays READY — scheduler will retry posting on next tick
         }
       }
     } catch (error) {

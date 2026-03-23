@@ -84,17 +84,32 @@ function hasRunToday(lastRunAt: Date | null, timezone: string): boolean {
 function localTimeToUTC(timeStr: string, tz: string): Date {
   const [targetH, targetM] = timeStr.split(":").map(Number);
   const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const dateParts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric",
     month: "numeric",
     day: "numeric",
   }).formatToParts(now);
-  const year = parseInt(parts.find((p) => p.type === "year")!.value);
-  const month = parseInt(parts.find((p) => p.type === "month")!.value) - 1;
-  const day = parseInt(parts.find((p) => p.type === "day")!.value);
+  const year = parseInt(dateParts.find((p) => p.type === "year")!.value);
+  const month = parseInt(dateParts.find((p) => p.type === "month")!.value) - 1;
+  const day = parseInt(dateParts.find((p) => p.type === "day")!.value);
 
-  let guess = new Date(Date.UTC(year, month, day, targetH, targetM, 0));
+  // Estimate UTC offset using noon as a safe reference (avoids midnight hour ambiguity)
+  const noonUtc = new Date(Date.UTC(year, month, day, 12, 0, 0));
+  const noonParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(noonUtc);
+  const noonH = parseInt(noonParts.find((p) => p.type === "hour")!.value);
+  const noonM = parseInt(noonParts.find((p) => p.type === "minute")!.value);
+  const offsetMin = (noonH * 60 + noonM) - 720;
+
+  const targetUtcMin = targetH * 60 + targetM - offsetMin;
+  let guess = new Date(Date.UTC(year, month, day, 0, targetUtcMin, 0));
+
+  // One verification pass to handle DST edge cases
   for (let i = 0; i < 3; i++) {
     const lp = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
@@ -130,12 +145,48 @@ function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
   return { build: true, reason: `build window active, due for build` };
 }
 
+async function writeSchedulerLog(
+  automationId: string,
+  outcome: string,
+  message: string,
+  opts?: { errorDetail?: string; durationMs?: number; videoId?: string },
+) {
+  try {
+    await db.schedulerLog.create({
+      data: {
+        automationId,
+        outcome,
+        message,
+        errorDetail: opts?.errorDetail,
+        durationMs: opts?.durationMs ?? 0,
+        videoId: opts?.videoId,
+      },
+    });
+    // Keep only last 30 entries per automation
+    const oldest = await db.schedulerLog.findMany({
+      where: { automationId },
+      orderBy: { createdAt: "desc" },
+      skip: 30,
+      select: { id: true },
+    });
+    if (oldest.length > 0) {
+      await db.schedulerLog.deleteMany({
+        where: { id: { in: oldest.map((o) => o.id) } },
+      });
+    }
+  } catch (e) {
+    warn(`Failed to write scheduler log:`, e);
+  }
+}
+
 async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.findMany>>[number]) {
   return runWithAutomationIdAsync(auto.id, async () => {
+  const runStart = Date.now();
   const { build, reason } = shouldBuildNow(auto as unknown as AutoRow);
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
+    await writeSchedulerLog(auto.id, "skipped", reason, { durationMs: Date.now() - runStart });
     return;
   }
 
@@ -168,11 +219,13 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
   const pendingVideo = await db.video.findFirst({
     where: {
       seriesId: auto.seriesId,
-      status: { in: ["QUEUED", "GENERATING"] },
+      status: { in: ["QUEUED", "GENERATING", "SCHEDULED"] },
     },
   });
   if (pendingVideo) {
-    log(`[SKIP]`, `Video in progress (${pendingVideo.id}), skipping`);
+    const msg = `Video ${pendingVideo.id} is ${pendingVideo.status}`;
+    log(`[SKIP]`, msg);
+    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: pendingVideo.id });
     return;
   }
 
@@ -197,7 +250,9 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
         return entry.success === true;
       });
       if (!allPosted) {
-        log(`[SKIP]`, `Video ${readyVideo.id} is READY but not posted to all platforms yet, skipping new generation`);
+        const msg = `Video ${readyVideo.id} READY but not posted to all platforms yet`;
+        log(`[SKIP]`, msg);
+        await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
         return;
       }
     }
@@ -249,9 +304,16 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
         data: { lastRunAt: new Date() },
       });
 
+      const msg = `Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
       log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
+      await writeSchedulerLog(auto.id, "enqueued", msg, { durationMs: Date.now() - runStart, videoId: video.id });
     } catch (qErr: unknown) {
+      const errMsg = qErr instanceof Error ? qErr.message : String(qErr);
       err(`[ERR]`, `Failed to enqueue clip-repurpose for "${auto.name}":`, qErr);
+      await writeSchedulerLog(auto.id, "error", `Failed to enqueue clip-repurpose: ${errMsg.slice(0, 200)}`, {
+        errorDetail: qErr instanceof Error ? qErr.stack : errMsg,
+        durationMs: Date.now() - runStart,
+      });
     }
     return;
   }
@@ -321,7 +383,9 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
       data: { lastRunAt: new Date() },
     });
 
+    const retryMsg = `Re-enqueued failed video (resumes from [${completedStages.join(",")}])`;
     log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
+    await writeSchedulerLog(auto.id, "enqueued", retryMsg, { durationMs: Date.now() - runStart, videoId: failedVideo.id });
     return;
   }
 
@@ -387,9 +451,14 @@ async function processAutomation(auto: Awaited<ReturnType<typeof db.automation.f
     });
 
     log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
+    await writeSchedulerLog(auto.id, "enqueued", `Queued AI video, post at ${origScheduledPostTime.toISOString()}`, { durationMs: Date.now() - runStart, videoId: video.id });
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
     err(`[ERR]`, `Failed to auto-generate: ${msg}`);
+    await writeSchedulerLog(auto.id, "error", `Failed to auto-generate: ${msg}`, {
+      errorDetail: e instanceof Error ? e.stack : String(e),
+      durationMs: Date.now() - runStart,
+    });
   }
   });
 }
@@ -480,12 +549,25 @@ async function checkReadyVideosForPosting() {
       log(`Scheduling ${postTasks.length} ready video(s) on native platforms`);
       await Promise.allSettled(
         postTasks.map(async ({ videoId, remaining }) => {
-          const v = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
+          // Skip if video became READY very recently (< 30s) — clip worker is likely still posting
+          const v = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true, updatedAt: true } });
+          const age = Date.now() - new Date(v?.updatedAt ?? 0).getTime();
+          if (age < 30_000) {
+            debug(`Skipping ${videoId} — became READY ${Math.round(age / 1000)}s ago, clip worker may still be posting`);
+            return;
+          }
           const scheduledAt = v?.scheduledPostTime
             ? new Date(v.scheduledPostTime)
             : new Date(Date.now() + 60 * 60 * 1000);
           log(`Scheduling video ${videoId} to ${remaining.join(", ")} for ${scheduledAt.toISOString()}`);
-          return postVideoToSocials(videoId, remaining, scheduledAt);
+          const results = await postVideoToSocials(videoId, remaining, scheduledAt);
+          // If all platforms posted/scheduled, transition to SCHEDULED
+          const ok = results.filter((r) => r.success);
+          if (ok.length >= remaining.length) {
+            await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
+            log(`Video ${videoId} → SCHEDULED (all platforms done)`);
+          }
+          return results;
         }),
       );
     }
@@ -754,5 +836,32 @@ cron.schedule("0 2 * * *", () => {
   refreshInsightsDaily();
 });
 
+async function backfillLastRunAt() {
+  try {
+    const stale = await db.automation.findMany({
+      where: { lastRunAt: null, seriesId: { not: null } },
+      select: { id: true, name: true, seriesId: true },
+    });
+    if (stale.length === 0) return;
+    log(`Backfilling lastRunAt for ${stale.length} automation(s) with null lastRunAt...`);
+    for (const a of stale) {
+      const latest = await db.video.findFirst({
+        where: { seriesId: a.seriesId! },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      if (latest) {
+        await db.automation.update({
+          where: { id: a.id },
+          data: { lastRunAt: latest.createdAt },
+        });
+        log(`  Backfilled "${a.name}" → ${latest.createdAt.toISOString()}`);
+      }
+    }
+  } catch (e) {
+    warn("backfillLastRunAt error:", e);
+  }
+}
+
 log(`Started. Build window: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min). Posts scheduled per-video. Tick every 5 min.`);
-tick();
+backfillLastRunAt().then(() => tick());
