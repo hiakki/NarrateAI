@@ -1917,9 +1917,14 @@ export default function VideoDetailPage() {
                                 {isPublishing ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
                                 ) : hasFailed ? (
-                                  <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => handlePublishPlatform(key)} title={failError}>
-                                    <RefreshCw className="h-3.5 w-3.5" /> Retry
-                                  </Button>
+                                  <>
+                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                      <Clock className="h-3.5 w-3.5" /> Schedule
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                      <Send className="h-3.5 w-3.5" /> Post Now
+                                    </Button>
+                                  </>
                                 ) : (
                                   <>
                                     <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
