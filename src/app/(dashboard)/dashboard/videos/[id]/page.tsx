@@ -1587,7 +1587,6 @@ export default function VideoDetailPage() {
           <div className="rounded-lg overflow-hidden bg-black shadow-xl">
             <video
               controls
-              autoPlay
               className="w-full max-h-[70vh] mx-auto"
               src={`/api/videos/${video.id}/stream`}
             />
@@ -1727,7 +1726,8 @@ export default function VideoDetailPage() {
                     if (isDeleted) rowBg = "bg-zinc-50 border-zinc-200";
                     else if (isPosted) rowBg = "bg-green-50 border-green-200";
                     else if (isScheduled) rowBg = "bg-blue-50 border-blue-200";
-                    else if (isUploading || isPublishing) rowBg = "bg-blue-50/60 border-blue-200";
+                    else if (isUploading && !isPublishing) rowBg = "bg-amber-50/60 border-amber-200";
+                    else if (isPublishing) rowBg = "bg-blue-50/60 border-blue-200";
                     else if (hasFailed) rowBg = "bg-red-50/60 border-red-200";
 
                     return (
@@ -1795,8 +1795,11 @@ export default function VideoDetailPage() {
                                 )}
                               </div>
                             )}
-                            {(isUploading || isPublishing) && !isPosted && !isScheduled && (
+                            {isPublishing && !isUploading && !isPosted && !isScheduled && (
                               <p className="text-xs text-blue-600 mt-0.5">Scheduling on {label}...</p>
+                            )}
+                            {isUploading && !isPublishing && !isPosted && !isScheduled && (
+                              <p className="text-xs text-amber-600 mt-0.5">Upload stuck — retry or re-schedule</p>
                             )}
                             {hasFailed && failError && (
                               <p className="text-xs text-red-600 mt-0.5 break-words line-clamp-2" title={failError}>{failError}</p>
@@ -1895,11 +1898,14 @@ export default function VideoDetailPage() {
                               </div>
                             ) : isUploading && !isPublishing ? (
                               <div className="flex items-center gap-1.5">
-                                <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
+                                <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
+                                  Stuck
                                 </span>
-                                <Button size="sm" variant="destructive" className="gap-1 text-xs ml-1" onClick={() => handlePublishPlatform(key)}>
-                                  <RefreshCw className="h-3 w-3" /> Retry
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                  <Clock className="h-3 w-3" /> Schedule
+                                </Button>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                  <Send className="h-3 w-3" /> Post Now
                                 </Button>
                               </div>
                             ) : isPublishing ? (
