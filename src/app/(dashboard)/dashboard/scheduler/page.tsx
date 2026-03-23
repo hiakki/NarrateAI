@@ -103,19 +103,27 @@ function autoLink(auto: SchedulerAutomation) {
     : `/dashboard/automations/${auto.id}`;
 }
 
+const FREQ_EXPECTED_GAP_H: Record<string, number> = {
+  daily: 26,
+  every_other_day: 50,
+  weekly: 170,
+};
+
 function isMissed(auto: SchedulerAutomation): boolean {
   if (!auto.enabled) return false;
   if (!auto.lastRunAt) return true;
-  const ms = Date.now() - new Date(auto.lastRunAt).getTime();
-  return ms > 24 * 60 * 60 * 1000;
+  const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (60 * 60 * 1000);
+  const threshold = FREQ_EXPECTED_GAP_H[auto.frequency] ?? 26;
+  return hours > threshold;
 }
 
 function missedSeverity(auto: SchedulerAutomation): "none" | "warning" | "critical" {
   if (!auto.enabled) return "none";
   if (!auto.lastRunAt) return "critical";
   const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (60 * 60 * 1000);
-  if (hours > 72) return "critical";
-  if (hours > 24) return "warning";
+  const threshold = FREQ_EXPECTED_GAP_H[auto.frequency] ?? 26;
+  if (hours > threshold * 3) return "critical";
+  if (hours > threshold) return "warning";
   return "none";
 }
 

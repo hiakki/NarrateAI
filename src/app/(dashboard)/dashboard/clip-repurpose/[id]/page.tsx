@@ -288,7 +288,7 @@ export default function ClipAutomationDetailPage() {
                       className="w-full aspect-[9/16] object-cover bg-black"
                       muted
                       playsInline
-                      onMouseEnter={(e) => (e.target as HTMLVideoElement).play()}
+                      onMouseEnter={(e) => { (e.target as HTMLVideoElement).play().catch(() => {}); }}
                       onMouseLeave={(e) => {
                         const el = e.target as HTMLVideoElement;
                         el.pause();

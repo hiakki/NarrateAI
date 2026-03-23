@@ -435,10 +435,17 @@ export default function ClipRepurposePage() {
     const niche = a.clipConfig?.clipNiche ?? "";
     const nicheLabel = CLIP_NICHES[niche]?.label ?? "";
     const platLabels = (a.targetPlatforms ?? []).map((p) => PLATFORM_CFG[p]?.label ?? p).join(" ");
-    return (
+    if (
       a.name.toLowerCase().includes(lowerQ) ||
       nicheLabel.toLowerCase().includes(lowerQ) ||
       platLabels.toLowerCase().includes(lowerQ)
+    ) return true;
+    const videos = a.series?.videos ?? [];
+    return videos.some((v) =>
+      v.title?.toLowerCase().includes(lowerQ) ||
+      v.sourceMetadata?.channelName?.toLowerCase().includes(lowerQ) ||
+      v.sourceMetadata?.originalTitle?.toLowerCase().includes(lowerQ) ||
+      v.id.toLowerCase().includes(lowerQ)
     );
   });
 
@@ -1512,7 +1519,7 @@ export default function ClipRepurposePage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search automations by name, niche, or platform..."
+            placeholder="Search automations, video titles, channels..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-lg border bg-background pl-10 pr-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-muted-foreground/60"
@@ -1636,7 +1643,7 @@ export default function ClipRepurposePage() {
                       className="w-full aspect-[9/16] object-cover bg-black"
                       muted
                       playsInline
-                      onMouseEnter={(e) => (e.target as HTMLVideoElement).play()}
+                      onMouseEnter={(e) => { (e.target as HTMLVideoElement).play().catch(() => {}); }}
                       onMouseLeave={(e) => {
                         const el = e.target as HTMLVideoElement;
                         el.pause();

@@ -228,7 +228,10 @@ async function processAutomation(auto: AutoRow) {
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
     fl.scheduler(`SKIP: ${reason}`);
-    await writeSchedulerLog(auto.id, "skipped", reason, { durationMs: Date.now() - runStart });
+    // Only persist non-trivial skips to the DB log (avoid flooding with "outside build window")
+    if (!reason.includes("outside build window")) {
+      await writeSchedulerLog(auto.id, "skipped", reason, { durationMs: Date.now() - runStart });
+    }
     return;
   }
 
@@ -292,7 +295,8 @@ async function processAutomation(auto: AutoRow) {
     return;
   }
 
-  // If the most recent video is READY but not posted to all target platforms, skip new generation
+  // If the most recent video is READY but not posted/scheduled to all target platforms, skip new generation.
+  // "scheduled" counts as done — the post is queued on the platform and will go live automatically.
   const targets = (auto.targetPlatforms ?? []) as string[];
   if (targets.length > 0) {
     const readyVideo = auto.seriesId ? await db.video.findFirst({
@@ -302,17 +306,17 @@ async function processAutomation(auto: AutoRow) {
     if (readyVideo) {
       const rawPosted = (readyVideo.postedPlatforms ?? []) as (
         | string
-        | { platform: string; success?: boolean | "uploading" }
+        | { platform: string; success?: boolean | string }
       )[];
-      const allPosted = targets.every((t) => {
+      const allHandled = targets.every((t) => {
         const entry = rawPosted.find((p) =>
           typeof p === "string" ? p === t : p.platform === t,
         );
         if (!entry) return false;
         if (typeof entry === "string") return true;
-        return entry.success === true;
+        return entry.success === true || entry.success === "scheduled";
       });
-      if (!allPosted) {
+      if (!allHandled) {
         const msg = `Video ${readyVideo.id} READY but not posted to all platforms yet`;
         log(`[SKIP]`, msg);
         fl.scheduler(`SKIP: ${msg}`);
