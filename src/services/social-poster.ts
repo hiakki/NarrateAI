@@ -409,8 +409,10 @@ export async function postVideoToSocials(
     }
 
     // Enforce minimum gap between successful posts per platform per user.
+    // Skip cooldown when scheduling for a future time — the actual post will be checked again later.
+    const isDeferred = !!scheduledAt;
     const gapMs = Math.max(0, PLATFORM_POST_GAP_MINUTES) * 60 * 1000;
-    if (gapMs > 0) {
+    if (gapMs > 0 && !isDeferred) {
       const latestSuccessAt = await getLatestPlatformSuccessTime(
         video!.series.user.id,
         platform,
