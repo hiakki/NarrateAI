@@ -232,6 +232,25 @@ async function processAutomation(auto: AutoRow) {
     return;
   }
 
+  // Atomic lock: claim this automation by CAS-updating lastRunAt.
+  // If another scheduler instance already claimed it, updateMany returns count=0.
+  const lockResult = await db.automation.updateMany({
+    where: {
+      id: auto.id,
+      ...(auto.lastRunAt
+        ? { lastRunAt: auto.lastRunAt }
+        : { lastRunAt: null }),
+    },
+    data: { lastRunAt: new Date() },
+  });
+  if (lockResult.count === 0) {
+    const msg = "Another scheduler instance already claimed this run";
+    debug(`[SKIP]`, `"${auto.name}" — ${msg}`);
+    fl.scheduler(`SKIP: ${msg}`);
+    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart });
+    return;
+  }
+
   log(`[BUILD]`, `"${auto.name}" — ${reason}`);
   fl.scheduler(`BUILD: "${auto.name}" — ${reason}`);
 
@@ -345,11 +364,6 @@ async function processAutomation(auto: AutoRow) {
         targetPlatforms: (auto.targetPlatforms ?? []) as string[],
       });
 
-      await db.automation.update({
-        where: { id: auto.id },
-        data: { lastRunAt: new Date() },
-      });
-
       const msg = `Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
       log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
       fl.scheduler(`ENQUEUE: clip-repurpose video=${video.id}, postAt=${scheduledPostTime.toISOString()}`);
@@ -428,11 +442,6 @@ async function processAutomation(auto: AutoRow) {
       aspectRatio: fNiche?.aspectRatio ?? "9:16",
     });
 
-    await db.automation.update({
-      where: { id: auto.id },
-      data: { lastRunAt: new Date() },
-    });
-
     const retryMsg = `Re-enqueued failed video (resumes from [${completedStages.join(",")}])`;
     log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
     fl.scheduler(`RETRY: re-enqueued failed video=${failedVideo.id}, stages=[${completedStages.join(",")}]`);
@@ -495,11 +504,6 @@ async function processAutomation(auto: AutoRow) {
       imageProvider: providers.image,
       imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
-    });
-
-    await db.automation.update({
-      where: { id: auto.id },
-      data: { lastRunAt: new Date() },
     });
 
     log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
@@ -930,7 +934,7 @@ async function reconcileScheduledPosts() {
     for (const video of videos) {
       const entries = (video.postedPlatforms ?? []) as PlatEntry[];
       if (entries.length === 0) continue;
-      const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
+      const scheduledEntries = entries.filter((e) => e.success === "scheduled");
       const hasUnpromotedSuccess = video.status !== "POSTED" && entries.some((e) => e.success === true);
       const hasStuckUploading = entries.some((e) => e.success === "uploading") &&
         (now - new Date(video.updatedAt).getTime()) > UPLOADING_STALE_MS;
@@ -958,27 +962,32 @@ async function reconcileScheduledPosts() {
       }
 
       // Step 1: for "scheduled" entries, check platform API if post time has passed
+      const FORCE_PROMOTE_MS = 90 * 60 * 1000; // 90 min past scheduled time → force-promote
       if (scheduledEntries.length > 0) {
         const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
-        if (user) {
-          for (const entry of scheduledEntries) {
-            const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
-            const effectiveSchedTime = entrySchedTime || videoSchedTime;
-            if (effectiveSchedTime > now) {
-              debug(`  ${video.id}/${entry.platform}: scheduled for ${new Date(effectiveSchedTime).toISOString()}, not yet due`);
-              continue;
-            }
-            let isLive = false;
+        for (const entry of scheduledEntries) {
+          const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
+          const effectiveSchedTime = entrySchedTime || videoSchedTime;
+          if (effectiveSchedTime > now) {
+            debug(`  ${video.id}/${entry.platform}: scheduled for ${new Date(effectiveSchedTime).toISOString()}, not yet due`);
+            continue;
+          }
 
+          const overdueMins = effectiveSchedTime > 0 ? Math.round((now - effectiveSchedTime) / 60000) : 0;
+          let isLive = false;
+          let apiChecked = false;
+
+          if (entry.postId && user) {
             if (entry.platform === "YOUTUBE") {
               const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
               if (account) {
+                apiChecked = true;
                 const accessToken = decrypt(account.accessTokenEnc);
                 const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
                 const privacy = await getYouTubeVideoPrivacy(
-                  accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+                  accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
                 );
-                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"}`);
+                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"} (overdue ${overdueMins}m)`);
                 isLive = privacy === "public";
               } else {
                 log(`  YT: no account found for video ${video.id}`);
@@ -986,6 +995,7 @@ async function reconcileScheduledPosts() {
             } else if (entry.platform === "FACEBOOK") {
               const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
               if (account) {
+                apiChecked = true;
                 let accessToken = decrypt(account.accessTokenEnc);
                 if (account.refreshTokenEnc && account.pageId) {
                   try {
@@ -994,22 +1004,33 @@ async function reconcileScheduledPosts() {
                     );
                   } catch { /* use existing token */ }
                 }
-                const published = await getFacebookVideoPublished(entry.postId!, accessToken);
-                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published}`);
+                const published = await getFacebookVideoPublished(entry.postId, accessToken);
+                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (overdue ${overdueMins}m)`);
                 isLive = published === true;
               } else {
                 log(`  FB: no account found for video ${video.id}`);
               }
             } else if (entry.platform === "INSTAGRAM") {
               log(`  IG: deferred entry for ${video.id} (handled by checkDeferredInstagramPosts)`);
+              continue;
             }
+          }
 
-            if (isLive) {
-              entry.success = true;
-              delete entry.scheduledFor;
-              changed = true;
-              log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
-            }
+          // Force-promote if >90 min past scheduled time and API couldn't confirm
+          // Platforms publish within minutes of scheduled time; if we can't verify, trust the schedule.
+          if (!isLive && !apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+            log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, no API check possible (no postId or account)`);
+            isLive = true;
+          } else if (!isLive && apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+            log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, API returned not-live but trusting schedule`);
+            isLive = true;
+          }
+
+          if (isLive) {
+            entry.success = true;
+            delete entry.scheduledFor;
+            changed = true;
+            log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
           }
         }
       }

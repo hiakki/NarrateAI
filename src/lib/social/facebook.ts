@@ -378,7 +378,7 @@ export async function getFacebookVideoPublished(
 ): Promise<boolean | null> {
   try {
     const res = await fetch(
-      `${GRAPH_API}/${videoId}?fields=published,status&access_token=${pageAccessToken}`,
+      `${GRAPH_API}/${videoId}?fields=published,status,scheduled_publish_time&access_token=${pageAccessToken}`,
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -386,10 +386,8 @@ export async function getFacebookVideoPublished(
       return null;
     }
     const data = await res.json();
-    log.log(`getFacebookVideoPublished(${videoId}): published=${data.published}, video_status=${data.status?.video_status}`);
+    log.log(`getFacebookVideoPublished(${videoId}): published=${data.published}, video_status=${data.status?.video_status}, scheduled_publish_time=${data.scheduled_publish_time ?? "none"}`);
     if (data.published === true) return true;
-    // video_status "ready" only means processing is done, NOT that the post is live.
-    // For scheduled posts, published will be false even when video_status is "ready".
     return false;
   } catch (err) {
     log.warn(`getFacebookVideoPublished(${videoId}) error:`, err instanceof Error ? err.message : err);

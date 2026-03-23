@@ -130,6 +130,7 @@ export default function VideoDetailPage() {
   publishKeyRef.current = `narrate-pub-${id}`;
   const failKeyRef = useRef(`narrate-pub-fail-${id}`);
   failKeyRef.current = `narrate-pub-fail-${id}`;
+  const publishSnapshotRef = useRef<string>("[]");
 
   const PUBLISH_STALE_MS = 3 * 60 * 1000;
 
@@ -339,6 +340,7 @@ export default function VideoDetailPage() {
   }, []);
 
   async function handlePublishPlatform(platform: string, immediate = false) {
+    publishSnapshotRef.current = JSON.stringify(video?.postedPlatforms ?? []);
     markPublishing(platform);
     clearFailure(platform);
     setPublishResults(null);
@@ -374,6 +376,7 @@ export default function VideoDetailPage() {
   }
 
   async function handlePublishAll(platforms: string[], immediate = false) {
+    publishSnapshotRef.current = JSON.stringify(video?.postedPlatforms ?? []);
     markPublishing(...platforms);
     clearFailure(...platforms);
     setPublishResults(null);
@@ -598,8 +601,12 @@ export default function VideoDetailPage() {
     }
   }, [providerData?.defaults?.imageProvider, providerData?.defaults?.ttsProvider, providerData?.defaults?.imageToVideoProvider, providerData?.available?.image, providerData?.available?.tts, providerData?.imageToVideo]);
 
+  // Only clear publishingPlatforms when the server state has CHANGED since
+  // publishing started — otherwise old entries instantly satisfy "done" condition.
   useEffect(() => {
     if (publishingPlatforms.size === 0 || !video) return;
+    const currentSnapshot = JSON.stringify(video.postedPlatforms ?? []);
+    if (currentSnapshot === publishSnapshotRef.current) return;
     const postedRaw = (video.postedPlatforms ?? []) as (
       | string
       | { platform: string; success?: boolean | "uploading" | "scheduled" | "deleted" }
@@ -1289,11 +1296,18 @@ export default function VideoDetailPage() {
               <span className="text-sm font-medium text-green-700">
                 Video ready
               </span>
-              {video.duration && (
-                <span className="text-xs text-green-600 ml-auto">
-                  {video.duration}s
-                </span>
-              )}
+              <span className="text-xs text-muted-foreground ml-auto flex items-center gap-3">
+                {video.createdAt && (
+                  <span title={new Date(video.createdAt).toLocaleString()}>
+                    Built {new Date(video.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })} at {new Date(video.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
+                {video.duration && (
+                  <span className="text-green-600 font-medium">
+                    {video.duration}s
+                  </span>
+                )}
+              </span>
             </div>
             {!isClipRepurpose && (
               <div className="px-4 py-2 border-t border-green-200/60">
@@ -1732,19 +1746,24 @@ export default function VideoDetailPage() {
                           <Icon className={`h-5 w-5 shrink-0 ${color}`} />
                           <div className="flex-1 min-w-0">
                             <span className="text-sm font-medium">{label}</span>
-                            {isScheduled && postUrl && (
-                              <div className="mt-0.5">
-                                <a href={postUrl} target="_blank" rel="noopener noreferrer"
-                                  className="text-xs text-blue-700 underline underline-offset-2 hover:text-blue-900 truncate">
-                                  {postUrl}
-                                </a>
-                              </div>
-                            )}
-                            {isScheduled && !postUrl && entry?.scheduledFor && (
-                              <p className="text-xs text-blue-600 mt-0.5">
-                                Will post at {new Date(entry.scheduledFor).toLocaleString()}
-                              </p>
-                            )}
+                            {isScheduled && (() => {
+                              const schedTime = entry?.scheduledFor ?? (video as { scheduledPostTime?: string }).scheduledPostTime;
+                              return (
+                                <>
+                                  {schedTime && (
+                                    <p className="text-xs text-blue-600 mt-0.5">
+                                      Scheduled for {new Date(schedTime).toLocaleString()}
+                                    </p>
+                                  )}
+                                  {postUrl && (
+                                    <a href={postUrl} target="_blank" rel="noopener noreferrer"
+                                      className="text-xs text-blue-700 underline underline-offset-2 hover:text-blue-900 truncate block mt-0.5">
+                                      {postUrl}
+                                    </a>
+                                  )}
+                                </>
+                              );
+                            })()}
                             {isDeleted && (
                               <p className="text-xs text-zinc-400 mt-0.5 line-through">Deleted</p>
                             )}
