@@ -1901,10 +1901,10 @@ export default function VideoDetailPage() {
                                 <span className="flex items-center gap-1 text-xs text-amber-600 font-medium">
                                   Stuck
                                 </span>
-                                <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
                                   <Clock className="h-3 w-3" /> Schedule
                                 </Button>
-                                <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
                                   <Send className="h-3 w-3" /> Post Now
                                 </Button>
                               </div>
@@ -1914,27 +1914,12 @@ export default function VideoDetailPage() {
                               </span>
                             ) : connected ? (
                               <div className="flex items-center gap-1.5">
-                                {isPublishing ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-                                ) : hasFailed ? (
-                                  <>
-                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
-                                      <Clock className="h-3.5 w-3.5" /> Schedule
-                                    </Button>
-                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
-                                      <Send className="h-3.5 w-3.5" /> Post Now
-                                    </Button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key)}>
-                                      <Clock className="h-3.5 w-3.5" /> Schedule
-                                    </Button>
-                                    <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={() => handlePublishPlatform(key, true)}>
-                                      <Send className="h-3.5 w-3.5" /> Post Now
-                                    </Button>
-                                  </>
-                                )}
+                                <Button size="sm" variant="outline" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key)}>
+                                  <Clock className="h-3.5 w-3.5" /> Schedule
+                                </Button>
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={isPublishing} onClick={() => handlePublishPlatform(key, true)}>
+                                  <Send className="h-3.5 w-3.5" /> Post Now
+                                </Button>
                               </div>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>
