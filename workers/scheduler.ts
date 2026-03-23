@@ -874,10 +874,13 @@ async function recoverStuckVideos() {
  */
 async function reconcileScheduledPosts() {
   try {
+    // Check ALL video statuses — not just READY/SCHEDULED — because a video marked
+    // POSTED by one platform might still have "scheduled" entries for other platforms
     const videos = await db.video.findMany({
-      where: { status: { in: ["READY", "SCHEDULED"] } },
+      where: { status: { in: ["READY", "SCHEDULED", "POSTED"] } },
       select: {
         id: true,
+        status: true,
         postedPlatforms: true,
         scheduledPostTime: true,
         scheduledPlatforms: true,
@@ -899,64 +902,79 @@ async function reconcileScheduledPosts() {
       },
     });
 
-    if (videos.length === 0) return;
+    // Gather videos that need reconciliation
+    type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string };
+    const toCheck: { video: typeof videos[number]; entries: PlatEntry[]; scheduledEntries: PlatEntry[] }[] = [];
+
+    for (const video of videos) {
+      const entries = (video.postedPlatforms ?? []) as PlatEntry[];
+      if (entries.length === 0) continue;
+      const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
+      const hasUnpromotedSuccess = video.status !== "POSTED" && entries.some((e) => e.success === true);
+      if (scheduledEntries.length > 0 || hasUnpromotedSuccess) {
+        toCheck.push({ video, entries, scheduledEntries });
+      }
+    }
+
+    log(`Reconcile: ${videos.length} total, ${toCheck.length} need attention`);
+    if (toCheck.length === 0) return;
 
     const now = Date.now();
 
-    for (const video of videos) {
-      const entries = (video.postedPlatforms ?? []) as {
-        platform: string;
-        success?: boolean | string;
-        postId?: string | null;
-        url?: string | null;
-        scheduledFor?: string;
-      }[];
-      if (entries.length === 0) continue;
-
+    for (const { video, entries, scheduledEntries } of toCheck) {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
       let changed = false;
 
-      // Step 1: check each "scheduled" platform entry against its native API
-      const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
-      if (pastSchedule && user) {
-        for (const entry of entries) {
-          if (entry.success !== "scheduled" || !entry.postId) continue;
+      // Step 1: for "scheduled" entries, check platform API if post time has passed
+      if (scheduledEntries.length > 0) {
+        const pastSchedule = !video.scheduledPostTime || new Date(video.scheduledPostTime).getTime() <= now;
+        if (pastSchedule && user) {
+          for (const entry of scheduledEntries) {
+            let isLive = false;
 
-          let isLive = false;
-
-          if (entry.platform === "YOUTUBE") {
-            const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
-            if (account) {
-              const accessToken = decrypt(account.accessTokenEnc);
-              const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
-              const privacy = await getYouTubeVideoPrivacy(
-                accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
-              );
-              isLive = privacy === "public";
-            }
-          } else if (entry.platform === "FACEBOOK") {
-            const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
-            if (account) {
-              let accessToken = decrypt(account.accessTokenEnc);
-              if (account.refreshTokenEnc && account.pageId) {
-                try {
-                  accessToken = await getFreshFacebookToken(
-                    account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
-                  );
-                } catch { /* use existing token */ }
+            if (entry.platform === "YOUTUBE") {
+              const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
+              if (account) {
+                const accessToken = decrypt(account.accessTokenEnc);
+                const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+                const privacy = await getYouTubeVideoPrivacy(
+                  accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+                );
+                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"}`);
+                isLive = privacy === "public";
+              } else {
+                log(`  YT: no account found for video ${video.id}`);
               }
-              const published = await getFacebookVideoPublished(entry.postId, accessToken);
-              isLive = published === true;
+            } else if (entry.platform === "FACEBOOK") {
+              const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+              if (account) {
+                let accessToken = decrypt(account.accessTokenEnc);
+                if (account.refreshTokenEnc && account.pageId) {
+                  try {
+                    accessToken = await getFreshFacebookToken(
+                      account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                    );
+                  } catch { /* use existing token */ }
+                }
+                const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published}`);
+                isLive = published === true;
+              } else {
+                log(`  FB: no account found for video ${video.id}`);
+              }
+            } else if (entry.platform === "INSTAGRAM") {
+              log(`  IG: deferred entry for ${video.id} (handled by checkDeferredInstagramPosts)`);
+            }
+
+            if (isLive) {
+              entry.success = true;
+              delete entry.scheduledFor;
+              changed = true;
+              log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
             }
           }
-          // Instagram: skip API check — checkDeferredInstagramPosts handles IG posting
-
-          if (isLive) {
-            entry.success = true;
-            delete entry.scheduledFor;
-            changed = true;
-            log(`Reconciled ${entry.platform} for video ${video.id}: scheduled → posted (postId=${entry.postId})`);
-          }
+        } else if (!pastSchedule) {
+          debug(`  ${video.id}: scheduled time not yet reached, skipping API check`);
         }
       }
 
@@ -974,7 +992,9 @@ async function reconcileScheduledPosts() {
         (e) => e.success === true || e.success === "deleted",
       );
 
-      if (allTargetedDone || allEntriesDone) {
+      const shouldPromote = video.status !== "POSTED" && (allTargetedDone || allEntriesDone);
+
+      if (shouldPromote) {
         await db.video.update({
           where: { id: video.id },
           data: {
@@ -982,12 +1002,13 @@ async function reconcileScheduledPosts() {
             ...(changed ? { postedPlatforms: entries as never } : {}),
           },
         });
-        log(`Video ${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+        log(`  ${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
       } else if (changed) {
         await db.video.update({
           where: { id: video.id },
           data: { postedPlatforms: entries as never },
         });
+        log(`  ${video.id}: updated platform entries (status stays ${video.status})`);
       }
     }
   } catch (e) {
