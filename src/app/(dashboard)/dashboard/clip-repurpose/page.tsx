@@ -441,12 +441,17 @@ export default function ClipRepurposePage() {
       platLabels.toLowerCase().includes(lowerQ)
     ) return true;
     const videos = a.series?.videos ?? [];
-    return videos.some((v) =>
-      v.title?.toLowerCase().includes(lowerQ) ||
-      v.sourceMetadata?.channelName?.toLowerCase().includes(lowerQ) ||
-      v.sourceMetadata?.originalTitle?.toLowerCase().includes(lowerQ) ||
-      v.id.toLowerCase().includes(lowerQ)
-    );
+    return videos.some((v) => {
+      if (
+        v.title?.toLowerCase().includes(lowerQ) ||
+        v.sourceMetadata?.channelName?.toLowerCase().includes(lowerQ) ||
+        v.sourceMetadata?.originalTitle?.toLowerCase().includes(lowerQ) ||
+        v.id.toLowerCase().includes(lowerQ) ||
+        v.sourceUrl?.toLowerCase().includes(lowerQ)
+      ) return true;
+      const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
+      return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(lowerQ));
+    });
   });
 
   const activeFiltered = filteredAutomations.filter((a) => a.enabled);
@@ -1519,7 +1524,7 @@ export default function ClipRepurposePage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search automations, video titles, channels..."
+            placeholder="Search by name, video title, channel, URL..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-lg border bg-background pl-10 pr-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-muted-foreground/60"

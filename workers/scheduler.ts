@@ -995,22 +995,27 @@ async function reconcileScheduledPosts() {
                 log(`  YT: no account found for video ${video.id}`);
               }
             } else if (entry.platform === "FACEBOOK") {
-              const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
-              if (account) {
-                apiChecked = true;
-                let accessToken = decrypt(account.accessTokenEnc);
-                if (account.refreshTokenEnc && account.pageId) {
-                  try {
-                    accessToken = await getFreshFacebookToken(
-                      account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
-                    );
-                  } catch { /* use existing token */ }
-                }
-                const published = await getFacebookVideoPublished(entry.postId, accessToken);
-                log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (scheduled ${isPastSchedule ? `${overdueMins}m overdue` : `in ${-overdueMins}m`})`);
-                isLive = published === true;
+              // FB Graph API can't read scheduled/unpublished videos — only check after scheduled time
+              if (!isPastSchedule) {
+                debug(`  FB: skipping API check for ${video.id} (scheduled in ${-overdueMins}m, FB can't read unpublished videos)`);
               } else {
-                log(`  FB: no account found for video ${video.id}`);
+                const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+                if (account) {
+                  apiChecked = true;
+                  let accessToken = decrypt(account.accessTokenEnc);
+                  if (account.refreshTokenEnc && account.pageId) {
+                    try {
+                      accessToken = await getFreshFacebookToken(
+                        account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                      );
+                    } catch { /* use existing token */ }
+                  }
+                  const published = await getFacebookVideoPublished(entry.postId, accessToken);
+                  log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (${overdueMins}m overdue)`);
+                  isLive = published === true;
+                } else {
+                  log(`  FB: no account found for video ${video.id}`);
+                }
               }
             } else if (entry.platform === "INSTAGRAM") {
               log(`  IG: deferred entry for ${video.id} (handled by checkDeferredInstagramPosts)`);

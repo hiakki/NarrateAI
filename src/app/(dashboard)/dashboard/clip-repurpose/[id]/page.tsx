@@ -147,12 +147,16 @@ export default function ClipAutomationDetailPage() {
   const filteredVideos = allVideos.filter((v) => {
     if (statusFilter && v.status !== statusFilter) return false;
     if (!query) return true;
-    const titleMatch = v.title?.toLowerCase().includes(query);
-    const channelMatch = v.sourceMetadata?.channelName?.toLowerCase().includes(query);
-    const originalTitleMatch = v.sourceMetadata?.originalTitle?.toLowerCase().includes(query);
-    const platformMatch = v.sourceMetadata?.platform?.toLowerCase().includes(query);
-    const idMatch = v.id.toLowerCase().includes(query);
-    return titleMatch || channelMatch || originalTitleMatch || platformMatch || idMatch;
+    if (
+      v.title?.toLowerCase().includes(query) ||
+      v.sourceMetadata?.channelName?.toLowerCase().includes(query) ||
+      v.sourceMetadata?.originalTitle?.toLowerCase().includes(query) ||
+      v.sourceMetadata?.platform?.toLowerCase().includes(query) ||
+      v.id.toLowerCase().includes(query) ||
+      v.sourceUrl?.toLowerCase().includes(query)
+    ) return true;
+    const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
+    return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(query));
   });
 
   const statusCounts = ALL_STATUSES.reduce((acc, s) => {
@@ -195,7 +199,7 @@ export default function ClipAutomationDetailPage() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search by title, channel, source platform, or video ID..."
+              placeholder="Search by title, channel, URL, or video ID..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 pr-9"
