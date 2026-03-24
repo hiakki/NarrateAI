@@ -139,7 +139,7 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
   // Use actual last video build time instead of scheduler's lastRunAt
   const lastVideoBuildAt = auto.series?.videos?.[0]?.createdAt ?? null;
   const effectiveLastRun = lastVideoBuildAt ?? auto.lastRunAt;
-  const { build, reason } = shouldBuildNow({ ...auto, lastRunAt: effectiveLastRun });
+  const { build, reason } = shouldBuildNow({ ...auto, lastRunAt: effectiveLastRun, postTime: auto.postTime });
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
@@ -211,10 +211,35 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
         return entry.success === true || entry.success === "scheduled";
       });
       if (!allHandled) {
-        const msg = `Video ${readyVideo.id} READY but not posted to all platforms yet`;
-        log(`[SKIP]`, msg);
-        fl.scheduler(`SKIP: ${msg}`);
-        await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
+        const remaining = targets.filter((t) => {
+          const entry = rawPosted.find((p) =>
+            typeof p === "string" ? p === t : p.platform === t,
+          );
+          if (!entry) return true;
+          if (typeof entry === "string") return false;
+          return entry.success !== true && entry.success !== "scheduled";
+        });
+        log(`[POST-READY]`, `Video ${readyVideo.id} READY — posting to remaining: ${remaining.join(", ")}`);
+        fl.scheduler(`POST-READY: video ${readyVideo.id} has ${remaining.length} unposted platform(s), triggering post`);
+        try {
+          const scheduledAt = readyVideo.scheduledPostTime
+            ? new Date(readyVideo.scheduledPostTime as unknown as string)
+            : new Date(Date.now() + 60 * 60 * 1000);
+          const results = await postVideoToSocials(readyVideo.id, remaining, scheduledAt, fl ?? undefined);
+          const ok = results.filter((r) => r.success).map((r) => r.platform);
+          if (ok.length >= remaining.length) {
+            await db.video.update({ where: { id: readyVideo.id }, data: { status: "SCHEDULED" } });
+            log(`[POST-READY]`, `Video ${readyVideo.id} → SCHEDULED (all platforms done)`);
+            fl.scheduler(`POST-READY: DONE — ${ok.join(", ")} scheduled`);
+          } else {
+            fl.scheduler(`POST-READY: PARTIAL — ${ok.length}/${remaining.length} OK, will retry next cycle`);
+          }
+        } catch (postErr) {
+          const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
+          warn(`[POST-READY]`, `Failed to post video ${readyVideo.id}: ${errMsg}`);
+          fl.scheduler(`POST-READY ERROR: ${errMsg.slice(0, 500)}`);
+        }
+        await writeSchedulerLog(auto.id, "skipped", `Posted/scheduled READY video ${readyVideo.id} instead of creating new`, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
         return;
       }
     }

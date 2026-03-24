@@ -86,6 +86,18 @@ interface BuildCheckAuto {
   frequency: string;
   timezone: string;
   lastRunAt: Date | null;
+  postTime?: string;
+}
+
+/**
+ * Returns whether the automation's post time is still reachable today.
+ * "Reachable" means the post slot is at least 15 min in the future
+ * (same threshold used when computing scheduledPostTime).
+ */
+function postTimeReachableToday(postTime: string, tz: string): boolean {
+  const postSlot = postTime.split(",")[0].trim();
+  const todayPost = localTimeToUTC(postSlot, tz);
+  return todayPost.getTime() >= Date.now() + 15 * 60 * 1000;
 }
 
 export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: string } {
@@ -93,20 +105,26 @@ export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: 
   const tz = auto.timezone || BUILD_ALL_TIMEZONE;
   const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
 
+  if (auto.lastRunAt === null) {
+    return { build: false, reason: "new automation — will run on next scheduled day (use Run button for immediate)" };
+  }
+
   if (daysSince < gapDays) {
     return { build: false, reason: `ran ${daysSince}d ago (calendar), need ${gapDays}d gap` };
+  }
+
+  if (auto.postTime && !postTimeReachableToday(auto.postTime, tz)) {
+    return { build: false, reason: `post time ${auto.postTime} already passed today, deferring to next day` };
   }
 
   if (isInBuildWindow()) {
     return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
   }
 
-  // Overdue by more than one cycle — catch up immediately
   if (daysSince > gapDays) {
     return { build: true, reason: `catch-up: overdue by ${daysSince - gapDays}d, running now` };
   }
 
-  // Due today (daysSince == gapDays) but build window already passed — catch up now
   const todayBuild = localTimeToUTC(BUILD_ALL_TIME, BUILD_ALL_TIMEZONE);
   const windowEnd = todayBuild.getTime() + BUILD_WINDOW_MINUTES * 60000;
   if (Date.now() > windowEnd) {
@@ -121,6 +139,7 @@ interface NextRunAuto {
   frequency: string;
   lastRunAt: Date | null;
   timezone: string;
+  postTime?: string;
 }
 
 export function computeNextRunAt(auto: NextRunAuto): Date | null {
@@ -133,6 +152,15 @@ export function computeNextRunAt(auto: NextRunAuto): Date | null {
   const now = new Date();
   const todayBuild = localTimeToUTC(BUILD_ALL_TIME, BUILD_ALL_TIMEZONE);
   const buildWindowEnd = todayBuild.getTime() + BUILD_WINDOW_MINUTES * 60000;
+
+  if (auto.lastRunAt === null) {
+    if (now.getTime() < buildWindowEnd) return todayBuild;
+    return new Date(todayBuild.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  if (daysSince >= gap && auto.postTime && !postTimeReachableToday(auto.postTime, tz)) {
+    return new Date(todayBuild.getTime() + 24 * 60 * 60 * 1000);
+  }
 
   if (daysSince > gap) {
     return now;

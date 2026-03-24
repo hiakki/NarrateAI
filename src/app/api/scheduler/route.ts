@@ -100,7 +100,7 @@ export async function GET() {
       // Use actual last video build time (ground truth) over scheduler's lastRunAt
       const lastBuildAt = a.series?.id ? latestBySeriesId.get(a.series.id) ?? null : null;
       const effectiveLastRunAt = lastBuildAt ?? a.lastRunAt;
-      const autoWithLastRun = { ...a, lastRunAt: effectiveLastRunAt };
+      const autoWithLastRun = { ...a, lastRunAt: effectiveLastRunAt, postTime: a.postTime };
       const nextRunAt = computeNextRunAt(autoWithLastRun);
       const nextPostAt = computeNextPostAt(a.postTime, a.timezone);
       return {
