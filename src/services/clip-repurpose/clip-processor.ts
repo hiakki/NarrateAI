@@ -12,6 +12,69 @@ const FONTS_DIR = path.join(process.cwd(), "assets", "fonts");
 const OUT_W = 1080;
 const OUT_H = 1920;
 
+const HEAVY_CODECS = new Set(["av1", "vp9", "hevc", "h265", "vp8", "mpeg2video"]);
+
+async function getVideoCodec(filePath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ], { timeout: 10_000 });
+    return stdout.trim().toLowerCase();
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Pre-decode a segment from a heavy codec (AV1, VP9, HEVC) into a fast-to-decode
+ * H.264 intermediate. This avoids the catastrophic double-decode when the complex
+ * blur-bg filter reads the same heavy source twice in parallel.
+ */
+async function preDecodeSegment(
+  sourcePath: string,
+  startSec: number,
+  duration: number,
+): Promise<string> {
+  const ext = path.extname(sourcePath);
+  const preDecodedPath = sourcePath.replace(ext, `_predecoded.mp4`);
+
+  const useFastSeek = startSec > 30;
+  const args: string[] = [];
+
+  if (useFastSeek) {
+    const fastSeekPoint = Math.max(0, startSec - 10);
+    args.push("-ss", String(fastSeekPoint));
+    args.push("-i", sourcePath);
+    args.push("-ss", String(startSec - fastSeekPoint));
+  } else {
+    args.push("-i", sourcePath);
+    args.push("-ss", String(startSec));
+  }
+
+  args.push(
+    "-t", String(duration),
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "16",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-pix_fmt", "yuv420p",
+    "-y",
+    preDecodedPath,
+  );
+
+  log.log(`Pre-decoding heavy codec segment (${startSec}s–${startSec + duration}s) to H.264...`);
+  await execFileAsync("ffmpeg", args, { timeout: 300_000 });
+
+  const stat = await fs.stat(preDecodedPath);
+  log.log(`Pre-decoded intermediate: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);
+  return preDecodedPath;
+}
+
 // ── Audio speech detection via FFmpeg silencedetect ──
 
 interface SpeechSegment {
@@ -151,6 +214,17 @@ export async function extractAndCrop(
   const duration = segment.endSec - segment.startSec;
   const antiFpVideo = buildAntiFpVideo(hflip);
 
+  const codec = await getVideoCodec(sourcePath);
+  const needsPreDecode = HEAVY_CODECS.has(codec);
+  let inputPath = sourcePath;
+  let effectiveStart = segment.startSec;
+
+  if (needsPreDecode) {
+    log.log(`Source codec is "${codec}" (heavy) — pre-decoding to H.264 to avoid double-decode`);
+    inputPath = await preDecodeSegment(sourcePath, segment.startSec, duration);
+    effectiveStart = 0;
+  }
+
   let filterComplex: string;
   if (cropMode === "blur-bg") {
     filterComplex = [
@@ -166,21 +240,25 @@ export async function extractAndCrop(
     ].join(";");
   }
 
-  const useFastSeek = segment.startSec > 30;
   const args: string[] = [];
 
-  if (useFastSeek) {
-    const fastSeekPoint = Math.max(0, segment.startSec - 10);
-    args.push("-ss", String(fastSeekPoint));
-    args.push("-i", sourcePath);
-    args.push("-ss", String(segment.startSec - fastSeekPoint));
+  if (!needsPreDecode) {
+    const useFastSeek = effectiveStart > 30;
+    if (useFastSeek) {
+      const fastSeekPoint = Math.max(0, effectiveStart - 10);
+      args.push("-ss", String(fastSeekPoint));
+      args.push("-i", inputPath);
+      args.push("-ss", String(effectiveStart - fastSeekPoint));
+    } else {
+      args.push("-i", inputPath);
+      args.push("-ss", String(effectiveStart));
+    }
+    args.push("-t", String(duration));
   } else {
-    args.push("-i", sourcePath);
-    args.push("-ss", String(segment.startSec));
+    args.push("-i", inputPath);
   }
 
   args.push(
-    "-t", String(duration),
     "-filter_complex", filterComplex,
     "-map", "[vout]",
     "-map", "[aout]",
@@ -197,7 +275,11 @@ export async function extractAndCrop(
   );
 
   log.log(`Extracting ${segment.startSec}-${segment.endSec}s, mode=${cropMode}, anti-fp=on (speed=${SPEED_FACTOR}x, hflip=${hflip}, hue=${HUE_SHIFT}°)`);
-  await execFileAsync("ffmpeg", args, { timeout: 180_000 });
+  await execFileAsync("ffmpeg", args, { timeout: 300_000 });
+
+  if (needsPreDecode) {
+    fs.unlink(inputPath).catch(() => {});
+  }
 
   const stat = await fs.stat(outputPath);
   log.log(`Clip extracted: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);

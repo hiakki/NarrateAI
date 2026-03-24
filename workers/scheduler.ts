@@ -23,7 +23,7 @@ const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3",
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
 const FAILED_RETRY_AFTER_MS = 10 * 60 * 1000; // retry FAILED after 10 min
-const MAX_AUTO_RETRIES = 2;
+const MAX_AUTO_RETRIES = 3;
 
 const BUILD_ALL_TIME = process.env.BUILD_ALL_TIME ?? "04:00";
 const BUILD_ALL_TIMEZONE = process.env.BUILD_ALL_TIMEZONE ?? "Asia/Kolkata";
@@ -116,6 +116,22 @@ function hasRunToday(lastRunAt: Date | null, timezone: string): boolean {
   return fmt.format(new Date()) === fmt.format(lastRunAt);
 }
 
+/**
+ * Calendar-day distance between now and lastRunAt in the given timezone.
+ * Returns Infinity if lastRunAt is null (i.e. never ran, always due).
+ */
+function calendarDaysSinceRun(lastRunAt: Date | null, timezone: string): number {
+  if (!lastRunAt) return Infinity;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const todayStr = fmt.format(new Date());
+  const lastStr = fmt.format(lastRunAt);
+  const todayMs = new Date(todayStr + "T00:00:00Z").getTime();
+  const lastMs = new Date(lastStr + "T00:00:00Z").getTime();
+  return Math.round((todayMs - lastMs) / (24 * 60 * 60 * 1000));
+}
+
 function localTimeToUTC(timeStr: string, tz: string): Date {
   const [targetH, targetM] = timeStr.split(":").map(Number);
   const now = new Date();
@@ -168,16 +184,14 @@ function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
 
   const freqDays: Record<string, number> = { daily: 1, every_other_day: 2, weekly: 7 };
   const gapDays = freqDays[auto.frequency] ?? 1;
+  const tz = auto.timezone || BUILD_ALL_TIMEZONE;
+  const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
 
-  if (auto.lastRunAt) {
-    const msSinceLast = Date.now() - auto.lastRunAt.getTime();
-    const minGapMs = (gapDays - 0.25) * 24 * 60 * 60 * 1000;
-    if (msSinceLast < minGapMs) {
-      return { build: false, reason: `ran ${(msSinceLast / 3600000).toFixed(1)}h ago, need ~${gapDays}d gap` };
-    }
+  if (daysSince < gapDays) {
+    return { build: false, reason: `ran ${daysSince}d ago (calendar), need ${gapDays}d gap` };
   }
 
-  return { build: true, reason: `build window active, due for build` };
+  return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
 }
 
 async function writeSchedulerLog(
@@ -761,7 +775,14 @@ async function recoverStuckVideos() {
       include: {
         series: {
           include: {
-            automation: { select: { id: true, name: true, enabled: true, characterId: true, automationType: true } },
+            automation: {
+              select: {
+                id: true, name: true, enabled: true, characterId: true,
+                automationType: true, niche: true, language: true, tone: true,
+                clipConfig: true, targetPlatforms: true, enableBgm: true,
+                enableHflip: true, seriesId: true,
+              },
+            },
             character: { select: { fullPrompt: true } },
             user: {
               select: {
@@ -785,17 +806,11 @@ async function recoverStuckVideos() {
     for (const video of recoverable) {
       const age = now - new Date(video.updatedAt).getTime();
       const retryCount = video.retryCount ?? 0;
-
-      // Skip clip-repurpose videos — they have their own worker and queue;
-      // recovering them through enqueueVideoGeneration would run the wrong pipeline.
-      const autoType = ((video.series.automation as Record<string, unknown> | null)?.automationType as string) ?? "";
-      if (autoType === "clip-repurpose") {
-        debug(`SKIP ${video.id} — belongs to clip-repurpose automation, handled by clip worker`);
-        continue;
-      }
+      const auto = video.series.automation as Record<string, unknown> | null;
+      const autoType = (auto?.automationType as string) ?? "";
+      const autoName = (auto?.name as string) ?? "manual";
 
       if (video.status === "FAILED") {
-        const auto = video.series.automation;
         if (!auto?.enabled) continue;
         if (retryCount >= MAX_AUTO_RETRIES) {
           if (retryCount === MAX_AUTO_RETRIES) {
@@ -804,17 +819,60 @@ async function recoverStuckVideos() {
           continue;
         }
         if (age < FAILED_RETRY_AFTER_MS) continue;
-        log(`Auto-retrying FAILED video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES}, auto="${auto.name}", failed ${Math.round(age / 60000)}m ago)`);
+        log(`Auto-retrying FAILED video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES}, auto="${autoName}", type=${autoType}, failed ${Math.round(age / 60000)}m ago)`);
       } else {
         const threshold = video.status === "GENERATING" ? STUCK_GENERATING_MS : STUCK_QUEUED_MS;
         if (age < threshold) {
           debug(`SKIP ${video.id} (${video.status}) — ${Math.round(age / 1000)}s old, threshold=${Math.round(threshold / 1000)}s`);
           continue;
         }
-        const autoName = video.series.automation?.name ?? "manual";
-        log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}")`);
+        log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}", type=${autoType})`);
       }
 
+      // ── Clip-repurpose videos: re-enqueue to the clip queue ──
+      if (autoType === "clip-repurpose") {
+        try {
+          const clipCfg = (auto?.clipConfig as Record<string, unknown>) ?? {};
+          const usr = video.series.user;
+
+          await db.video.update({
+            where: { id: video.id },
+            data: { status: "QUEUED", errorMessage: null, generationStage: null, retryCount: { increment: 1 } },
+          });
+
+          await enqueueClipRepurpose({
+            videoId: video.id,
+            seriesId: video.seriesId,
+            userId: usr.id,
+            userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
+            automationId: auto?.id as string | undefined,
+            automationName: autoName,
+            niche: (auto?.niche as string) ?? "auto",
+            language: (auto?.language as string) ?? "en",
+            tone: (auto?.tone as string) ?? "dramatic",
+            clipConfig: {
+              clipNiche: (clipCfg.clipNiche as string) ?? "auto",
+              clipDurationSec: (clipCfg.clipDurationSec as number) ?? 45,
+              cropMode: (clipCfg.cropMode as "blur-bg" | "center-crop") ?? "blur-bg",
+              creditOriginal: (clipCfg.creditOriginal as boolean) ?? true,
+              enableBgm: (auto?.enableBgm as boolean) ?? true,
+              enableHflip: (auto?.enableHflip as boolean) ?? false,
+            },
+            targetPlatforms: ((auto?.targetPlatforms ?? []) as string[]),
+          });
+
+          log(`[RETRY-CLIP] Re-enqueued clip video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES})`);
+        } catch (e) {
+          err(`Failed to recover clip video ${video.id}:`, e);
+          await db.video.update({
+            where: { id: video.id },
+            data: { status: "FAILED", generationStage: null, errorMessage: `Retry failed: ${e instanceof Error ? e.message : "Unknown"}` },
+          }).catch(() => {});
+        }
+        continue;
+      }
+
+      // ── Original pipeline: re-enqueue to the generation queue ──
       const hasCheckpoint = video.checkpointData && typeof video.checkpointData === "object";
       const completedStages = (video.checkpointData as { completedStages?: string[] })?.completedStages ?? [];
 
@@ -849,8 +907,8 @@ async function recoverStuckVideos() {
           seriesId: video.seriesId,
           userId: usr.id,
           userName: usr.name ?? usr.email?.split("@")[0] ?? "user",
-          automationId: video.series.automation?.id,
-          automationName: video.series.automation?.name,
+          automationId: video.series.automation?.id as string | undefined,
+          automationName: video.series.automation?.name as string | undefined,
           title: video.title || undefined,
           scriptText: video.scriptText || undefined,
           scenes: scenes.length > 0 ? scenes : undefined,
