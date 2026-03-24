@@ -11,7 +11,7 @@ import {
 } from "@/config/image-to-video-providers";
 import { getLocalBackendUrl, wrapLocalBackendFetchError } from "@/lib/local-backend";
 import { requireHuggingFaceToken } from "@/lib/huggingface";
-import { getKeyRotator, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS } from "@/lib/api-key-rotation";
+import { getKeyRotator, resetAllExhaustion, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS } from "@/lib/api-key-rotation";
 
 const log = createLogger("ImageToVideo");
 
@@ -219,9 +219,11 @@ async function tryProviderWithRotation(
           const msg = lastKeyError.message.toLowerCase();
           const isDailyLimit = msg.includes("daily limit") || msg.includes("daily quota");
           const isAccountLevel = /\b(401|404)\b/.test(lastKeyError.message);
-          const ttl = isDailyLimit || isAccountLevel
-            ? 6 * 60 * 60 * 1000
-            : msg.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
+          const ttl = isDailyLimit
+            ? 2 * 60 * 60 * 1000   // 2h for daily limits (providers reset at varying times)
+            : isAccountLevel
+              ? 4 * 60 * 60 * 1000 // 4h for bad keys (401/404)
+              : msg.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
           rotator.markExhausted(key, ttl, lastKeyError.message.slice(0, 100));
           continue;
         }
@@ -1749,7 +1751,8 @@ export async function generateClipsFromImages(
   const ctx: string[] = [];
   const providerCounts: Record<string, number> = {};
 
-  ctx.push(`Provider : ${options.providerId}`);
+  const primaryId = options.providerId ?? "SVD_REPLICATE";
+  ctx.push(`Provider : ${primaryId}`);
   ctx.push(`Scenes   : ${imagePaths.length}  MaxI2V: ${maxSlots}  Concurrency: ${concurrency}  Duration: ${durationSec}s  NoFallback: ${noFallback}`);
   ctx.push("");
 
@@ -1776,8 +1779,21 @@ export async function generateClipsFromImages(
     return { results, ctxLines: ctx };
   }
 
-  // Pre-check: if every provider in the fallback chain is already exhausted, skip immediately
-  const chain = buildFallbackChain(options.providerId ?? "SVD_REPLICATE");
+  // Fresh start: clear stale exhaustion records from previous video generations.
+  // Providers like Leonardo (150 daily tokens), Pollinations (daily pollen reset)
+  // may have replenished since the last run hours ago.
+  resetAllExhaustion();
+
+  const chain = buildFallbackChain(primaryId);
+  const chainNames = chain.map((p) => {
+    const name = PROVIDER_FRIENDLY_NAMES[p.id] ?? p.id;
+    const rotator = KEY_ROTATABLE_TYPES.has(p.type) && p.envVar ? getKeyRotator(p.envVar) : null;
+    const keys = rotator ? `${rotator.availableCount}/${rotator.count} keys` : (p.type === "local" ? "local" : "n/a");
+    return `${name} (${keys})`;
+  });
+  ctx.push(`Fallback chain (${chain.length} providers): ${chainNames.join(" → ")}`);
+  ctx.push("");
+
   const exhaustedProviders: string[] = [];
   let anyAvailable = false;
   for (const p of chain) {
@@ -1798,7 +1814,7 @@ export async function generateClipsFromImages(
     return { results, ctxLines: ctx };
   }
 
-  log.log(`[I2V]`, `Generating ${toGenerate.length}/${imagePaths.length} clips (×${concurrency} parallel, ${options.providerId})`);
+  log.log(`[I2V]`, `Generating ${toGenerate.length}/${imagePaths.length} clips (×${concurrency} parallel, ${primaryId})`);
 
   let active = 0;
   let nextIdx = 0;
@@ -1839,8 +1855,8 @@ export async function generateClipsFromImages(
             results[i] = videoPath;
             doneCount++;
             if (actualProvider) providerCounts[actualProvider] = (providerCounts[actualProvider] ?? 0) + 1;
-            log.log(`[I2V]`, `${tag} done (${doneCount}/${toGenerate.length}) ${elapsed}s ${size}KB`);
-            ctx.push(`${tag}  OK      ${elapsed}s  ${size}KB  output=${videoPath}`);
+            log.log(`[I2V]`, `${tag} done (${doneCount}/${toGenerate.length}) ${elapsed}s ${size}KB via ${actualProvider ?? "?"}`);
+            ctx.push(`${tag}  OK      ${elapsed}s  ${size}KB  via=${actualProvider ?? "?"}  output=${videoPath}`);
           })
           .catch(async (err) => {
             const elapsed = ((Date.now() - start) / 1000).toFixed(1);

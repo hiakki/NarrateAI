@@ -132,6 +132,24 @@ export function getKeyRotator(envVar: string, aliases?: string[]): KeyRotator {
 }
 
 /**
+ * Reset exhaustion records across ALL singleton KeyRotators.
+ * Call at the start of each new video's I2V generation so providers
+ * whose quotas have reset (daily Leonardo tokens, Pollinations pollen, etc.)
+ * get a fresh chance instead of being blocked by stale exhaustion data.
+ */
+export function resetAllExhaustion(): void {
+  let cleared = 0;
+  for (const [envVar, rotator] of rotators) {
+    if (rotator.availableCount < rotator.count) {
+      log.log(`[${envVar}] Clearing exhaustion records (${rotator.count - rotator.availableCount} exhausted → fresh)`);
+      cleared++;
+    }
+    rotator.reset();
+  }
+  if (cleared > 0) log.log(`Reset exhaustion for ${cleared} provider key pool(s) — fresh start for new video`);
+}
+
+/**
  * Well-known env var alias groups.
  * When a KeyRotator is created for any of these primary vars, it also checks the aliases.
  */

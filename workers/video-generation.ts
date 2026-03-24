@@ -472,11 +472,17 @@ const worker = new Worker<VideoJobData>(
         if (i2vFallback > 0) {
           log.warn(`[I2V]`, `${i2vFallback}/${imagePaths!.length} scenes fell back to static images (providers exhausted)`);
           fl?.worker(`I2V WARNING: ${i2vFallback}/${imagePaths!.length} scenes fell back to static images`);
+          const failLines = i2vCtx.filter((l) => l.includes("FAILED") || l.includes("SKIP"));
+          for (const line of failLines.slice(0, 10)) {
+            fl?.worker(`I2V DETAIL: ${line.trim()}`);
+          }
         }
         log.log(`[I2V]`, `IMAGE-TO-VIDEO done: ${i2vSuccess} clips + ${i2vFallback} static = ${sceneInputs.length} total`);
         fl?.worker(`I2V DONE: ${i2vSuccess} clips + ${i2vFallback} static = ${sceneInputs.length} total`);
         if (i2vSuccess === 0) {
           fl?.worker(`I2V ALERT: 0 clips generated — all ${imagePaths!.length} scenes using static images`);
+          const chainLine = i2vCtx.find((l) => l.startsWith("Fallback chain"));
+          if (chainLine) fl?.worker(`I2V CHAIN: ${chainLine}`);
         }
         recordStageEnd(checkpoint, "I2V");
       } else {
