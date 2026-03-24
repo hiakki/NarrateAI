@@ -21,15 +21,8 @@ import {
   CalendarClock, Heart, BarChart2, Search, ChevronDown, ChevronRight,
   CheckSquare, Square as SquareIcon, StopCircle,
 } from "lucide-react";
-
-interface PlatformEntry {
-  platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted";
-  postId?: string;
-  url?: string;
-  error?: string;
-  scheduledFor?: string;
-}
+import { timeAgo, formatNumber } from "@/lib/format-utils";
+import { PlatformEntry, parsePlatformEntries } from "@/lib/platform-utils";
 
 interface ClipVideo {
   id: string;
@@ -147,37 +140,6 @@ const FREQ_PER_DAY: Record<string, number> = {
   weekly: 1 / 7,
 };
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
-function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<string, PlatformEntry> {
-  const map = new Map<string, PlatformEntry>();
-  for (const p of raw) {
-    if (typeof p === "string") {
-      map.set(p, { platform: p, success: true });
-    } else {
-      const entry = { ...p };
-      if (entry.success === undefined && (entry.postId || entry.url)) entry.success = true;
-      map.set(entry.platform, entry);
-    }
-  }
-  return map;
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
 export default function ClipRepurposePage() {
   const [automations, setAutomations] = useState<ClipAutomation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -264,6 +226,53 @@ export default function ClipRepurposePage() {
     const iv = setInterval(fetchData, 5000);
     return () => clearInterval(iv);
   }, [hasActiveWork, fetchData]);
+
+  const sortedAutomations = useMemo(
+    () => [...automations].sort((a, b) => {
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+      const ta = a.postTime ?? "";
+      const tb = b.postTime ?? "";
+      if (ta !== tb) return ta.localeCompare(tb);
+      return a.name.localeCompare(b.name);
+    }),
+    [automations],
+  );
+
+  const filteredAutomations = useMemo(() => {
+    const lowerQ = searchQuery.toLowerCase();
+    return sortedAutomations.filter((a) => {
+      if (!searchQuery) return true;
+      const niche = a.clipConfig?.clipNiche ?? "";
+      const nicheLabel = CLIP_NICHES[niche]?.label ?? "";
+      const platLabels = (a.targetPlatforms ?? []).map((p) => PLATFORM_CFG[p]?.label ?? p).join(" ");
+      if (
+        a.name.toLowerCase().includes(lowerQ) ||
+        nicheLabel.toLowerCase().includes(lowerQ) ||
+        platLabels.toLowerCase().includes(lowerQ)
+      ) return true;
+      const videos = a.series?.videos ?? [];
+      return videos.some((v) => {
+        if (
+          v.title?.toLowerCase().includes(lowerQ) ||
+          v.sourceMetadata?.channelName?.toLowerCase().includes(lowerQ) ||
+          v.sourceMetadata?.originalTitle?.toLowerCase().includes(lowerQ) ||
+          v.id.toLowerCase().includes(lowerQ) ||
+          v.sourceUrl?.toLowerCase().includes(lowerQ)
+        ) return true;
+        const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
+        return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(lowerQ));
+      });
+    });
+  }, [sortedAutomations, searchQuery]);
+
+  const recentClipsPreview = useMemo(
+    () =>
+      automations
+        .flatMap((a) => (a.series?.videos ?? []).map((v) => ({ ...v, autoName: a.name })))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 10),
+    [automations],
+  );
 
   /* ---- existing actions ---- */
 
@@ -411,14 +420,6 @@ export default function ClipRepurposePage() {
 
   /* ---- computed values ---- */
 
-  const sortedAutomations = [...automations].sort((a, b) => {
-    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-    const ta = a.postTime ?? "";
-    const tb = b.postTime ?? "";
-    if (ta !== tb) return ta.localeCompare(tb);
-    return a.name.localeCompare(b.name);
-  });
-
   const enabledAutomations = sortedAutomations.filter((a) => a.enabled);
   const pausedAutomations = sortedAutomations.filter((a) => !a.enabled);
   const activeGenerations = sortedAutomations.filter((a) => {
@@ -428,31 +429,6 @@ export default function ClipRepurposePage() {
   const automationsWithFailedVideo = sortedAutomations.filter(
     (a) => a.series?.lastVideo?.status === "FAILED",
   );
-
-  const lowerQ = searchQuery.toLowerCase();
-  const filteredAutomations = sortedAutomations.filter((a) => {
-    if (!searchQuery) return true;
-    const niche = a.clipConfig?.clipNiche ?? "";
-    const nicheLabel = CLIP_NICHES[niche]?.label ?? "";
-    const platLabels = (a.targetPlatforms ?? []).map((p) => PLATFORM_CFG[p]?.label ?? p).join(" ");
-    if (
-      a.name.toLowerCase().includes(lowerQ) ||
-      nicheLabel.toLowerCase().includes(lowerQ) ||
-      platLabels.toLowerCase().includes(lowerQ)
-    ) return true;
-    const videos = a.series?.videos ?? [];
-    return videos.some((v) => {
-      if (
-        v.title?.toLowerCase().includes(lowerQ) ||
-        v.sourceMetadata?.channelName?.toLowerCase().includes(lowerQ) ||
-        v.sourceMetadata?.originalTitle?.toLowerCase().includes(lowerQ) ||
-        v.id.toLowerCase().includes(lowerQ) ||
-        v.sourceUrl?.toLowerCase().includes(lowerQ)
-      ) return true;
-      const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
-      return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(lowerQ));
-    });
-  });
 
   const activeFiltered = filteredAutomations.filter((a) => a.enabled);
   const pausedFiltered = filteredAutomations.filter((a) => !a.enabled);
@@ -1634,18 +1610,14 @@ export default function ClipRepurposePage() {
             <Film className="w-5 h-5" /> Recent Clips
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {automations.flatMap((a) =>
-              (a.series?.videos ?? []).map((v) => ({ ...v, autoName: a.name })),
-            )
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-            .slice(0, 10)
-            .map((v) => (
+            {recentClipsPreview.map((v) => (
               <Link key={v.id} href={`/dashboard/videos/${v.id}`}>
                 <div className="rounded-lg border overflow-hidden hover:border-primary/50 transition-colors group">
                   {v.videoUrl && v.status === "READY" ? (
                     <video
                       src={v.videoUrl}
                       className="w-full aspect-[9/16] object-cover bg-black"
+                      preload="none"
                       muted
                       playsInline
                       onMouseEnter={(e) => { (e.target as HTMLVideoElement).play().catch(() => {}); }}

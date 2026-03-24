@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { InsightsReport, ReportSuggestion } from "@/app/api/insights/report/route";
 import { computeNicheScore, getSuggestionsToImproveScore, type NicheScoreConfig } from "@/lib/niche-score";
+import { formatNumber } from "@/lib/format-utils";
 
 type SortKey = "name" | "niche" | "platforms" | "videoCount" | "totalViews" | "viewsPerVideo" | "totalInteractions" | "nicheScore";
 type AutomationRow = NonNullable<InsightsReport["scorecard"]>["byAutomation"][number];
@@ -38,12 +39,6 @@ function getNicheScoreForRow(row: AutomationRow): number {
 
 function getSuggestionsThatIncreaseScore(row: AutomationRow) {
   return getSuggestionsToImproveScore(rowToNicheConfig(row), row.timezone ?? "UTC");
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(Math.round(n));
 }
 
 export default function ReportPage() {

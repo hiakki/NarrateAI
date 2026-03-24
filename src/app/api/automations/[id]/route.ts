@@ -61,7 +61,28 @@ export async function GET(
       include: {
         series: {
           include: {
-            videos: { orderBy: { createdAt: "desc" }, take: limit, skip: offset },
+            videos: {
+              orderBy: { createdAt: "desc" },
+              take: limit,
+              skip: offset,
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                videoUrl: true,
+                thumbnailUrl: true,
+                duration: true,
+                sourceUrl: true,
+                sourceMetadata: true,
+                postedPlatforms: true,
+                scheduledPostTime: true,
+                scheduledPlatforms: true,
+                createdAt: true,
+                updatedAt: true,
+                errorMessage: true,
+                retryCount: true,
+              },
+            },
             _count: { select: { videos: true } },
           },
         },

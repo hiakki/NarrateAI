@@ -14,6 +14,13 @@ import { resolveProviders } from "../src/services/providers/resolve";
 import { getDefaultVoiceId } from "../src/config/voices";
 import { createLogger, runWithAutomationIdAsync } from "../src/lib/logger";
 import { getAutomationFileLogger, cleanupOldLogs } from "../src/lib/file-logger";
+import {
+  BUILD_ALL_TIME,
+  BUILD_ALL_TIMEZONE,
+  BUILD_WINDOW_MINUTES,
+  localTimeToUTC,
+  shouldBuildNow,
+} from "../src/lib/scheduler-utils";
 
 const db = new PrismaClient();
 const logger = createLogger("Scheduler");
@@ -24,10 +31,6 @@ const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
 const FAILED_RETRY_AFTER_MS = 10 * 60 * 1000; // retry FAILED after 10 min
 const MAX_AUTO_RETRIES = 3;
-
-const BUILD_ALL_TIME = process.env.BUILD_ALL_TIME ?? "04:00";
-const BUILD_ALL_TIMEZONE = process.env.BUILD_ALL_TIMEZONE ?? "Asia/Kolkata";
-const BUILD_WINDOW_MINUTES = 60;
 
 interface AutoUser {
   id: string;
@@ -87,116 +90,6 @@ interface FailedVideoRow {
     character?: { fullPrompt: string } | null;
     user: AutoUser;
   };
-}
-
-function isInBuildWindow(): boolean {
-  const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: BUILD_ALL_TIMEZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
-  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
-  const nowMin = h * 60 + m;
-  const buildMin = buildH * 60 + buildM;
-  return nowMin >= buildMin && nowMin < buildMin + BUILD_WINDOW_MINUTES;
-}
-
-function hasRunToday(lastRunAt: Date | null, timezone: string): boolean {
-  if (!lastRunAt) return false;
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return fmt.format(new Date()) === fmt.format(lastRunAt);
-}
-
-/**
- * Calendar-day distance between now and lastRunAt in the given timezone.
- * Returns Infinity if lastRunAt is null (i.e. never ran, always due).
- */
-function calendarDaysSinceRun(lastRunAt: Date | null, timezone: string): number {
-  if (!lastRunAt) return Infinity;
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
-  });
-  const todayStr = fmt.format(new Date());
-  const lastStr = fmt.format(lastRunAt);
-  const todayMs = new Date(todayStr + "T00:00:00Z").getTime();
-  const lastMs = new Date(lastStr + "T00:00:00Z").getTime();
-  return Math.round((todayMs - lastMs) / (24 * 60 * 60 * 1000));
-}
-
-function localTimeToUTC(timeStr: string, tz: string): Date {
-  const [targetH, targetM] = timeStr.split(":").map(Number);
-  const now = new Date();
-  const dateParts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(now);
-  const year = parseInt(dateParts.find((p) => p.type === "year")!.value);
-  const month = parseInt(dateParts.find((p) => p.type === "month")!.value) - 1;
-  const day = parseInt(dateParts.find((p) => p.type === "day")!.value);
-
-  // Estimate UTC offset using noon as a safe reference (avoids midnight hour ambiguity)
-  const noonUtc = new Date(Date.UTC(year, month, day, 12, 0, 0));
-  const noonParts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  }).formatToParts(noonUtc);
-  const noonH = parseInt(noonParts.find((p) => p.type === "hour")!.value);
-  const noonM = parseInt(noonParts.find((p) => p.type === "minute")!.value);
-  const offsetMin = (noonH * 60 + noonM) - 720;
-
-  const targetUtcMin = targetH * 60 + targetM - offsetMin;
-  let guess = new Date(Date.UTC(year, month, day, 0, targetUtcMin, 0));
-
-  // One verification pass to handle DST edge cases
-  for (let i = 0; i < 3; i++) {
-    const lp = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "numeric",
-      minute: "numeric",
-      hour12: false,
-    }).formatToParts(guess);
-    const lh = parseInt(lp.find((p) => p.type === "hour")!.value);
-    const lm = parseInt(lp.find((p) => p.type === "minute")!.value);
-    const diff = (targetH * 60 + targetM) - (lh * 60 + lm);
-    if (diff === 0) break;
-    guess = new Date(guess.getTime() + diff * 60000);
-  }
-  return guess;
-}
-
-function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
-  const freqDays: Record<string, number> = { daily: 1, every_other_day: 2, weekly: 7 };
-  const gapDays = freqDays[auto.frequency] ?? 1;
-  const tz = auto.timezone || BUILD_ALL_TIMEZONE;
-  const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
-
-  if (daysSince < gapDays) {
-    return { build: false, reason: `ran ${daysSince}d ago (calendar), need ${gapDays}d gap` };
-  }
-
-  if (isInBuildWindow()) {
-    return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
-  }
-
-  // Catch-up: automation is overdue (missed its build window) — run immediately
-  if (daysSince > gapDays) {
-    return { build: true, reason: `catch-up: missed ${daysSince - gapDays}d, running now outside window` };
-  }
-
-  return { build: false, reason: "outside build window" };
 }
 
 async function writeSchedulerLog(

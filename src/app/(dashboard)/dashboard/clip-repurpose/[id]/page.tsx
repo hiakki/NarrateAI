@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -11,14 +11,8 @@ import {
   ExternalLink, CheckCircle2, XCircle, AlertCircle, Instagram,
   Youtube, Facebook, Share2, Smartphone, Zap, Search, X,
 } from "lucide-react";
-
-interface PlatformEntry {
-  platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted";
-  postId?: string;
-  url?: string;
-  error?: string;
-}
+import { timeAgo, formatNumber } from "@/lib/format-utils";
+import { PlatformEntry } from "@/lib/platform-utils";
 
 interface ClipVideo {
   id: string;
@@ -67,23 +61,6 @@ const STATUS_CFG: Record<string, { label: string; cls: string; icon: typeof Chec
   FAILED:     { label: "Failed",     cls: "text-red-700 bg-red-50",      icon: XCircle },
 };
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
-function formatViews(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return String(n);
-}
-
 const ALL_STATUSES = ["QUEUED", "GENERATING", "READY", "POSTED", "FAILED"] as const;
 
 export default function ClipAutomationDetailPage() {
@@ -107,6 +84,35 @@ export default function ClipAutomationDetailPage() {
   }, [id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  const allVideos = useMemo(() => auto?.series?.videos ?? [], [auto]);
+
+  const filteredVideos = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    return allVideos.filter((v) => {
+      if (statusFilter && v.status !== statusFilter) return false;
+      if (!query) return true;
+      if (
+        v.title?.toLowerCase().includes(query) ||
+        v.sourceMetadata?.channelName?.toLowerCase().includes(query) ||
+        v.sourceMetadata?.originalTitle?.toLowerCase().includes(query) ||
+        v.sourceMetadata?.platform?.toLowerCase().includes(query) ||
+        v.id.toLowerCase().includes(query) ||
+        v.sourceUrl?.toLowerCase().includes(query)
+      ) return true;
+      const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
+      return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(query));
+    });
+  }, [allVideos, searchQuery, statusFilter]);
+
+  const statusCounts = useMemo(
+    () =>
+      ALL_STATUSES.reduce((acc, s) => {
+        acc[s] = allVideos.filter((v) => v.status === s).length;
+        return acc;
+      }, {} as Record<string, number>),
+    [allVideos],
+  );
 
   const triggerClip = async () => {
     setTriggering(true);
@@ -140,29 +146,6 @@ export default function ClipAutomationDetailPage() {
       </div>
     );
   }
-
-  const allVideos = auto.series?.videos ?? [];
-
-  const query = searchQuery.toLowerCase().trim();
-  const filteredVideos = allVideos.filter((v) => {
-    if (statusFilter && v.status !== statusFilter) return false;
-    if (!query) return true;
-    if (
-      v.title?.toLowerCase().includes(query) ||
-      v.sourceMetadata?.channelName?.toLowerCase().includes(query) ||
-      v.sourceMetadata?.originalTitle?.toLowerCase().includes(query) ||
-      v.sourceMetadata?.platform?.toLowerCase().includes(query) ||
-      v.id.toLowerCase().includes(query) ||
-      v.sourceUrl?.toLowerCase().includes(query)
-    ) return true;
-    const entries = (v.postedPlatforms ?? []) as PlatformEntry[];
-    return entries.some((e) => typeof e === "object" && e.url?.toLowerCase().includes(query));
-  });
-
-  const statusCounts = ALL_STATUSES.reduce((acc, s) => {
-    acc[s] = allVideos.filter((v) => v.status === s).length;
-    return acc;
-  }, {} as Record<string, number>);
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
@@ -290,6 +273,7 @@ export default function ClipAutomationDetailPage() {
                     <video
                       src={v.videoUrl}
                       className="w-full aspect-[9/16] object-cover bg-black"
+                      preload="none"
                       muted
                       playsInline
                       onMouseEnter={(e) => { (e.target as HTMLVideoElement).play().catch(() => {}); }}
@@ -327,7 +311,7 @@ export default function ClipAutomationDetailPage() {
                         {v.sourceMetadata.channelName && <span>from {v.sourceMetadata.channelName}</span>}
                         {v.sourceMetadata.viewCount ? (
                           <span className="flex items-center gap-0.5">
-                            <Eye className="w-2.5 h-2.5" /> {formatViews(v.sourceMetadata.viewCount)}
+                            <Eye className="w-2.5 h-2.5" /> {formatNumber(v.sourceMetadata.viewCount)}
                           </span>
                         ) : null}
                         {v.sourceMetadata.peakSegment && (

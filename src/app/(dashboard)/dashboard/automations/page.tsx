@@ -18,15 +18,8 @@ import {
   AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { formatPlatformError } from "@/lib/format-platform-error";
-
-interface PlatformEntry {
-  platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted";
-  postId?: string;
-  url?: string;
-  error?: string;
-  startedAt?: number;
-}
+import { timeAgo } from "@/lib/format-utils";
+import { PlatformEntry, parsePlatformEntries } from "@/lib/platform-utils";
 
 interface LastVideo {
   id: string;
@@ -165,33 +158,6 @@ function isMissed(auto: Automation): boolean {
   if (!auto.lastRunAt) return true;
   const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (1000 * 60 * 60);
   return hours > threshold;
-}
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
-function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<string, PlatformEntry> {
-  const map = new Map<string, PlatformEntry>();
-  for (const p of raw) {
-    if (typeof p === "string") {
-      map.set(p, { platform: p, success: true });
-    } else {
-      const entry = { ...p };
-      if (entry.success === undefined && (entry.postId || entry.url)) {
-        entry.success = true;
-      }
-      map.set(entry.platform, entry);
-    }
-  }
-  return map;
 }
 
 function normalizePlatforms(raw: unknown): string[] {

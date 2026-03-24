@@ -10,6 +10,8 @@ import {
   ChevronDown, Timer, History, Terminal, FileText, ChevronLeft, ChevronRight,
 } from "lucide-react";
 
+import { formatRelative, timeAgo, formatAbsolute } from "@/lib/format-utils";
+
 /* ─────────────────────────── Types ─────────────────────────── */
 
 interface StuckVideo {
@@ -61,69 +63,26 @@ interface SchedulerAutomation {
 
 /* ──────────────────────── Helpers ──────────────────────── */
 
-function formatRelative(date: Date): string {
-  const now = Date.now();
-  const diff = date.getTime() - now;
-
-  if (diff < 0) {
-    const ago = Math.abs(diff);
-    if (ago < 60_000) return "just now";
-    if (ago < 3600_000) return `${Math.floor(ago / 60_000)}m ago`;
-    if (ago < 86_400_000) return `${Math.floor(ago / 3600_000)}h ${Math.floor((ago % 3600_000) / 60_000)}m ago`;
-    return `${Math.floor(ago / 86_400_000)}d ago`;
-  }
-  if (diff < 60_000) return "< 1m";
-  if (diff < 3600_000) return `in ${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `in ${Math.floor(diff / 3600_000)}h ${Math.floor((diff % 3600_000) / 60_000)}m`;
-  return `in ${Math.floor(diff / 86_400_000)}d`;
-}
-
-function formatAbsolute(dateStr: string, tz?: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    }).format(new Date(dateStr));
-  } catch {
-    return new Date(dateStr).toLocaleString();
-  }
-}
-
-function timeAgo(dateStr: string): string {
-  return formatRelative(new Date(dateStr));
-}
-
 function autoLink(auto: SchedulerAutomation) {
   return auto.automationType === "clip-repurpose"
     ? `/dashboard/clip-repurpose`
     : `/dashboard/automations/${auto.id}`;
 }
 
-const FREQ_EXPECTED_GAP_H: Record<string, number> = {
-  daily: 26,
-  every_other_day: 50,
-  weekly: 170,
-};
-
 function isMissed(auto: SchedulerAutomation): boolean {
   if (!auto.enabled) return false;
-  if (!auto.lastRunAt) return true;
-  const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (60 * 60 * 1000);
-  const threshold = FREQ_EXPECTED_GAP_H[auto.frequency] ?? 26;
-  return hours > threshold;
+  if (!auto.nextRunAt) return false;
+  return new Date(auto.nextRunAt).getTime() <= Date.now();
 }
 
 function missedSeverity(auto: SchedulerAutomation): "none" | "warning" | "critical" {
   if (!auto.enabled) return "none";
-  if (!auto.lastRunAt) return "critical";
-  const hours = (Date.now() - new Date(auto.lastRunAt).getTime()) / (60 * 60 * 1000);
-  const threshold = FREQ_EXPECTED_GAP_H[auto.frequency] ?? 26;
-  if (hours > threshold * 3) return "critical";
-  if (hours > threshold) return "warning";
+  if (!auto.nextRunAt) return "none";
+  const overdueMs = Date.now() - new Date(auto.nextRunAt).getTime();
+  if (overdueMs <= 0) return "none";
+  const overdueH = overdueMs / (60 * 60 * 1000);
+  if (overdueH > 48) return "critical";
+  if (overdueH > 0) return "warning";
   return "none";
 }
 
@@ -190,9 +149,9 @@ export default function SchedulerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (silent?: boolean) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await fetch("/api/scheduler");
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
@@ -207,7 +166,7 @@ export default function SchedulerPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => {
-    const interval = setInterval(fetchData, 30_000);
+    const interval = setInterval(() => fetchData(true), 30_000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -226,7 +185,7 @@ export default function SchedulerPage() {
             Sorted by next post time &middot; auto-refreshes every 30s
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => fetchData()} disabled={loading}>
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
