@@ -12,6 +12,7 @@ import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
+import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
 import {
   buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath,
   scenesAbsDir, voiceoverAbsPath, contextAbsPath, scriptAbsPath,
@@ -111,12 +112,16 @@ const worker = new Worker<VideoJobData>(
   "video-generation",
   async (job) => {
     const {
-      videoId, userId, userName, automationName, artStylePrompt, negativePrompt,
+      videoId, userId, userName, automationId, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
       tone, niche, artStyle, reviewMode, characterPrompt, imageToVideoProvider,
       aspectRatio: jobAspectRatio,
     } = job.data;
     const aspectRatio = jobAspectRatio ?? "9:16";
+
+    const fl: AutomationFileLogger | null = automationId
+      ? getAutomationFileLogger(userId, userName ?? "user", automationId, automationName ?? "automation")
+      : null;
 
     return runWithVideoIdAsync(videoId, async () => {
     const videoExists = await db.video.findUnique({ where: { id: videoId }, select: { id: true } });
@@ -146,6 +151,7 @@ const worker = new Worker<VideoJobData>(
       await saveCheckpoint(videoId, { ...checkpoint });
       await updateStage(videoId, "SCRIPT");
       log.log(`[SCRIPT]`, `SCRIPT generating (LLM=${llmProvider})…`);
+      fl?.worker(`SCRIPT: generating (LLM=${llmProvider})`);
 
       const seriesId = job.data.seriesId;
       const recentVideos = seriesId
@@ -206,6 +212,7 @@ const worker = new Worker<VideoJobData>(
 
     log.log(`[START]`, `LLM=${llmProvider} TTS=${ttsProvider} IMG=${imageProvider} | scenes=${scenes.length} resumed=[${[...completed].join(",")}]`);
     log.log(`[START]`, `${isResume ? "RESUME" : "CREATED"} dir: public/${relDir}/`);
+    fl?.worker(`JOB START: video=${videoId}, scenes=${scenes.length}, I2V=${imageToVideoProvider || "none"}, LLM=${llmProvider}, TTS=${ttsProvider}, IMG=${imageProvider}`);
 
     checkpoint.usedProviders = {
       tts: TTS_PROVIDERS[ttsProvider]?.name ?? ttsProvider,
@@ -400,8 +407,8 @@ const worker = new Worker<VideoJobData>(
       if (imageToVideoProvider && !reviewMode && imagePaths!.length > 0) {
         recordStageStart(checkpoint, "I2V");
         await updateStage(videoId, "I2V");
+        fl?.worker(`I2V START: provider=${imageToVideoProvider}, scenes=${imagePaths!.length}`);
 
-        // Scan for existing valid clips — skip on retry, delete corrupt ones
         const existingClips = new Map<number, string>();
         for (let i = 0; i < imagePaths!.length; i++) {
           const dest = path.join(scDir, `scene-${i.toString().padStart(3, "0")}-clip.mp4`);
@@ -420,6 +427,7 @@ const worker = new Worker<VideoJobData>(
         );
         const toGenerate = Math.min(imagePaths!.length, maxSlots) - existingClips.size;
         log.log(`[I2V]`, `${toGenerate} to generate, ${existingClips.size} cached, allocation: ${allocReason} — ${imageToVideoProvider}`);
+        fl?.worker(`I2V: ${toGenerate} to generate, ${existingClips.size} cached, maxSlots=${maxSlots} (${allocReason})`);
 
         const prompts = imageSlots.map((s, i) =>
           buildImageToVideoPrompt(s.visualDescription, i, imageSlots.length),
@@ -459,9 +467,19 @@ const worker = new Worker<VideoJobData>(
         }
         if (i2vFallback > 0) {
           log.warn(`[I2V]`, `${i2vFallback}/${imagePaths!.length} scenes fell back to static images (providers exhausted)`);
+          fl?.worker(`I2V WARNING: ${i2vFallback}/${imagePaths!.length} scenes fell back to static images`);
         }
         log.log(`[I2V]`, `IMAGE-TO-VIDEO done: ${i2vSuccess} clips + ${i2vFallback} static = ${sceneInputs.length} total`);
+        fl?.worker(`I2V DONE: ${i2vSuccess} clips + ${i2vFallback} static = ${sceneInputs.length} total`);
+        if (i2vSuccess === 0) {
+          fl?.worker(`I2V ALERT: 0 clips generated — all ${imagePaths!.length} scenes using static images`);
+        }
         recordStageEnd(checkpoint, "I2V");
+      } else {
+        const reason = !imageToVideoProvider ? "no I2V provider configured"
+          : reviewMode ? "review mode"
+          : "no images available";
+        fl?.worker(`I2V SKIPPED: ${reason}`);
       }
 
       // ── Audio FX (AI BGM + per-scene SFX) ──
@@ -569,6 +587,7 @@ const worker = new Worker<VideoJobData>(
         aspectRatio,
       });
       log.log(`[ASSEMBLE]`, `ASSEMBLY done`);
+      fl?.worker(`ASSEMBLY DONE: video=${videoId}`);
 
       recordStageEnd(checkpoint, "ASSEMBLY");
       await saveCheckpoint(videoId, { ...checkpoint });
@@ -593,17 +612,25 @@ const worker = new Worker<VideoJobData>(
       });
 
       log.log(`[READY]`, `${videoId} → ${relVideoUrl}`);
+      fl?.worker(`READY: video=${videoId} → ${relVideoUrl}`);
 
       try {
         const results = await postVideoToSocials(videoId);
         if (results.length > 0) {
           const posted = results.filter((r) => r.success).map((r) => r.platform);
           const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-          if (posted.length > 0) log.log(`[POST]`, `POSTED → ${posted.join(", ")}`);
-          if (failed.length > 0) log.warn(`[POST]`, `POST_FAIL: ${failed.join("; ")}`);
+          if (posted.length > 0) {
+            log.log(`[POST]`, `POSTED → ${posted.join(", ")}`);
+            fl?.worker(`POST OK: ${posted.join(", ")}`);
+          }
+          if (failed.length > 0) {
+            log.warn(`[POST]`, `POST_FAIL: ${failed.join("; ")}`);
+            fl?.worker(`POST FAIL: ${failed.join("; ")}`);
+          }
         }
       } catch (postErr) {
         log.warn(`[POST]`, `POST_ERR:`, postErr);
+        fl?.worker(`POST ERROR: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -614,6 +641,7 @@ const worker = new Worker<VideoJobData>(
       }
       log.error(`[ERR]`, `FAILED: ${msg}`);
       if (error instanceof Error && error.stack) log.error(`[ERR]`, `Stack: ${error.stack}`);
+      fl?.worker(`FAILED: video=${videoId} — ${msg.slice(0, 300)}`);
 
       try {
         const cp = await loadCheckpoint(videoId);
