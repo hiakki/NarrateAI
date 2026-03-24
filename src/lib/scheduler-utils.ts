@@ -101,11 +101,19 @@ export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: 
     return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
   }
 
+  // Overdue by more than one cycle — catch up immediately
   if (daysSince > gapDays) {
-    return { build: true, reason: `catch-up: missed ${daysSince - gapDays}d, running now outside window` };
+    return { build: true, reason: `catch-up: overdue by ${daysSince - gapDays}d, running now` };
   }
 
-  return { build: false, reason: "outside build window" };
+  // Due today (daysSince == gapDays) but build window already passed — catch up now
+  const todayBuild = localTimeToUTC(BUILD_ALL_TIME, BUILD_ALL_TIMEZONE);
+  const windowEnd = todayBuild.getTime() + BUILD_WINDOW_MINUTES * 60000;
+  if (Date.now() > windowEnd) {
+    return { build: true, reason: `catch-up: missed today's ${BUILD_ALL_TIME} window, running now` };
+  }
+
+  return { build: false, reason: "outside build window, waiting for today's window" };
 }
 
 interface NextRunAuto {
