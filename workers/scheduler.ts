@@ -178,10 +178,6 @@ function localTimeToUTC(timeStr: string, tz: string): Date {
 }
 
 function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
-  if (!isInBuildWindow()) {
-    return { build: false, reason: "outside build window" };
-  }
-
   const freqDays: Record<string, number> = { daily: 1, every_other_day: 2, weekly: 7 };
   const gapDays = freqDays[auto.frequency] ?? 1;
   const tz = auto.timezone || BUILD_ALL_TIMEZONE;
@@ -191,7 +187,16 @@ function shouldBuildNow(auto: AutoRow): { build: boolean; reason: string } {
     return { build: false, reason: `ran ${daysSince}d ago (calendar), need ${gapDays}d gap` };
   }
 
-  return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
+  if (isInBuildWindow()) {
+    return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
+  }
+
+  // Catch-up: automation is overdue (missed its build window) — run immediately
+  if (daysSince > gapDays) {
+    return { build: true, reason: `catch-up: missed ${daysSince - gapDays}d, running now outside window` };
+  }
+
+  return { build: false, reason: "outside build window" };
 }
 
 async function writeSchedulerLog(
