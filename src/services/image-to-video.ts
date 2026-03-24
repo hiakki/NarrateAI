@@ -1776,11 +1776,34 @@ export async function generateClipsFromImages(
     return { results, ctxLines: ctx };
   }
 
+  // Pre-check: if every provider in the fallback chain is already exhausted, skip immediately
+  const chain = buildFallbackChain(options.providerId ?? "SVD_REPLICATE");
+  const exhaustedProviders: string[] = [];
+  let anyAvailable = false;
+  for (const p of chain) {
+    if (KEY_ROTATABLE_TYPES.has(p.type) && p.envVar) {
+      const rotator = getKeyRotator(p.envVar);
+      if (rotator.availableCount > 0) { anyAvailable = true; break; }
+      exhaustedProviders.push(PROVIDER_FRIENDLY_NAMES[p.id] ?? p.id);
+    } else if (p.type === "local" || p.type === "replicate") {
+      anyAvailable = true; break;
+    }
+  }
+  if (!anyAvailable && chain.length > 0) {
+    const msg = `All ${exhaustedProviders.length} I2V providers currently exhausted — skipping I2V entirely. Exhausted: ${exhaustedProviders.join(", ")}`;
+    log.warn(`[I2V]`, msg);
+    ctx.push(`SKIPPED: ${msg}`);
+    ctx.push("");
+    ctx.push(`Result: 0 ok, 0 failed, ${existing?.size ?? 0} cached, ${toGenerate.length} skipped (all providers exhausted)`);
+    return { results, ctxLines: ctx };
+  }
+
   log.log(`[I2V]`, `Generating ${toGenerate.length}/${imagePaths.length} clips (×${concurrency} parallel, ${options.providerId})`);
 
   let active = 0;
   let nextIdx = 0;
   let doneCount = 0;
+  let circuitOpen = false;
   const errors: Array<{ idx: number; msg: string }> = [];
 
   await new Promise<void>((resolve) => {
@@ -1792,6 +1815,16 @@ export async function generateClipsFromImages(
         const i = toGenerate[qIdx];
         const tag = `scene-${i.toString().padStart(3, "0")}`;
         active++;
+
+        if (circuitOpen) {
+          const msg = "skipped (all providers exhausted by earlier scene)";
+          ctx.push(`${tag}  SKIP    ${msg}`);
+          errors.push({ idx: i, msg });
+          active--;
+          completed++;
+          if (completed === toGenerate.length) { resolve(); return; }
+          continue;
+        }
 
         const start = Date.now();
         generateClipFromImage(imagePaths[i], {
@@ -1816,6 +1849,10 @@ export async function generateClipsFromImages(
             ctx.push(`${tag}  FAILED  ${elapsed}s  error=${msg}`);
             errors.push({ idx: i, msg });
             results[i] = null;
+            if (msg.includes("All I2V providers exhausted")) {
+              circuitOpen = true;
+              log.warn(`[I2V]`, `Circuit breaker tripped — remaining scenes will use static images`);
+            }
           })
           .finally(() => {
             active--;

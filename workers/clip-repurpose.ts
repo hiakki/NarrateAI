@@ -301,10 +301,12 @@ const worker = new Worker<ClipRepurposeJobData>(
       };
 
       log.log(`[HEATMAP]`, `Peak: ${peak.startSec}-${peak.endSec}s (${peak.endSec - peak.startSec}s total: pre=${timingBreakdown.preContext.durationSec}s, main=${coreLen}s, post=${timingBreakdown.postContext.durationSec}s, heat: ${peak.avgHeat.toFixed(2)})`);
+      fl?.worker(`HEATMAP: ${peak.startSec}-${peak.endSec}s (${peak.endSec - peak.startSec}s, heat=${peak.avgHeat.toFixed(2)}, pre=${timingBreakdown.preContext.durationSec}s+core=${coreLen}s+post=${timingBreakdown.postContext.durationSec}s)`);
 
       // ── Stage 4: CLIPPING (extract + crop to 9:16) ──
       await updateStage(videoId, "CLIPPING");
       log.log(`[CLIPPING]`, `Cutting clip with context and converting to 9:16...`);
+      fl?.worker(`CLIPPING: ${peak.startSec}-${peak.endSec}s, mode=${clipConfig.cropMode || "blur-bg"}`);
 
       const croppedPath = path.join(tmpDir, "cropped.mp4");
       await extractAndCrop(
@@ -318,6 +320,7 @@ const worker = new Worker<ClipRepurposeJobData>(
       // ── Stage 5: ENHANCE (captions + blur + hook text) ──
       await updateStage(videoId, "ENHANCE");
       log.log(`[ENHANCE]`, `Adding captions and hook text...`);
+      fl?.worker(`ENHANCE: adding captions and hook text`);
 
       // Detect speech regions in the cropped clip for subtitle alignment
       const speechSegments = await detectSpeechSegments(croppedPath);
@@ -360,6 +363,7 @@ const worker = new Worker<ClipRepurposeJobData>(
         partNumber,
       );
       log.log(`[METADATA]`, `Title: "${title}" (Part ${partNumber})`);
+      fl?.worker(`METADATA: "${title}" (Part ${partNumber})`);
 
       // ── Stage 6: FINALIZE ──
       await updateStage(videoId, "FINALIZE");

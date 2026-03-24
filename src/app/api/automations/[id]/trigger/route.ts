@@ -111,6 +111,7 @@ export async function POST(
       seriesId: auto.seriesId,
       userId: auto.user.id,
       userName: auto.user.name ?? auto.user.email?.split("@")[0] ?? "user",
+      automationId: auto.id,
       automationName: auto.name,
       artStyle: auto.artStyle,
       artStylePrompt: artStyle?.promptModifier ?? "cinematic, high quality",

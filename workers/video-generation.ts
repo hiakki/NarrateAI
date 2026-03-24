@@ -269,6 +269,7 @@ const worker = new Worker<VideoJobData>(
         completed.add("SCRIPT");
         await saveCheckpoint(videoId, { ...checkpoint, completedStages: [...completed], relDir });
         log.log(`[SCRIPT]`, `SCRIPT done "${title}" (${scriptText.length} chars). Full input prompt and LLM output logged in public/${relDir}/context.txt`);
+        fl?.worker(`SCRIPT DONE: "${title}" — ${scenes.length} scenes, ${scriptText.length} chars`);
       }
 
       // ── TTS ──
@@ -305,6 +306,7 @@ const worker = new Worker<VideoJobData>(
         });
         audioPath = localVoiceover;
         log.log(`[TS]`, `TTS done ${durationMs}ms (${ttsProvider}, voice=${resolvedVoice})`);
+        fl?.worker(`TTS DONE: ${(durationMs / 1000).toFixed(1)}s (${ttsProvider}, voice=${resolvedVoice})`);
       } else {
         log.debug(`[TS]`, `TTS skipped (checkpoint ${durationMs}ms)`);
       }
@@ -341,6 +343,7 @@ const worker = new Worker<VideoJobData>(
         );
 
         log.log(`[IMG]`, `IMAGES generating ${targetImageCount} (${imageProvider})`);
+        fl?.worker(`IMAGES: generating ${targetImageCount} (${imageProvider})`);
 
         const imageChain = getImageProviderFallbackChain(imageProvider);
         let imgResult: { imagePaths: string[] } | null = null;
@@ -383,6 +386,7 @@ const worker = new Worker<VideoJobData>(
           musicPath,
         });
         log.log(`[IMG]`, `IMAGES done ${imagePaths.length} images`);
+        fl?.worker(`IMAGES DONE: ${imagePaths.length} images (${actualImageProvider})`);
 
         if (reviewMode) {
           await fs.writeFile(contextAbsPath(relDir), ctx.join("\n"), "utf-8");
@@ -491,6 +495,7 @@ const worker = new Worker<VideoJobData>(
 
       if (!bgmAlreadyDone || !sfxAlreadyDone) {
         log.log(`[AUDIO_FX]`, `Generating AI audio (BGM=${bgmAlreadyDone ? "cached" : "new"}, SFX=${sfxAlreadyDone ? "cached" : "new"})`);
+        fl?.worker(`AUDIO_FX: generating (BGM=${bgmAlreadyDone ? "cached" : "new"}, SFX=${sfxAlreadyDone ? "cached" : "new"})`);
 
         const [bgmResult, sfxResult] = await Promise.all([
           bgmAlreadyDone
@@ -543,6 +548,7 @@ const worker = new Worker<VideoJobData>(
         const bgmStatus = generatedBgmPath ? "AI-generated" : "static fallback";
         const sfxStatus = sfxTrackPath ? `${imageSlots.length} scenes` : "skipped";
         log.log(`[AUDIO_FX]`, `Done — BGM: ${bgmStatus}, SFX: ${sfxStatus}`);
+        fl?.worker(`AUDIO_FX DONE: BGM=${bgmStatus}, SFX=${sfxStatus}`);
       }
 
       // ── Assembly ──
@@ -615,7 +621,7 @@ const worker = new Worker<VideoJobData>(
       fl?.worker(`READY: video=${videoId} → ${relVideoUrl}`);
 
       try {
-        const results = await postVideoToSocials(videoId);
+        const results = await postVideoToSocials(videoId, undefined, undefined, fl ?? undefined);
         if (results.length > 0) {
           const posted = results.filter((r) => r.success).map((r) => r.platform);
           const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);

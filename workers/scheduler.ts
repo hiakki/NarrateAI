@@ -650,7 +650,18 @@ async function checkDeferredInstagramPosts() {
             });
           }
 
-          return await postVideoToSocials(videoId, ["INSTAGRAM"]);
+          const vidRow = await db.video.findUnique({
+            where: { id: videoId },
+            select: { series: { select: { automation: { select: { id: true, name: true } }, user: { select: { id: true, name: true, email: true } } } } },
+          });
+          const igFl = vidRow?.series?.automation && vidRow?.series?.user
+            ? getAutomationFileLogger(vidRow.series.user.id, vidRow.series.user.name ?? vidRow.series.user.email?.split("@")[0] ?? "user", vidRow.series.automation.id, vidRow.series.automation.name)
+            : null;
+          igFl?.poster(`DEFERRED IG: publishing video=${videoId} (scheduled time arrived)`);
+          const igResults = await postVideoToSocials(videoId, ["INSTAGRAM"], undefined, igFl ?? undefined);
+          const igOk = igResults.filter((r) => r.success);
+          if (igOk.length > 0) igFl?.poster(`DEFERRED IG DONE: video=${videoId} posted to Instagram`);
+          return igResults;
         } catch (e) {
           err(`Deferred IG publish failed for ${videoId}:`, e);
           // Ensure the entry doesn't stay stuck at "uploading"
@@ -720,16 +731,23 @@ async function recoverStuckVideos() {
       const autoType = (auto?.automationType as string) ?? "";
       const autoName = (auto?.name as string) ?? "manual";
 
+      const usr = video.series.user;
+      const rfl = auto?.id
+        ? getAutomationFileLogger(usr.id, usr.name ?? usr.email?.split("@")[0] ?? "user", auto.id as string, autoName)
+        : null;
+
       if (video.status === "FAILED") {
         if (!auto?.enabled) continue;
         if (retryCount >= MAX_AUTO_RETRIES) {
           if (retryCount === MAX_AUTO_RETRIES) {
             log(`Video ${video.id} exhausted ${MAX_AUTO_RETRIES} auto-retries, leaving as FAILED`);
+            rfl?.scheduler(`RECOVERY: video=${video.id} exhausted ${MAX_AUTO_RETRIES} retries, giving up`);
           }
           continue;
         }
         if (age < FAILED_RETRY_AFTER_MS) continue;
         log(`Auto-retrying FAILED video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES}, auto="${autoName}", type=${autoType}, failed ${Math.round(age / 60000)}m ago)`);
+        rfl?.scheduler(`RETRY: video=${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES}, failed ${Math.round(age / 60000)}m ago)`);
       } else {
         const threshold = video.status === "GENERATING" ? STUCK_GENERATING_MS : STUCK_QUEUED_MS;
         if (age < threshold) {
@@ -737,13 +755,13 @@ async function recoverStuckVideos() {
           continue;
         }
         log(`Recovering stuck video ${video.id} (${video.status} for ${Math.round(age / 60000)}m, auto="${autoName}", type=${autoType})`);
+        rfl?.scheduler(`RECOVERY: video=${video.id} stuck in ${video.status} for ${Math.round(age / 60000)}m, re-enqueuing`);
       }
 
       // ── Clip-repurpose videos: re-enqueue to the clip queue ──
       if (autoType === "clip-repurpose") {
         try {
           const clipCfg = (auto?.clipConfig as Record<string, unknown>) ?? {};
-          const usr = video.series.user;
 
           await db.video.update({
             where: { id: video.id },
@@ -811,7 +829,6 @@ async function recoverStuckVideos() {
           },
         });
 
-        const usr = video.series.user;
         await enqueueVideoGeneration({
           videoId: video.id,
           seriesId: video.seriesId,
@@ -880,9 +897,10 @@ async function reconcileScheduledPosts() {
         scheduledPlatforms: true,
         series: {
           select: {
+            automation: { select: { id: true, name: true } },
             user: {
               select: {
-                id: true,
+                id: true, name: true, email: true,
                 socialAccounts: {
                   select: {
                     id: true, platform: true, accessTokenEnc: true, refreshTokenEnc: true,
@@ -920,6 +938,10 @@ async function reconcileScheduledPosts() {
 
     for (const { video, entries, scheduledEntries } of toCheck) {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
+      const autoInfo = (video as { series?: { automation?: { id: string; name: string } | null } }).series?.automation;
+      const rfl = autoInfo && user
+        ? getAutomationFileLogger(user.id, (user as { name?: string | null; email?: string | null }).name ?? (user as { email?: string | null }).email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
+        : null;
       let changed = false;
 
       // Step 0: mark "uploading" entries as failed if stuck for >10 min
@@ -1005,6 +1027,7 @@ async function reconcileScheduledPosts() {
             delete entry.scheduledFor;
             changed = true;
             log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
+            rfl?.poster(`RECONCILE: ${entry.platform} for video=${video.id} → posted (live confirmed)`);
           }
         }
       }
@@ -1034,6 +1057,7 @@ async function reconcileScheduledPosts() {
           },
         });
         log(`  ${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+        rfl?.poster(`PROMOTED: video=${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
       } else if (changed) {
         await db.video.update({
           where: { id: video.id },

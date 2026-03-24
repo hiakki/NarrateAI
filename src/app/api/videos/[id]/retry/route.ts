@@ -31,7 +31,7 @@ export async function POST(
             user: {
               select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true, defaultImageToVideoProvider: true },
             },
-            automation: { select: { name: true, characterId: true } },
+            automation: { select: { id: true, name: true, characterId: true } },
             character: { select: { fullPrompt: true } },
           },
         },
@@ -106,6 +106,7 @@ export async function POST(
       seriesId: video.seriesId,
       userId: session.user.id,
       userName: session.user.name ?? session.user.email?.split("@")[0] ?? "user",
+      automationId: video.series.automation?.id,
       automationName: video.series.automation?.name,
       title,
       scriptText,
