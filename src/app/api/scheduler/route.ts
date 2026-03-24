@@ -97,8 +97,9 @@ export async function GET() {
     const latestBySeriesId = new Map(latestVideoBySeriesRaw.map((v) => [v.seriesId, v.createdAt]));
 
     const data = automations.map((a) => {
-      const effectiveLastRunAt = a.lastRunAt
-        ?? (a.series?.id ? latestBySeriesId.get(a.series.id) ?? null : null);
+      // Use actual last video build time (ground truth) over scheduler's lastRunAt
+      const lastBuildAt = a.series?.id ? latestBySeriesId.get(a.series.id) ?? null : null;
+      const effectiveLastRunAt = lastBuildAt ?? a.lastRunAt;
       const autoWithLastRun = { ...a, lastRunAt: effectiveLastRunAt };
       const nextRunAt = computeNextRunAt(autoWithLastRun);
       const nextPostAt = computeNextPostAt(a.postTime, a.timezone);

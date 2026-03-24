@@ -126,7 +126,7 @@ async function writeSchedulerLog(
   }
 }
 
-async function processAutomation(auto: AutoRow) {
+async function processAutomation(auto: AutoRow & { series?: { videos?: { createdAt: Date }[] } | null }) {
   return runWithAutomationIdAsync(auto.id, async () => {
   const runStart = Date.now();
   const fl = getAutomationFileLogger(
@@ -135,7 +135,11 @@ async function processAutomation(auto: AutoRow) {
     auto.id,
     auto.name,
   );
-  const { build, reason } = shouldBuildNow(auto);
+
+  // Use actual last video build time instead of scheduler's lastRunAt
+  const lastVideoBuildAt = auto.series?.videos?.[0]?.createdAt ?? null;
+  const effectiveLastRun = lastVideoBuildAt ?? auto.lastRunAt;
+  const { build, reason } = shouldBuildNow({ ...auto, lastRunAt: effectiveLastRun });
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
@@ -147,27 +151,7 @@ async function processAutomation(auto: AutoRow) {
     return;
   }
 
-  // Atomic lock: claim this automation by CAS-updating lastRunAt.
-  // If another scheduler instance already claimed it, updateMany returns count=0.
-  const lockResult = await db.automation.updateMany({
-    where: {
-      id: auto.id,
-      ...(auto.lastRunAt
-        ? { lastRunAt: auto.lastRunAt }
-        : { lastRunAt: null }),
-    },
-    data: { lastRunAt: new Date() },
-  });
-  if (lockResult.count === 0) {
-    const msg = "Another scheduler instance already claimed this run";
-    debug(`[SKIP]`, `"${auto.name}" — ${msg}`);
-    fl.scheduler(`SKIP: ${msg}`);
-    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart });
-    return;
-  }
-
-  log(`[BUILD]`, `"${auto.name}" — ${reason}`);
-  fl.scheduler(`BUILD: "${auto.name}" — ${reason}`);
+  // ── Pre-lock checks: skip conditions that must NOT burn lastRunAt ──
 
   if (!auto.seriesId) {
     log(`[AUTO]`, `No linked series, creating one...`);
@@ -207,8 +191,6 @@ async function processAutomation(auto: AutoRow) {
     return;
   }
 
-  // If the most recent video is READY but not posted/scheduled to all target platforms, skip new generation.
-  // "scheduled" counts as done — the post is queued on the platform and will go live automatically.
   const targets = (auto.targetPlatforms ?? []) as string[];
   if (targets.length > 0) {
     const readyVideo = auto.seriesId ? await db.video.findFirst({
@@ -237,6 +219,27 @@ async function processAutomation(auto: AutoRow) {
       }
     }
   }
+
+  // ── Atomic lock: claim this automation ONLY after all skip checks pass ──
+  const lockResult = await db.automation.updateMany({
+    where: {
+      id: auto.id,
+      ...(auto.lastRunAt
+        ? { lastRunAt: auto.lastRunAt }
+        : { lastRunAt: null }),
+    },
+    data: { lastRunAt: new Date() },
+  });
+  if (lockResult.count === 0) {
+    const msg = "Another scheduler instance already claimed this run";
+    debug(`[SKIP]`, `"${auto.name}" — ${msg}`);
+    fl.scheduler(`SKIP: ${msg}`);
+    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart });
+    return;
+  }
+
+  log(`[BUILD]`, `"${auto.name}" — ${reason}`);
+  fl.scheduler(`BUILD: "${auto.name}" — ${reason}`);
 
   // ── Route by automationType BEFORE retry logic to avoid cross-pipeline retries ──
   const autoType = auto.automationType ?? "original";
@@ -458,6 +461,15 @@ async function checkSchedules() {
             defaultTtsProvider: true,
             defaultImageProvider: true,
             defaultImageToVideoProvider: true,
+          },
+        },
+        series: {
+          select: {
+            videos: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { createdAt: true },
+            },
           },
         },
       },
