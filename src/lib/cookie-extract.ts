@@ -61,11 +61,10 @@ async function applyStealthToPage(page: Page): Promise<void> {
     });
 
     const origQuery = window.navigator.permissions.query;
-    // @ts-expect-error
     window.navigator.permissions.query = (params: { name: string }) =>
       params.name === "notifications"
         ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
-        : origQuery(params);
+        : origQuery(params as PermissionDescriptor);
   });
   await page.setUserAgent(REALISTIC_UA);
 }

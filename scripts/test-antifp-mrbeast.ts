@@ -149,7 +149,7 @@ async function main() {
     const results = await postVideoToSocials(video.id, ["YOUTUBE"]);
     for (const r of results) {
       if (r.success) {
-        console.log(`  ✅ ${r.platform}: ${r.url ?? r.postId}`);
+        console.log(`  ✅ ${r.platform}: ${r.postUrl ?? r.postId}`);
       } else {
         console.log(`  ❌ ${r.platform}: ${r.error}`);
       }

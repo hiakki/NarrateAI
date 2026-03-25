@@ -1365,7 +1365,7 @@ export default function VideoDetailPage() {
             )}
           </Card>
 
-          {/* Clip Repurpose: Combined Clip Details card (source + timing + candidates) */}
+          {/* Clip Repurpose: Combined Clip Details card (source + timing + candidates + scorecard) */}
           {isClipRepurpose && video.sourceMetadata && (() => {
             const meta = video.sourceMetadata as {
               discovery?: {
@@ -1387,12 +1387,51 @@ export default function VideoDetailPage() {
             if (!disc && !timing) return null;
             const pb = disc?.platformBreakdown;
 
+            const scoredCandidates = disc?.candidates.filter((c) => c.score != null) ?? [];
+            const top20 = scoredCandidates.slice(0, 20);
+            const top20Views = top20.map((c) => c.viewCount);
+            const top20Scores = top20.map((c) => c.score!);
+
             return (
               <Card>
                 <div className="px-4 py-3 border-b">
                   <h3 className="text-sm font-semibold">Clip Details</h3>
                 </div>
                 <CardContent className="p-0 divide-y">
+
+                  {/* Discovery Scorecard */}
+                  {disc && top20.length > 0 && (
+                    <div className="p-4 space-y-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Discovery Scorecard · {disc.totalConsidered} scanned · Top {top20.length}
+                      </p>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="rounded-lg border bg-muted/20 p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{fmtViews(top20Views.length > 0 ? Math.max(...top20Views) : 0)}</p>
+                          <p className="text-[10px] text-muted-foreground">Max Views</p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/20 p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{fmtViews(top20Views.length > 0 ? Math.round(top20Views.reduce((a, b) => a + b, 0) / top20Views.length) : 0)}</p>
+                          <p className="text-[10px] text-muted-foreground">Avg Views</p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/20 p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{fmtViews(top20Views.length > 0 ? Math.min(...top20Views) : 0)}</p>
+                          <p className="text-[10px] text-muted-foreground">Min Views</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-lg border bg-muted/20 p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{top20Scores.length > 0 ? Math.max(...top20Scores) : 0}</p>
+                          <p className="text-[10px] text-muted-foreground">Max Score</p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/20 p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{top20Scores.length > 0 ? (top20Scores.reduce((a, b) => a + b, 0) / top20Scores.length).toFixed(1) : 0}</p>
+                          <p className="text-[10px] text-muted-foreground">Avg Score</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Source video */}
                   {disc && disc.candidates.length > 0 && (
                     <div className="p-4 space-y-2">

@@ -118,12 +118,18 @@ export default function LoginPage() {
           Continue with Google
         </Button>
       </CardContent>
-      <CardFooter className="justify-center">
+      <CardFooter className="flex-col gap-3">
         <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
           <Link href="/register" className="text-primary hover:underline">
             Sign up
           </Link>
+        </p>
+        <p className="text-xs text-muted-foreground/60">
+          By signing in you agree to our{" "}
+          <Link href="/terms" className="underline hover:text-muted-foreground">Terms</Link>
+          {" "}and{" "}
+          <Link href="/privacy" className="underline hover:text-muted-foreground">Privacy Policy</Link>.
         </p>
       </CardFooter>
     </Card>

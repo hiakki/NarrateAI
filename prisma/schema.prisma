@@ -359,3 +359,15 @@ model Subscription {
 
   @@map("subscriptions")
 }
+
+model NicheTrending {
+  id        String   @id @default(cuid())
+  niche     String
+  date      DateTime @db.Date
+  stats     Json
+  createdAt DateTime @default(now())
+
+  @@unique([niche, date])
+  @@index([niche])
+  @@map("niche_trending")
+}

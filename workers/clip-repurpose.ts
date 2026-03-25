@@ -3,6 +3,7 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
 import { discoverVideo, type ClipNiche } from "../src/services/clip-repurpose/discovery";
+import { upsertNicheTrendingFromDiscovery } from "../src/services/clip-repurpose/trending-probe";
 import { downloadVideoAuto, parseVideoInfo } from "../src/services/clip-repurpose/downloader";
 import { findPeakSegment, findPeakViaTranscript } from "../src/services/clip-repurpose/heatmap";
 import { extractAndCrop, parseVttForSegment, buildAssFile, enhanceClip, detectSpeechSegments, alignCuesToAudio, SPEED_FACTOR } from "../src/services/clip-repurpose/clip-processor";
@@ -217,6 +218,10 @@ const worker = new Worker<ClipRepurposeJobData>(
           } as never,
         },
       });
+
+      upsertNicheTrendingFromDiscovery(db, nicheKey, discoveryResult).catch((e) =>
+        log.warn(`[TRENDING] upsert failed: ${e instanceof Error ? e.message : e}`),
+      );
 
       // ── Stage 2: DOWNLOAD (part of discovery) ──
       log.log(`[DOWNLOAD]`, `Downloading ${discovered.url}...`);

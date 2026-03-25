@@ -680,7 +680,7 @@ export async function downloadFbVideo(
       })()
     `;
     const extracted = await page.evaluate(extractScript) as {
-      urls: string[]; title: string; views: string;
+      urls: string[]; title: string; views: string; duration?: number;
     };
 
     const allUrls = [...new Set([...extracted.urls, ...interceptedVideoUrls])];
@@ -742,7 +742,7 @@ export async function downloadFbVideo(
     return {
       videoPath: outPath,
       title: extracted.title && extracted.title !== "Facebook" ? extracted.title : `FB Video`,
-      durationSec: duration,
+      durationSec: duration ?? 0,
       viewCount: parseViewCount(extracted.views),
     };
   } catch (err) {

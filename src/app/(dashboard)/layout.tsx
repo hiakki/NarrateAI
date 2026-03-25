@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useEffect, useState, useRef, useCallback } from "react";
-import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2, Star, BarChart2, Scissors, Menu, PanelLeftClose, PanelLeft, CalendarClock } from "lucide-react";
+import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2, Star, BarChart2, Scissors, Menu, PanelLeftClose, PanelLeft, CalendarClock, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -26,6 +26,7 @@ const navItems = [
   { href: "/dashboard/videos", label: "Videos", icon: Film },
   { href: "/dashboard/scheduler", label: "Scheduler", icon: CalendarClock },
   { href: "/dashboard/channels", label: "Channels", icon: Share2 },
+  { href: "/dashboard/scorecard", label: "Scorecard", icon: Trophy },
   { href: "/dashboard/report", label: "Report", icon: BarChart2 },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

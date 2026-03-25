@@ -10,6 +10,7 @@ import {
   Loader2, ArrowLeft, Scissors, Clock, Film, Eye, TrendingUp,
   ExternalLink, CheckCircle2, XCircle, AlertCircle, Instagram,
   Youtube, Facebook, Share2, Smartphone, Zap, Search, X,
+  BarChart2,
 } from "lucide-react";
 import { timeAgo, formatNumber } from "@/lib/format-utils";
 import { PlatformEntry } from "@/lib/platform-utils";
@@ -27,6 +28,10 @@ interface ClipVideo {
     originalTitle?: string;
     viewCount?: number;
     peakSegment?: { startSec: number; endSec: number; avgHeat: number };
+    discovery?: {
+      candidates: Array<{ score?: number }>;
+      totalConsidered: number;
+    };
   } | null;
   postedPlatforms: (string | PlatformEntry)[];
   errorMessage: string | null;
@@ -46,6 +51,25 @@ interface AutomationDetail {
     cropMode?: string;
   } | null;
   series: { id: string; videos: ClipVideo[] } | null;
+}
+
+interface NicheTrendingStats {
+  candidateCount: number;
+  platforms: Record<string, { count: number; avgViews: number }>;
+  top20: {
+    maxViews: number;
+    avgViews: number;
+    minViews: number;
+    avgScore: number;
+    maxScore: number;
+  };
+  topCandidates: Array<{
+    title: string;
+    viewCount: number;
+    platform: string;
+    channelName: string;
+    score: number;
+  }>;
 }
 
 const PLATFORM_ICON: Record<string, typeof Instagram> = {
@@ -72,6 +96,7 @@ export default function ClipAutomationDetailPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [totalVideos, setTotalVideos] = useState(0);
+  const [trendingStats, setTrendingStats] = useState<Array<{ date: string; stats: NicheTrendingStats }> | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -84,6 +109,18 @@ export default function ClipAutomationDetailPage() {
   }, [id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    if (!auto?.clipConfig?.clipNiche) return;
+    const niche = auto.clipConfig.clipNiche;
+    fetch(`/api/niche-trending?niche=${encodeURIComponent(niche)}&days=7`)
+      .then((r) => r.json())
+      .then((json) => {
+        const entries = json.data?.[niche];
+        if (Array.isArray(entries)) setTrendingStats(entries);
+      })
+      .catch(() => {});
+  }, [auto?.clipConfig?.clipNiche]);
 
   const allVideos = useMemo(() => auto?.series?.videos ?? [], [auto]);
 
@@ -237,6 +274,66 @@ export default function ClipAutomationDetailPage() {
         </div>
       )}
 
+      {/* Niche Trending Stats */}
+      {trendingStats && trendingStats.length > 0 && (() => {
+        const latest = trendingStats[0].stats;
+        const fmtV = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : `${v}`;
+        return (
+          <div className="rounded-lg border p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-blue-500" />
+                <span className="text-sm font-semibold">Niche Trending</span>
+                <Badge variant="outline" className="text-[10px]">{auto.clipConfig?.clipNiche}</Badge>
+              </div>
+              <span className="text-[10px] text-muted-foreground">{trendingStats[0].date} · {latest.candidateCount} candidates</span>
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { label: "Max Views", value: fmtV(latest.top20.maxViews) },
+                { label: "Avg Views", value: fmtV(latest.top20.avgViews) },
+                { label: "Min Views", value: fmtV(latest.top20.minViews) },
+                { label: "Max Score", value: String(latest.top20.maxScore) },
+                { label: "Avg Score", value: String(latest.top20.avgScore) },
+              ].map((s) => (
+                <div key={s.label} className="rounded-md border bg-muted/20 p-2 text-center">
+                  <p className="text-base font-bold tabular-nums">{s.value}</p>
+                  <p className="text-[9px] text-muted-foreground">{s.label}</p>
+                </div>
+              ))}
+            </div>
+            {Object.keys(latest.platforms).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(latest.platforms).map(([plat, data]) => (
+                  <span key={plat} className="text-[10px] px-2 py-0.5 rounded-full border bg-background">
+                    <span className="uppercase font-semibold">{plat}</span> {data.count} · avg {fmtV(data.avgViews)}
+                  </span>
+                ))}
+              </div>
+            )}
+            {trendingStats.length > 1 && (
+              <details className="group">
+                <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground">
+                  {trendingStats.length - 1} previous day(s)...
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {trendingStats.slice(1, 7).map((entry) => (
+                    <div key={entry.date} className="flex items-center justify-between text-[10px] py-1 px-2 rounded hover:bg-muted/30">
+                      <span className="font-mono">{entry.date}</span>
+                      <div className="flex items-center gap-3">
+                        <span>{entry.stats.candidateCount} candidates</span>
+                        <span>avg {fmtV(entry.stats.top20.avgViews)} views</span>
+                        <span>score {entry.stats.top20.avgScore}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Videos Grid */}
       {allVideos.length === 0 ? (
         <div className="border border-dashed rounded-lg p-12 flex flex-col items-center justify-center text-center">
@@ -308,6 +405,11 @@ export default function ClipAutomationDetailPage() {
                     {/* Source metadata */}
                     {v.sourceMetadata && (
                       <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                        {v.sourceMetadata.discovery?.candidates[0]?.score != null && (
+                          <span className="font-mono bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-1.5 py-0.5 rounded font-semibold">
+                            {v.sourceMetadata.discovery.candidates[0].score}
+                          </span>
+                        )}
                         {v.sourceMetadata.channelName && <span>from {v.sourceMetadata.channelName}</span>}
                         {v.sourceMetadata.viewCount ? (
                           <span className="flex items-center gap-0.5">

@@ -114,12 +114,18 @@ export default function RegisterPage() {
           </Button>
         </form>
       </CardContent>
-      <CardFooter className="justify-center">
+      <CardFooter className="flex-col gap-3">
         <p className="text-sm text-muted-foreground">
           Already have an account?{" "}
           <Link href="/login" className="text-primary hover:underline">
             Sign in
           </Link>
+        </p>
+        <p className="text-xs text-muted-foreground/60">
+          By creating an account you agree to our{" "}
+          <Link href="/terms" className="underline hover:text-muted-foreground">Terms</Link>
+          {" "}and{" "}
+          <Link href="/privacy" className="underline hover:text-muted-foreground">Privacy Policy</Link>.
         </p>
       </CardFooter>
     </Card>

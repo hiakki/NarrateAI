@@ -21,6 +21,7 @@ import {
   localTimeToUTC,
   shouldBuildNow,
 } from "../src/lib/scheduler-utils";
+import { probeAllNicheTrends } from "../src/services/clip-repurpose/trending-probe";
 
 const db = new PrismaClient();
 const logger = createLogger("Scheduler");
@@ -1146,6 +1147,26 @@ cron.schedule("*/5 * * * *", () => {
 cron.schedule("0 2 * * *", () => {
   log("Running daily insights refresh...");
   refreshInsightsDaily();
+});
+
+// Probe niche trending data once per day at 03:00 (server TZ)
+cron.schedule("0 3 * * *", () => {
+  log("Running daily niche trending probe...");
+  probeAllNicheTrends(db).catch((e) => err("probeAllNicheTrends error:", e));
+});
+
+// Purge NicheTrending records older than 30 days (runs daily at 03:30)
+cron.schedule("30 3 * * *", async () => {
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const { count } = await db.nicheTrending.deleteMany({
+      where: { date: { lt: cutoff } },
+    });
+    if (count > 0) log(`Purged ${count} NicheTrending row(s) older than 30 days`);
+  } catch (e) {
+    err("NicheTrending retention cleanup error:", e);
+  }
 });
 
 async function backfillLastRunAt() {

@@ -38,7 +38,10 @@ export type ClipNiche =
   | "viral-repost" | "entertainment" | "films" | "anime" | "serials"
   | "nature" | "science" | "sports" | "gaming"
   | "food" | "travel" | "news" | "education" | "motivation"
-  | "comedy" | "music" | "auto";
+  | "comedy" | "music"
+  | "satisfying" | "fails" | "animals" | "food-viral" | "luxury" | "extreme"
+  | "diy" | "wholesome" | "scary" | "prank"
+  | "auto";
 
 export const CLIP_NICHES: Record<ClipNiche, { label: string; description: string; icon: string }> = {
   "viral-repost": { label: "Viral Repost (Non-Copyrighted)", description: "Creators who allow free reposting — MrBeast, Mark Rober, etc.", icon: "🔥" },
@@ -57,11 +60,21 @@ export const CLIP_NICHES: Record<ClipNiche, { label: string; description: string
   motivation:    { label: "Motivation & Self-Help", description: "Speeches, success stories, productivity", icon: "💪" },
   comedy:        { label: "Comedy & Memes", description: "Stand-up, sketches, internet humor", icon: "😂" },
   music:         { label: "Music & Dance", description: "Performances, covers, dance trends", icon: "🎵" },
+  satisfying:    { label: "Satisfying & ASMR", description: "Oddly satisfying clips — soap cutting, kinetic sand, slime, hydraulic press", icon: "🫧" },
+  fails:         { label: "Fails & Unexpected", description: "Funny fails, unexpected moments, caught on camera", icon: "🤯" },
+  animals:       { label: "Animals & Pets", description: "Cute and funny animal moments, pet compilations", icon: "🐾" },
+  "food-viral":  { label: "Food Viral", description: "Street food processes, satisfying cooking, food art", icon: "🍜" },
+  luxury:        { label: "Luxury & Supercars", description: "Exotic cars, mansions, luxury lifestyle, aspirational", icon: "🏎️" },
+  extreme:       { label: "Extreme Sports & Stunts", description: "Parkour, GoPro moments, adrenaline stunts, daredevils", icon: "🪂" },
+  diy:           { label: "DIY & Life Hacks", description: "Crafts, life hacks, restoration, build projects, 5-minute fixes", icon: "🔧" },
+  wholesome:     { label: "Wholesome & Feel-Good", description: "Heartwarming reunions, acts of kindness, surprise reactions, emotional moments", icon: "🥹" },
+  scary:         { label: "Scary & Paranormal", description: "Creepy caught on camera, trail cam footage, ghost sightings, unsolved mysteries", icon: "👻" },
+  prank:         { label: "Pranks", description: "Prank compilations, hidden camera, social experiments, public reactions", icon: "🎃" },
   auto:          { label: "Auto (All Niches)", description: "Mix from all trending content", icon: "🔄" },
 };
 
 // ── Primary: niche → YouTube search queries (yt-dlp ytsearch:) ──────────────
-const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
+export const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
   "viral-repost": ["viral video this week no copyright", "free to repost viral video"],
   films:         ["iconic movie scene", "film trailer reaction trending"],
   anime:         ["anime fight scene epic", "anime emotional moment viral"],
@@ -78,6 +91,16 @@ const NICHE_SEARCH_QUERIES: Record<ClipNiche, string[]> = {
   motivation:    ["motivational speech powerful", "success story inspiring never give up"],
   comedy:        ["funny viral video", "comedy sketch hilarious"],
   music:         ["music performance viral amazing", "dance trending choreography"],
+  satisfying:    ["oddly satisfying compilation", "satisfying ASMR viral", "hydraulic press crushing satisfying"],
+  fails:         ["funny fail compilation viral", "unexpected moment caught on camera", "instant regret fail"],
+  animals:       ["funny animal viral moment", "cute pet compilation", "animals being derps"],
+  "food-viral":  ["street food amazing process viral", "satisfying cooking compilation", "food art incredible"],
+  luxury:        ["supercar viral moment", "luxury lifestyle unbelievable", "exotic car compilation"],
+  extreme:       ["extreme sport insane moment viral", "parkour unbelievable stunt", "GoPro adrenaline compilation"],
+  diy:           ["DIY life hack viral", "amazing restoration before after", "5 minute crafts incredible"],
+  wholesome:     ["wholesome moment caught on camera", "heartwarming surprise reunion viral", "faith in humanity restored"],
+  scary:         ["creepy caught on camera compilation", "scary trail cam footage unexplained", "ghost sighting paranormal viral"],
+  prank:         ["best prank compilation viral", "hidden camera prank hilarious", "public prank social experiment"],
   auto:          ["trending viral video today", "most viewed video this week"],
 };
 
@@ -99,6 +122,16 @@ const NICHE_FB_PAGES: Record<string, string[]> = {
   motivation:    ["https://www.facebook.com/Goalcast/videos/", "https://www.facebook.com/motivationhub/videos/", "https://www.facebook.com/PrinceEa/videos/"],
   comedy:        ["https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/UNILAD/videos/"],
   music:         ["https://www.facebook.com/MTV/videos/", "https://www.facebook.com/Vevo/videos/", "https://www.facebook.com/Spotify/videos/"],
+  satisfying:    ["https://www.facebook.com/oddlysatisfying/videos/", "https://www.facebook.com/TheOddlySatisfying/videos/", "https://www.facebook.com/5MinuteCrafts/videos/"],
+  fails:         ["https://www.facebook.com/FailArmy/videos/", "https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/PeopleSoStupid/videos/"],
+  animals:       ["https://www.facebook.com/TheDodo/videos/", "https://www.facebook.com/PetCollective/videos/", "https://www.facebook.com/9GAGCute/videos/"],
+  "food-viral":  ["https://www.facebook.com/buzzfeedtasty/videos/", "https://www.facebook.com/StreetFoodOfficial/videos/", "https://www.facebook.com/SoYummy/videos/"],
+  luxury:        ["https://www.facebook.com/Supercarblondie/videos/", "https://www.facebook.com/LuxuryListings/videos/", "https://www.facebook.com/MotorTrend/videos/"],
+  extreme:       ["https://www.facebook.com/redbull/videos/", "https://www.facebook.com/PeopleSoAwesome/videos/", "https://www.facebook.com/GoPro/videos/"],
+  diy:           ["https://www.facebook.com/5MinuteCrafts/videos/", "https://www.facebook.com/BlossomdIY/videos/", "https://www.facebook.com/NiftyBuzzFeed/videos/"],
+  wholesome:     ["https://www.facebook.com/Goalcast/videos/", "https://www.facebook.com/SomeGoodNews/videos/", "https://www.facebook.com/TheDodo/videos/"],
+  scary:         ["https://www.facebook.com/NukesTop5/videos/", "https://www.facebook.com/Chills/videos/", "https://www.facebook.com/SlappedHam/videos/"],
+  prank:         ["https://www.facebook.com/JustForLaughsGags/videos/", "https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/UNILAD/videos/"],
   auto:          ["https://www.facebook.com/LADbible/videos/", "https://www.facebook.com/9GAG/videos/", "https://www.facebook.com/UNILAD/videos/"],
 };
 
@@ -120,6 +153,16 @@ const NICHE_IG_PROFILES: Record<string, string[]> = {
   motivation:    ["https://www.instagram.com/goalcast/", "https://www.instagram.com/garyvee/", "https://www.instagram.com/tonytrobbins/"],
   comedy:        ["https://www.instagram.com/9gag/", "https://www.instagram.com/ladbible/", "https://www.instagram.com/unilad/"],
   music:         ["https://www.instagram.com/mtv/", "https://www.instagram.com/spotify/", "https://www.instagram.com/billboard/"],
+  satisfying:    ["https://www.instagram.com/satisfying/", "https://www.instagram.com/oddlysatisfying/", "https://www.instagram.com/asmr/"],
+  fails:         ["https://www.instagram.com/failarmy/", "https://www.instagram.com/pubity/", "https://www.instagram.com/bestamazingvideos/"],
+  animals:       ["https://www.instagram.com/thedodo/", "https://www.instagram.com/animals.co/", "https://www.instagram.com/barked/"],
+  "food-viral":  ["https://www.instagram.com/buzzfeedtasty/", "https://www.instagram.com/streetfoodcinema/", "https://www.instagram.com/foodiesfeed/"],
+  luxury:        ["https://www.instagram.com/supercarblondie/", "https://www.instagram.com/luxurylife/", "https://www.instagram.com/carlifestyle/"],
+  extreme:       ["https://www.instagram.com/redbull/", "https://www.instagram.com/gopro/", "https://www.instagram.com/storror/"],
+  diy:           ["https://www.instagram.com/5.min" + ".crafts/", "https://www.instagram.com/nifty/", "https://www.instagram.com/diy/"],
+  wholesome:     ["https://www.instagram.com/goodnews_movement/", "https://www.instagram.com/thedodo/", "https://www.instagram.com/pubity/"],
+  scary:         ["https://www.instagram.com/creepypasta/", "https://www.instagram.com/paranormal/", "https://www.instagram.com/scaryfacts/"],
+  prank:         ["https://www.instagram.com/justforlaughs/", "https://www.instagram.com/9gag/", "https://www.instagram.com/ladbible/"],
   auto:          ["https://www.instagram.com/pubity/", "https://www.instagram.com/9gag/", "https://www.instagram.com/theshaderoom/"],
 };
 
@@ -229,7 +272,7 @@ async function discoverViaYtDlp(
  * This is the primary discovery method — finds actually-trending content
  * instead of just scraping latest uploads from specific channels.
  */
-async function discoverViaSearch(
+export async function discoverViaSearch(
   niche: ClipNiche,
   maxPerQuery = 10,
 ): Promise<YtDlpEntry[]> {
@@ -483,7 +526,98 @@ const NICHE_SIGNALS: Record<string, { positive: string[]; negative: string[] }> 
                    negative: ["gaming", "prank", "comedy", "meme", "recipe", "futuristic", "vs ", "$1 vs", "gameplay"] },
   music:         { positive: ["music", "song", "dance", "singer", "concert", "cover", "beat", "rap", "dj", "perform", "choreograph"],
                    negative: ["gaming", "recipe", "news", "documentary"] },
+  satisfying:    { positive: ["satisfying", "asmr", "oddly", "slime", "kinetic sand", "soap", "hydraulic", "crushing", "cutting"],
+                   negative: ["news", "politics", "workout", "tutorial", "gaming"] },
+  fails:         { positive: ["fail", "unexpected", "instant regret", "caught on camera", "gone wrong", "oops", "what could go wrong"],
+                   negative: ["recipe", "tutorial", "meditation", "documentary", "workout"] },
+  animals:       { positive: ["animal", "pet", "dog", "cat", "puppy", "kitten", "cute", "funny animal", "parrot", "bunny"],
+                   negative: ["gaming", "recipe", "politics", "workout", "tutorial"] },
+  "food-viral":  { positive: ["street food", "food art", "cooking", "satisfying food", "food process", "chef", "kitchen"],
+                   negative: ["gaming", "anime", "sport", "workout", "politics"] },
+  luxury:        { positive: ["supercar", "luxury", "mansion", "exotic", "lamborghini", "ferrari", "rolls royce", "penthouse", "yacht"],
+                   negative: ["recipe", "anime", "gaming", "news", "tutorial"] },
+  extreme:       { positive: ["extreme", "parkour", "gopro", "adrenaline", "base jump", "wingsuit", "skydiv", "surfing", "bmx"],
+                   negative: ["recipe", "anime", "gaming", "news", "tutorial"] },
+  diy:           { positive: ["diy", "hack", "craft", "restor", "build", "homemade", "upcycle", "repurpos", "fix", "woodwork", "how to make"],
+                   negative: ["gaming", "anime", "sport", "news", "comedy"] },
+  wholesome:     { positive: ["wholesome", "heartwarming", "reunion", "surprise", "kindness", "emotional", "faith in humanity", "soldier", "proposal", "happy tears"],
+                   negative: ["gaming", "recipe", "politics", "horror", "scary"] },
+  scary:         { positive: ["scary", "creepy", "paranormal", "ghost", "haunt", "unexplain", "trail cam", "horror", "mysterious", "caught on camera", "demon"],
+                   negative: ["recipe", "wholesome", "cute", "comedy", "cooking"] },
+  prank:         { positive: ["prank", "hidden camera", "social experiment", "public reaction", "candid", "scare prank", "gotcha"],
+                   negative: ["recipe", "tutorial", "documentary", "meditation", "workout"] },
 };
+
+// ---------------------------------------------------------------------------
+// Quality scoring (extracted for reuse by trending probe)
+// ---------------------------------------------------------------------------
+
+export function scoreCandidate(
+  v: DiscoveredVideo,
+  niche: ClipNiche,
+  copyrightMap?: Map<string, { licensedContent: boolean; license: string }>,
+): number {
+  const nowMs = Date.now();
+  let score = 40;
+
+  if (v.viewCount >= 100_000_000) score += 35;
+  else if (v.viewCount >= 50_000_000) score += 32;
+  else if (v.viewCount >= 20_000_000) score += 28;
+  else if (v.viewCount >= 10_000_000) score += 24;
+  else if (v.viewCount >= 5_000_000) score += 20;
+  else if (v.viewCount >= 2_000_000) score += 15;
+  else if (v.viewCount >= 1_000_000) score += 10;
+  else if (v.viewCount >= 500_000) score += 6;
+  else if (v.viewCount >= 200_000) score += 3;
+  else if (v.viewCount >= 50_000) score += 1;
+
+  let ageDays = 30;
+  let hasRealDate = false;
+  if (v.publishedAt) {
+    const pubMs = v.publishedAt.length === 8
+      ? new Date(`${v.publishedAt.slice(0, 4)}-${v.publishedAt.slice(4, 6)}-${v.publishedAt.slice(6, 8)}`).getTime()
+      : new Date(v.publishedAt).getTime();
+    if (!isNaN(pubMs)) {
+      ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
+      hasRealDate = true;
+    }
+  }
+  if (hasRealDate) {
+    const velocity = v.viewCount / ageDays;
+    score += velocity > 0 ? Math.min(10, Math.log10(velocity) * 2) : 0;
+  }
+
+  if (v.likeCount && v.viewCount > 0) score += Math.min(3, (v.likeCount / v.viewCount) * 100);
+  if (v.commentCount && v.viewCount > 0) score += Math.min(2, (v.commentCount / v.viewCount) * 500);
+
+  if (hasRealDate) {
+    if (ageDays <= 3) score += 8;
+    else if (ageDays <= 7) score += 5;
+    else if (ageDays <= 14) score += 3;
+    else if (ageDays > 180) score -= 5;
+  }
+
+  if (v.licensedContent) score -= 40;
+  const crInfo = copyrightMap?.get(v.videoId);
+  if (crInfo?.license === "creativeCommon") score += 10;
+
+  const sourceBonus: Record<string, number> = { search: 2, "creative-commons": 5, trending: 3, direct: 0 };
+  score += sourceBonus[v.source] ?? 0;
+
+  const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart", "viral hog", "people are awesome"];
+  if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 5;
+
+  if (niche !== "auto" && niche !== "viral-repost") {
+    const titleLower = (v.title || "").toLowerCase();
+    const signals = NICHE_SIGNALS[niche];
+    if (signals) {
+      if (signals.positive.some((kw) => titleLower.includes(kw))) score += 8;
+      if (signals.negative.some((kw) => titleLower.includes(kw))) score -= 15;
+    }
+  }
+
+  return Math.round(Math.min(100, Math.max(0, score)) * 100) / 100;
+}
 
 // ---------------------------------------------------------------------------
 // Main discovery (search-first, multi-platform)
@@ -808,82 +942,10 @@ export async function discoverVideo(config: {
   }
 
   // ── 7. QUALITY SCORING (0-100 scale) ──
-  const scoredWithRank = filtered.map((v) => {
-    // Base: every candidate that survived the view-count filter is at least decent
-    let score = 40;
-
-    // View count tiers (max +35) — continuous from 50K to 100M+
-    if (v.viewCount >= 100_000_000) score += 35;
-    else if (v.viewCount >= 50_000_000) score += 32;
-    else if (v.viewCount >= 20_000_000) score += 28;
-    else if (v.viewCount >= 10_000_000) score += 24;
-    else if (v.viewCount >= 5_000_000) score += 20;
-    else if (v.viewCount >= 2_000_000) score += 15;
-    else if (v.viewCount >= 1_000_000) score += 10;
-    else if (v.viewCount >= 500_000) score += 6;
-    else if (v.viewCount >= 200_000) score += 3;
-    else if (v.viewCount >= 50_000) score += 1;
-
-    // Velocity bonus — only when we have a real publish date (max +10)
-    let ageDays = 30;
-    let hasRealDate = false;
-    if (v.publishedAt) {
-      const pubMs = v.publishedAt.length === 8
-        ? new Date(`${v.publishedAt.slice(0, 4)}-${v.publishedAt.slice(4, 6)}-${v.publishedAt.slice(6, 8)}`).getTime()
-        : new Date(v.publishedAt).getTime();
-      if (!isNaN(pubMs)) {
-        ageDays = Math.max(1, (nowMs - pubMs) / 86_400_000);
-        hasRealDate = true;
-      }
-    }
-    if (hasRealDate) {
-      const velocity = v.viewCount / ageDays;
-      score += velocity > 0 ? Math.min(10, Math.log10(velocity) * 2) : 0;
-    }
-
-    // Engagement — only contributes when data exists (max +5)
-    if (v.likeCount && v.viewCount > 0) {
-      score += Math.min(3, (v.likeCount / v.viewCount) * 100);
-    }
-    if (v.commentCount && v.viewCount > 0) {
-      score += Math.min(2, (v.commentCount / v.viewCount) * 500);
-    }
-
-    // Recency — only when we have real date (max +8, min -5)
-    if (hasRealDate) {
-      if (ageDays <= 3) score += 8;
-      else if (ageDays <= 7) score += 5;
-      else if (ageDays <= 14) score += 3;
-      else if (ageDays > 180) score -= 5;
-    }
-
-    // Copyright: penalize known licensed, reward known safe
-    if (v.licensedContent) score -= 40;
-    const crInfo = copyrightMap.get(v.videoId);
-    if (crInfo?.license === "creativeCommon") score += 10;
-
-    // Source bonus (max +5)
-    const sourceBonus: Record<string, number> = { search: 2, "creative-commons": 5, trending: 3, direct: 0 };
-    score += sourceBonus[v.source] ?? 0;
-
-    // Safe-channel bonus
-    const safeChannels = ["mrbeast", "mark rober", "daily dose", "dude perfect", "ryan trahan", "airrack", "ben azelart", "viral hog", "people are awesome"];
-    if (safeChannels.some((c) => v.channelName.toLowerCase().includes(c))) score += 5;
-
-    // Niche relevance (max +8, min -15)
-    if (config.niche !== "auto" && config.niche !== "viral-repost") {
-      const titleLower = (v.title || "").toLowerCase();
-      const signals = NICHE_SIGNALS[config.niche];
-      if (signals) {
-        const hasPositive = signals.positive.some((kw) => titleLower.includes(kw));
-        const hasNegative = signals.negative.some((kw) => titleLower.includes(kw));
-        if (hasPositive) score += 8;
-        if (hasNegative) score -= 15;
-      }
-    }
-
-    return { ...v, score: Math.round(Math.min(100, Math.max(0, score)) * 100) / 100 };
-  });
+  const scoredWithRank = filtered.map((v) => ({
+    ...v,
+    score: scoreCandidate(v, config.niche, copyrightMap),
+  }));
 
   scoredWithRank.sort((a, b) => b.score - a.score);
   const best = scoredWithRank[0];
