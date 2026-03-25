@@ -193,25 +193,36 @@ async function dispatchToProvider(
  * quota/key exhaustion (so we can fall through to the next provider).
  * Throws on non-retryable errors (bad config, unexpected failures).
  */
+interface TryProviderResult {
+  clip: ImageToVideoResult | null;
+  /** When clip is null, the reason the provider couldn't produce a clip. */
+  exhaustedReason?: string;
+}
+
 async function tryProviderWithRotation(
   provider: ImageToVideoProviderInfo,
   imagePath: string,
   options: { prompt?: string; durationSec?: number; aspectRatio?: "9:16" | "16:9" },
-): Promise<ImageToVideoResult | null> {
+): Promise<TryProviderResult> {
   if (KEY_ROTATABLE_TYPES.has(provider.type) && provider.envVar) {
     const rotator = getKeyRotator(provider.envVar);
-    if (!rotator.hasKeys) return null;
+    if (!rotator.hasKeys) return { clip: null, exhaustedReason: "no API keys configured" };
 
     let lastKeyError: Error | null = null;
     while (true) {
       const key = rotator.getNextKey();
-      if (!key) return null; // all keys exhausted → try next provider
+      if (!key) {
+        const name = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.id;
+        const reason = lastKeyError?.message.slice(0, 200) ?? "no available keys";
+        log.warn(`[I2V]`, `${name}: ${rotator.count} key(s) exhausted — ${reason}`);
+        return { clip: null, exhaustedReason: reason };
+      }
 
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-i2v-"));
       const outputPath = path.join(tmpDir, "clip.mp4");
       try {
         const result = await dispatchToProvider(provider, imagePath, outputPath, tmpDir, options, key);
-        return result;
+        return { clip: result };
       } catch (err) {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         lastKeyError = err instanceof Error ? err : new Error(String(err));
@@ -236,7 +247,8 @@ async function tryProviderWithRotation(
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "narrateai-i2v-"));
   const outputPath = path.join(tmpDir, "clip.mp4");
   try {
-    return await dispatchToProvider(provider, imagePath, outputPath, tmpDir, options);
+    const result = await dispatchToProvider(provider, imagePath, outputPath, tmpDir, options);
+    return { clip: result };
   } catch (err) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     throw err instanceof Error ? err : new Error(String(err));
@@ -299,25 +311,25 @@ export async function generateClipFromImage(
 
   for (const provider of chain) {
     try {
-      const result = await tryProviderWithRotation(provider, imagePath, options);
-      if (result) {
-        result.actualProvider = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.name;
+      const { clip, exhaustedReason } = await tryProviderWithRotation(provider, imagePath, options);
+      if (clip) {
+        clip.actualProvider = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.name;
         if (provider.id !== providerId) {
           log.log(`[I2V]`, `Fallback: ${PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.id} succeeded (primary ${providerId} exhausted)`);
         } else {
           log.log(`[I2V]`, `${provider.id} succeeded`);
         }
-        return result;
+        return clip;
       }
-      // null → all keys for this provider exhausted
       const name = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.id;
-      log.warn(`[I2V]`, `${name} exhausted, trying next provider...`);
-      exhausted.push(name);
+      const reasonTag = exhaustedReason ? ` [${exhaustedReason}]` : "";
+      log.warn(`[I2V]`, `${name} exhausted${reasonTag}, trying next provider...`);
+      exhausted.push(`${name}${reasonTag}`);
     } catch (err) {
       const name = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.id;
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`[I2V]`, `${name} error: ${msg.slice(0, 120)}`);
-      exhausted.push(`${name} (error)`);
+      exhausted.push(`${name} (error: ${msg.slice(0, 80)})`);
     }
   }
 

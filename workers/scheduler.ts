@@ -1155,42 +1155,48 @@ async function bootstrapClipAutomations() {
 
       log(`[BOOTSTRAP] Creating ${missing.length} clip automation(s) for user ${user.id}`);
 
+      let created = 0;
       for (const niche of missing) {
         const meta = CLIP_NICHE_META[niche]!;
-        const tz = BUILD_ALL_TIMEZONE;
-        const series = await db.series.create({
-          data: {
-            userId: user.id,
-            name: `[Clip] ${meta.label}`,
-            niche: "clip-repurpose",
-            artStyle: "realistic",
-            tone: "dramatic",
-          },
-        });
-
-        await db.automation.create({
-          data: {
-            userId: user.id,
-            name: meta.label,
-            niche: "clip-repurpose",
-            artStyle: "realistic",
-            automationType: "clip-repurpose",
-            clipConfig: {
-              clipNiche: niche,
-              clipDurationSec: 45,
-              cropMode: "blur-bg",
-              creditOriginal: true,
-            },
-            targetPlatforms: meta.bestPlatforms,
-            enabled: false,
-            frequency: "daily",
-            postTime: meta.bestTimesUTC[0],
-            timezone: tz,
-            seriesId: series.id,
-          },
-        });
+        try {
+          await db.$transaction(async (tx) => {
+            const series = await tx.series.create({
+              data: {
+                userId: user.id,
+                name: `[Clip] ${meta.label}`,
+                niche: "clip-repurpose",
+                artStyle: "realistic",
+                tone: "dramatic",
+              },
+            });
+            await tx.automation.create({
+              data: {
+                userId: user.id,
+                name: meta.label,
+                niche: "clip-repurpose",
+                artStyle: "realistic",
+                automationType: "clip-repurpose",
+                clipConfig: {
+                  clipNiche: niche,
+                  clipDurationSec: 45,
+                  cropMode: "blur-bg",
+                  creditOriginal: true,
+                },
+                targetPlatforms: meta.bestPlatforms,
+                enabled: false,
+                frequency: "daily",
+                postTime: meta.bestTimesUTC[0],
+                timezone: BUILD_ALL_TIMEZONE,
+                seriesId: series.id,
+              },
+            });
+          });
+          created++;
+        } catch (nicheErr) {
+          warn(`[BOOTSTRAP] Failed to create clip auto for "${niche}" (user ${user.id}):`, nicheErr);
+        }
       }
-      log(`[BOOTSTRAP] Created ${missing.length} clip automation(s) for user ${user.id}`);
+      log(`[BOOTSTRAP] Created ${created}/${missing.length} clip automation(s) for user ${user.id}`);
     }
   } catch (e) {
     err("bootstrapClipAutomations error:", e);
