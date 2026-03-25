@@ -56,3 +56,6 @@ next-env.d.ts
 
 # automation file logs
 /logs/
+
+# claude code
+.claude/
