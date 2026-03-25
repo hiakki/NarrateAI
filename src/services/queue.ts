@@ -159,7 +159,8 @@ export async function enqueueClipRepurpose(data: ClipRepurposeJobData): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled-post queue (delayed BullMQ jobs for exact-time posting)
+// Scheduled-post queue — fires immediately; platforms handle go-live timing
+// via native scheduling (YT publishAt, FB scheduled_publish_time, IG native).
 // ---------------------------------------------------------------------------
 
 export interface PostVideoJobData {
@@ -189,17 +190,7 @@ export function getPostVideoQueue(): Queue<PostVideoJobData> {
   return getPostQueue();
 }
 
-export async function enqueueScheduledPost(
-  videoId: string,
-  scheduledPostTime: Date | null,
-  platforms: string[],
-): Promise<string> {
-  const queue = getPostQueue();
-  const jobId = `post-${videoId}`;
-  const delay = scheduledPostTime
-    ? Math.max(0, scheduledPostTime.getTime() - Date.now())
-    : 0;
-
+async function clearExistingJob(queue: Queue<PostVideoJobData>, jobId: string): Promise<boolean> {
   try {
     const existing = await queue.getJob(jobId);
     if (existing) {
@@ -208,22 +199,66 @@ export async function enqueueScheduledPost(
         await existing.remove();
       } else if (state === "active") {
         log.log(`Post job ${jobId} already active, skipping re-enqueue`);
-        return jobId;
+        return false;
       }
     }
   } catch (e) {
     log.warn(`Could not check/remove existing post job ${jobId}:`, e);
   }
+  return true;
+}
 
-  const delaySec = Math.round(delay / 1000);
-  const at = scheduledPostTime?.toISOString() ?? "immediate";
-  log.log(`Enqueuing post job ${jobId}: ${platforms.join(",")} at ${at} (delay=${delaySec}s)`);
+/**
+ * Enqueue post jobs with the correct strategy per platform:
+ *
+ *   YT / FB  → delay=0, scheduledAt passed to platform API for native scheduling
+ *   IG       → delay until scheduledAt, then posts directly (app-level scheduling)
+ */
+export async function enqueueScheduledPost(
+  videoId: string,
+  scheduledPostTime: Date | null,
+  platforms: string[],
+): Promise<string> {
+  const queue = getPostQueue();
 
-  const job = await queue.add("post-video", {
-    videoId,
-    platforms,
-    scheduledAt: scheduledPostTime?.toISOString(),
-  }, { jobId, delay });
+  const nativePlatforms = platforms.filter((p) => p !== "INSTAGRAM");
+  const igPlatforms = platforms.filter((p) => p === "INSTAGRAM");
 
-  return job.id ?? jobId;
+  const ids: string[] = [];
+
+  if (nativePlatforms.length > 0) {
+    const jobId = `post-${videoId}`;
+    const ok = await clearExistingJob(queue, jobId);
+    if (ok) {
+      const at = scheduledPostTime?.toISOString() ?? "immediate";
+      log.log(`Enqueuing ${jobId}: ${nativePlatforms.join(",")} nativeSchedule=${at}`);
+      const job = await queue.add("post-video", {
+        videoId,
+        platforms: nativePlatforms,
+        scheduledAt: scheduledPostTime?.toISOString(),
+      }, { jobId, delay: 0 });
+      ids.push(job.id ?? jobId);
+    }
+  }
+
+  if (igPlatforms.length > 0) {
+    const jobId = `post-${videoId}-ig`;
+    const ok = await clearExistingJob(queue, jobId);
+    if (ok) {
+      const delay = scheduledPostTime
+        ? Math.max(0, scheduledPostTime.getTime() - Date.now())
+        : 0;
+      const delaySec = Math.round(delay / 1000);
+      const at = scheduledPostTime?.toISOString() ?? "immediate";
+      log.log(`Enqueuing ${jobId}: IG appSchedule=${at} (delay=${delaySec}s)`);
+      // No scheduledAt → worker posts immediately when the delayed job fires
+      const job = await queue.add("post-video", {
+        videoId,
+        platforms: igPlatforms,
+      }, { jobId, delay });
+      ids.push(job.id ?? jobId);
+    }
+  }
+
+  return ids[0] ?? `post-${videoId}`;
 }

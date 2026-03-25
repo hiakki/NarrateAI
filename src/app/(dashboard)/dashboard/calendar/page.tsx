@@ -69,13 +69,13 @@ function fmtDuration(ms: number | null): string {
 
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function dateKey(d: Date): string {
@@ -509,7 +509,7 @@ export default function CalendarPage() {
   );
 
   const todayKey = dateKey(today);
-  const monthLabel = viewDate.toLocaleDateString([], { month: "long", year: "numeric" });
+  const monthLabel = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const prevMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1));
   const nextMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1));
@@ -629,7 +629,7 @@ export default function CalendarPage() {
                 <>
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold">
-                      {new Date(selectedDay + "T12:00:00").toLocaleDateString([], {
+                      {new Date(selectedDay + "T12:00:00").toLocaleDateString("en-US", {
                         weekday: "long", month: "long", day: "numeric",
                       })}
                     </h3>

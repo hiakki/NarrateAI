@@ -472,62 +472,6 @@ export async function postVideoToSocials(
       const schedUnix = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
       const schedIso = scheduledAt ? scheduledAt.toISOString() : undefined;
 
-      // Instagram: attempt native scheduling, fall back to deferred if it fails
-      if (platform === "INSTAGRAM" && scheduledAt) {
-        const igSchedUnix = Math.floor(scheduledAt.getTime() / 1000);
-        log.log(`Attempting native IG scheduling for ${videoId} at ${scheduledAt.toISOString()} (unix=${igSchedUnix})`);
-        fileLogger?.poster(`INSTAGRAM: attempting native schedule at ${scheduledAt.toISOString()}`);
-        try {
-          const nativeResult = await postInstagramReel(
-            accounts[0].platformUserId,
-            accessToken,
-            videoPath,
-            igCaption,
-            refreshToken,
-            accounts[0].pageId,
-            igSchedUnix,
-          );
-          if (nativeResult.success) {
-            log.log(`IG native scheduling succeeded for ${videoId}: containerId=${nativeResult.postId}`);
-            fileLogger?.poster(`INSTAGRAM: NATIVE SCHEDULED containerId=${nativeResult.postId}`);
-            await finalizePlatformEx(videoId, {
-              platform: "INSTAGRAM",
-              success: "scheduled",
-              postId: nativeResult.postId ?? null,
-              url: null,
-            });
-            const entries = await getPlatformEntries(videoId);
-            const igEntry = entries.get("INSTAGRAM");
-            if (igEntry) {
-              igEntry.scheduledFor = scheduledAt.toISOString();
-              const allEntries = [...entries.values()];
-              await db.video.update({ where: { id: videoId }, data: { postedPlatforms: allEntries as never } });
-            }
-            return { platform: "INSTAGRAM", success: true, postId: nativeResult.postId };
-          }
-          log.warn(`IG native scheduling failed: ${nativeResult.error} — falling back to deferred`);
-        } catch (nativeErr) {
-          log.warn(`IG native scheduling error: ${nativeErr instanceof Error ? nativeErr.message : nativeErr} — falling back to deferred`);
-        }
-
-        log.log(`Deferring Instagram publish for ${videoId} to ${scheduledAt.toISOString()}`);
-        fileLogger?.poster(`INSTAGRAM: DEFERRED to ${scheduledAt.toISOString()} (native scheduling failed)`);
-        await finalizePlatformEx(videoId, {
-          platform: "INSTAGRAM",
-          success: "scheduled",
-          postId: null,
-          url: null,
-        });
-        const entries = await getPlatformEntries(videoId);
-        const igEntry = entries.get("INSTAGRAM");
-        if (igEntry) {
-          igEntry.scheduledFor = scheduledAt.toISOString();
-          const allEntries = [...entries.values()];
-          await db.video.update({ where: { id: videoId }, data: { postedPlatforms: allEntries as never } });
-        }
-        return { platform: "INSTAGRAM", success: true, postId: undefined };
-      }
-
       let lastResult: { success: boolean; postId?: string; postUrl?: string; error?: string } | null = null;
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {

@@ -30,8 +30,16 @@ import {
   computeAndGuardPostTime,
 } from "../src/lib/scheduler-utils";
 import { probeAllNicheTrends } from "../src/services/clip-repurpose/trending-probe";
+import { CLIP_NICHE_META } from "../src/config/clip-niches";
+import {
+  rankNichesFromTrending,
+  pickTopNichesForTarget,
+  computeStaggeredSchedule,
+  type NicheTrendingStats,
+} from "../src/lib/niche-optimizer";
 
 const db = new PrismaClient();
+const DAILY_CLIP_POSTS_PER_PLATFORM = parseInt(process.env.DAILY_CLIP_POSTS_PER_PLATFORM ?? "6", 10);
 const logger = createLogger("Scheduler");
 const { log, warn, error: err, debug } = logger;
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
@@ -1023,18 +1031,6 @@ const postWorker = new BullWorker<PostVideoJobData>(
         await enqueueScheduledPost(videoId, retryDate, retryPlatforms);
       }
 
-      // Check for deferred IG (native scheduling failed, fell back to deferred)
-      for (const e of entries) {
-        if (e.platform === "INSTAGRAM" && e.success === "scheduled" && e.scheduledFor && !e.retryAfter) {
-          const igDate = new Date(e.scheduledFor);
-          if (igDate.getTime() > Date.now() + 60000) {
-            log(`[POST-WORKER] ${videoId} IG deferred → re-enqueue for ${igDate.toISOString()}`);
-            fl?.poster(`IG DEFERRED: enqueued for ${igDate.toISOString()}`);
-            await enqueueScheduledPost(videoId, igDate, ["INSTAGRAM"]);
-          }
-        }
-      }
-
     } catch (e) {
       err(`[POST-WORKER] Error posting ${videoId}:`, e);
       fl?.poster(`POST ERROR: ${e instanceof Error ? e.message : String(e)}`);
@@ -1083,10 +1079,16 @@ cron.schedule("0 2 * * *", () => {
   refreshInsightsDaily();
 });
 
-// Probe niche trending data once per day at 03:00 (server TZ)
-cron.schedule("0 3 * * *", () => {
+// Probe niche trending data at 03:00, then optimize clip automations from scorecard
+cron.schedule("0 3 * * *", async () => {
   log("Running daily niche trending probe...");
-  probeAllNicheTrends(db).catch((e) => err("probeAllNicheTrends error:", e));
+  try {
+    await probeAllNicheTrends(db);
+  } catch (e) {
+    err("probeAllNicheTrends error:", e);
+  }
+  log("Optimizing clip automations from today's scorecard...");
+  await optimizeClipAutomations();
 });
 
 // Purge NicheTrending records older than 30 days (runs daily at 03:30)
@@ -1130,16 +1132,164 @@ async function backfillLastRunAt() {
   }
 }
 
+// ── Bootstrap: create clip-repurpose automations for every niche per user ──
+
+async function bootstrapClipAutomations() {
+  try {
+    const users = await db.user.findMany({ select: { id: true } });
+    if (users.length === 0) return;
+
+    const nicheKeys = Object.keys(CLIP_NICHE_META).filter((k) => k !== "auto");
+
+    for (const user of users) {
+      const existing = await db.automation.findMany({
+        where: { userId: user.id, automationType: "clip-repurpose" },
+        select: { clipConfig: true },
+      });
+      const existingNiches = new Set(
+        existing.map((a) => (a.clipConfig as Record<string, unknown>)?.clipNiche as string).filter(Boolean),
+      );
+
+      const missing = nicheKeys.filter((k) => !existingNiches.has(k));
+      if (missing.length === 0) continue;
+
+      log(`[BOOTSTRAP] Creating ${missing.length} clip automation(s) for user ${user.id}`);
+
+      for (const niche of missing) {
+        const meta = CLIP_NICHE_META[niche]!;
+        const tz = BUILD_ALL_TIMEZONE;
+        const series = await db.series.create({
+          data: {
+            userId: user.id,
+            name: `[Clip] ${meta.label}`,
+            niche: "clip-repurpose",
+            artStyle: "realistic",
+            tone: "dramatic",
+          },
+        });
+
+        await db.automation.create({
+          data: {
+            userId: user.id,
+            name: meta.label,
+            niche: "clip-repurpose",
+            artStyle: "realistic",
+            automationType: "clip-repurpose",
+            clipConfig: {
+              clipNiche: niche,
+              clipDurationSec: 45,
+              cropMode: "blur-bg",
+              creditOriginal: true,
+            },
+            targetPlatforms: meta.bestPlatforms,
+            enabled: false,
+            frequency: "daily",
+            postTime: meta.bestTimesUTC[0],
+            timezone: tz,
+            seriesId: series.id,
+          },
+        });
+      }
+      log(`[BOOTSTRAP] Created ${missing.length} clip automation(s) for user ${user.id}`);
+    }
+  } catch (e) {
+    err("bootstrapClipAutomations error:", e);
+  }
+}
+
+// ── Optimize: daily scorecard-driven enable/disable of clip automations ──
+
+const PLATFORM_POST_GAP_MINUTES = parseInt(process.env.PLATFORM_POST_GAP_MINUTES ?? "60", 10);
+
+async function optimizeClipAutomations() {
+  try {
+    // Step 1: Disable ALL clip-repurpose automations
+    const { count: disabledCount } = await db.automation.updateMany({
+      where: { automationType: "clip-repurpose" },
+      data: { enabled: false },
+    });
+    log(`[OPTIMIZE] Reset ${disabledCount} clip automation(s) to disabled`);
+
+    // Step 2: Read today's NicheTrending data
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const rows = await db.nicheTrending.findMany({
+      where: { date: { gte: todayStart } },
+      orderBy: { date: "desc" },
+    });
+
+    // Dedupe: keep latest entry per niche
+    const latestByNiche = new Map<string, { niche: string; stats: NicheTrendingStats }>();
+    for (const row of rows) {
+      if (!latestByNiche.has(row.niche)) {
+        latestByNiche.set(row.niche, {
+          niche: row.niche,
+          stats: row.stats as unknown as NicheTrendingStats,
+        });
+      }
+    }
+
+    if (latestByNiche.size === 0) {
+      log(`[OPTIMIZE] No NicheTrending data for today, skipping optimization`);
+      return;
+    }
+
+    // Step 3: Rank niches
+    const ranked = rankNichesFromTrending([...latestByNiche.values()]);
+    if (ranked.length === 0) {
+      log(`[OPTIMIZE] No rankable niches, skipping`);
+      return;
+    }
+
+    // Step 4: Pick top N to fill DAILY_CLIP_POSTS_PER_PLATFORM per platform
+    const selected = pickTopNichesForTarget(ranked, DAILY_CLIP_POSTS_PER_PLATFORM);
+    log(`[OPTIMIZE] Selected ${selected.length} niche(s) for ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform`);
+
+    // Step 5: Compute staggered schedule
+    const schedule = computeStaggeredSchedule(selected, PLATFORM_POST_GAP_MINUTES);
+
+    // Step 6: Enable selected automations, update postTime + targetPlatforms
+    for (const entry of selected) {
+      const postTime = schedule.get(entry.niche) ?? entry.bestTimesUTC[0];
+      const platforms = entry.assignedPlatforms;
+
+      const updated = await db.automation.updateMany({
+        where: {
+          automationType: "clip-repurpose",
+          clipConfig: { path: ["clipNiche"], equals: entry.niche },
+        },
+        data: {
+          enabled: true,
+          postTime,
+          targetPlatforms: platforms,
+        },
+      });
+
+      if (updated.count > 0) {
+        log(`[OPTIMIZE] Enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}`);
+      }
+    }
+
+    log(`[OPTIMIZE] Done. ${selected.length} clip automation(s) enabled for today.`);
+  } catch (e) {
+    err("optimizeClipAutomations error:", e);
+  }
+}
+
 // ── Startup ──
 
 log(`Started. Event-driven scheduler.`);
 log(`  Build: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min window)`);
 log(`  Post-video: BullMQ delayed queue (exact-time posting)`);
+log(`  Clip optimizer: ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform, ${PLATFORM_POST_GAP_MINUTES}min gap`);
 log(`  Safety net: every 4h (recovery + reconciliation)`);
 log(`  Catch-up: ${catchUpH}:${String(catchUpMin).padStart(2, "0")} (BUILD_ALL_TIME + 2h)`);
 
 cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
-backfillLastRunAt().then(() => {
-  planDailyBuilds();
-  safetyNet();
-});
+backfillLastRunAt()
+  .then(() => bootstrapClipAutomations())
+  .then(() => {
+    planDailyBuilds();
+    safetyNet();
+  });
