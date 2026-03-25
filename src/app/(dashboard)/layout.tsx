@@ -4,7 +4,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useEffect, useState, useRef, useCallback } from "react";
-import { LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield, Share2, Star, BarChart2, Scissors, Menu, PanelLeftClose, PanelLeft, CalendarClock, Trophy } from "lucide-react";
+import {
+  LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield,
+  Share2, Star, BarChart2, Scissors, PanelLeftClose, PanelLeft,
+  CalendarClock, Trophy, ChevronRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -17,18 +21,53 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/create", label: "Create", icon: Sparkles },
-  { href: "/dashboard/automations", label: "Video Gen", icon: Bot },
-  { href: "/dashboard/clip-repurpose", label: "Viral Clips", icon: Scissors },
-  { href: "/dashboard/characters", label: "Characters", icon: Star },
-  { href: "/dashboard/videos", label: "Videos", icon: Film },
-  { href: "/dashboard/scheduler", label: "Scheduler", icon: CalendarClock },
-  { href: "/dashboard/channels", label: "Channels", icon: Share2 },
-  { href: "/dashboard/scorecard", label: "Scorecard", icon: Trophy },
-  { href: "/dashboard/report", label: "Report", icon: BarChart2 },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+}
+
+interface NavGroup {
+  label?: string;
+  items: NavItem[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    items: [
+      { href: "/dashboard", label: "Home", icon: LayoutDashboard },
+    ],
+  },
+  {
+    label: "Products",
+    items: [
+      { href: "/dashboard/create", label: "Create", icon: Sparkles },
+      { href: "/dashboard/automations", label: "Video Gen", icon: Bot },
+      { href: "/dashboard/clip-repurpose", label: "Viral Clips", icon: Scissors },
+      { href: "/dashboard/characters", label: "Characters", icon: Star },
+    ],
+  },
+  {
+    label: "Library",
+    items: [
+      { href: "/dashboard/videos", label: "Videos", icon: Film },
+      { href: "/dashboard/scheduler", label: "Scheduler", icon: CalendarClock },
+    ],
+  },
+  {
+    label: "Performance",
+    items: [
+      { href: "/dashboard/scorecard", label: "Scorecard", icon: Trophy },
+      { href: "/dashboard/report", label: "Report", icon: BarChart2 },
+    ],
+  },
+  {
+    label: "Account",
+    items: [
+      { href: "/dashboard/channels", label: "Channels", icon: Share2 },
+      { href: "/dashboard/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
 const MD_BREAKPOINT = 768;
@@ -42,6 +81,23 @@ const UserSkeleton = () => (
     </div>
   </div>
 );
+
+function NavLink({ item, isActive }: { item: NavItem; isActive: boolean }) {
+  return (
+    <Link
+      href={item.href}
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-1.5 text-sm transition-colors",
+        isActive
+          ? "bg-primary/10 text-primary font-medium"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <item.icon className="h-4 w-4 shrink-0" />
+      {item.label}
+    </Link>
+  );
+}
 
 export default function DashboardLayout({
   children,
@@ -93,9 +149,28 @@ export default function DashboardLayout({
   const user = mounted && status === "authenticated" ? session?.user : undefined;
   const isAdmin = user?.role === "OWNER" || user?.role === "ADMIN";
 
+  const isActive = (href: string) =>
+    href === "/dashboard"
+      ? pathname === "/dashboard"
+      : pathname.startsWith(href);
+
+  const groupHasActive = (group: NavGroup) =>
+    group.items.some((item) => isActive(item.href));
+
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const toggleGroup = (label: string) =>
+    setCollapsed((prev) => ({ ...prev, [label]: !prev[label] }));
+
+  const isGroupOpen = (group: NavGroup) => {
+    if (!group.label) return true;
+    if (groupHasActive(group)) return true;
+    return !collapsed[group.label];
+  };
+
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Top bar — always visible on all screen sizes */}
+      {/* Top bar */}
       <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4">
         <button
           type="button"
@@ -105,8 +180,11 @@ export default function DashboardLayout({
         >
           {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
         </button>
-        <Link href="/dashboard" className="font-bold text-lg">
-          NarrateAI
+        <Link href="/dashboard" className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
+            N
+          </div>
+          <span className="font-bold text-lg tracking-tight">NarrateAI</span>
         </Link>
       </header>
 
@@ -121,56 +199,59 @@ export default function DashboardLayout({
           aria-hidden="true"
         />
 
-        {/* Sidebar — mobile: fixed overlay; desktop: sticky in-flow */}
+        {/* Sidebar */}
         <aside
           className={cn(
             "shrink-0 flex flex-col border-r overflow-hidden transition-[width] duration-200 ease-in-out",
             "fixed top-14 bottom-0 left-0 z-50 bg-background",
             "md:sticky md:top-14 md:z-auto md:h-[calc(100vh-3.5rem)] md:bg-muted/30",
-            sidebarOpen ? "w-64" : "w-0 border-r-0",
+            sidebarOpen ? "w-60" : "w-0 border-r-0",
           )}
         >
-          <div className="flex min-w-[16rem] flex-1 flex-col">
-            <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-              {navItems.map((item) => {
-                const isActive =
-                  item.href === "/dashboard"
-                    ? pathname === "/dashboard"
-                    : pathname.startsWith(item.href);
+          <div className="flex min-w-[15rem] flex-1 flex-col">
+            <nav className="flex-1 overflow-y-auto px-3 py-2">
+              {navGroups.map((group, gi) => {
+                const open = isGroupOpen(group);
                 return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                      isActive
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  <div key={gi} className={gi > 0 ? "mt-2" : ""}>
+                    {group.label ? (
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => toggleGroup(group.label!)}
+                        className="flex w-full items-center gap-1 rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "h-3 w-3 shrink-0 transition-transform duration-200",
+                            open && "rotate-90",
+                          )}
+                        />
+                        {group.label}
+                      </button>
+                    ) : null}
+                    {open && (
+                      <div className="space-y-0.5">
+                        {group.items.map((item) => (
+                          <NavLink key={item.href} item={item} isActive={isActive(item.href)} />
+                        ))}
+                      </div>
                     )}
-                  >
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                  </Link>
+                  </div>
                 );
               })}
+
               {mounted && isAdmin && (
-                <>
-                  <Separator className="my-2" />
-                  <Link
-                    href="/admin"
-                    className={cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                      pathname.startsWith("/admin")
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    <Shield className="h-4 w-4" />
-                    Admin Panel
-                  </Link>
-                </>
+                <div className="mt-4">
+                  <Separator className="mb-3" />
+                  <NavLink
+                    item={{ href: "/admin", label: "Admin Panel", icon: Shield }}
+                    isActive={pathname.startsWith("/admin")}
+                  />
+                </div>
               )}
             </nav>
+
             <Separator />
             <div className="p-3">
               {user ? (
@@ -220,9 +301,16 @@ export default function DashboardLayout({
           </div>
         </aside>
 
-        {/* Main content */}
-        <main className="flex-1 min-w-0 overflow-auto">
-          <div className="p-4 md:p-8">{children}</div>
+        {/* Main content + footer */}
+        <main className="flex-1 min-w-0 overflow-auto flex flex-col">
+          <div className="flex-1 p-4 md:p-8">{children}</div>
+          <footer className="border-t py-4 px-4 md:px-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground/60">
+            <Link href="/privacy" className="hover:text-muted-foreground transition-colors">Privacy</Link>
+            <Link href="/terms" className="hover:text-muted-foreground transition-colors">Terms</Link>
+            <Link href="/dmca" className="hover:text-muted-foreground transition-colors">DMCA</Link>
+            <Link href="/cookies" className="hover:text-muted-foreground transition-colors">Cookies</Link>
+            <span className="ml-auto">&copy; {new Date().getFullYear()} NarrateAI. All rights reserved.</span>
+          </footer>
         </main>
       </div>
     </div>
