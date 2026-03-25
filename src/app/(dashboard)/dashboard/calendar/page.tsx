@@ -6,9 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Loader2, Calendar as CalendarIcon, Clock, Clapperboard, Scissors,
-  Youtube, Facebook, Instagram, ChevronDown, ChevronRight,
+  Youtube, Facebook, Instagram, ChevronDown, ChevronRight, ChevronLeft,
   CheckCircle2, AlertCircle, Timer, Upload, Trash2, Pause,
-  RefreshCw, Zap, ArrowRight,
+  RefreshCw, Zap, ArrowRight, X,
 } from "lucide-react";
 
 // ── Types ──
@@ -57,14 +57,6 @@ interface VideoItem {
 
 // ── Helpers ──
 
-const DAY_OPTIONS = [
-  { label: "Today", value: 1 },
-  { label: "3 Days", value: 3 },
-  { label: "7 Days", value: 7 },
-  { label: "14 Days", value: 14 },
-  { label: "30 Days", value: 30 },
-] as const;
-
 function fmtDuration(ms: number | null): string {
   if (ms == null || ms <= 0) return "—";
   if (ms < 1000) return `${ms}ms`;
@@ -72,8 +64,7 @@ function fmtDuration(ms: number | null): string {
   if (secs < 60) return `${secs.toFixed(1)}s`;
   const mins = secs / 60;
   if (mins < 60) return `${mins.toFixed(1)}m`;
-  const hrs = mins / 60;
-  return `${hrs.toFixed(1)}h`;
+  return `${(mins / 60).toFixed(1)}h`;
 }
 
 function fmtTime(iso: string | null): string {
@@ -87,13 +78,38 @@ function fmtDateTime(iso: string | null): string {
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-function fmtDateKey(iso: string): string {
-  return new Date(iso).toLocaleDateString([], {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function videoDateKey(v: VideoItem): string {
+  const iso = v.schedule.scheduledPostTime ?? v.createdAt;
+  return dateKey(new Date(iso));
+}
+
+function sameMonth(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function getMonthGrid(year: number, month: number): Date[][] {
+  const first = new Date(year, month, 1);
+  let startDay = first.getDay() - 1;
+  if (startDay < 0) startDay = 6;
+  const start = new Date(year, month, 1 - startDay);
+  const weeks: Date[][] = [];
+  const cursor = new Date(start);
+  for (let w = 0; w < 6; w++) {
+    const week: Date[] = [];
+    for (let d = 0; d < 7; d++) {
+      week.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    weeks.push(week);
+    if (cursor.getMonth() !== month && w >= 4) break;
+  }
+  return weeks;
 }
 
 const PLAT_ICON: Record<string, { icon: typeof Youtube; color: string }> = {
@@ -102,7 +118,25 @@ const PLAT_ICON: Record<string, { icon: typeof Youtube; color: string }> = {
   INSTAGRAM: { icon: Instagram, color: "text-pink-500" },
 };
 
-const STATUS_CONFIG: Record<string, { color: string; bg: string; icon: typeof CheckCircle2; label: string }> = {
+const STATUS_DOT: Record<string, string> = {
+  QUEUED:     "bg-gray-400",
+  GENERATING: "bg-indigo-500",
+  READY:      "bg-cyan-500",
+  SCHEDULED:  "bg-blue-500",
+  POSTED:     "bg-green-500",
+  FAILED:     "bg-red-500",
+};
+
+const STATUS_CHIP: Record<string, string> = {
+  QUEUED:     "bg-gray-100 text-gray-700 border-gray-200",
+  GENERATING: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  READY:      "bg-cyan-50 text-cyan-700 border-cyan-200",
+  SCHEDULED:  "bg-blue-50 text-blue-700 border-blue-200",
+  POSTED:     "bg-green-50 text-green-700 border-green-200",
+  FAILED:     "bg-red-50 text-red-700 border-red-200",
+};
+
+const PLAT_STATUS_CFG: Record<string, { color: string; bg: string; icon: typeof CheckCircle2; label: string }> = {
   posted:    { color: "text-green-700", bg: "bg-green-50 border-green-200", icon: CheckCircle2, label: "Posted" },
   scheduled: { color: "text-blue-700",  bg: "bg-blue-50 border-blue-200",  icon: Timer,        label: "Scheduled" },
   cooldown:  { color: "text-amber-700", bg: "bg-amber-50 border-amber-200", icon: Pause,        label: "Cooldown" },
@@ -112,20 +146,93 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string; icon: typeof Ch
   pending:   { color: "text-gray-500",  bg: "bg-gray-50 border-gray-200",  icon: Clock,        label: "Pending" },
 };
 
-const VIDEO_STATUS_BADGE: Record<string, string> = {
-  QUEUED:     "bg-gray-100 text-gray-700 border-gray-200",
-  GENERATING: "bg-indigo-100 text-indigo-700 border-indigo-200",
-  READY:      "bg-cyan-100 text-cyan-700 border-cyan-200",
-  SCHEDULED:  "bg-blue-100 text-blue-700 border-blue-200",
-  POSTED:     "bg-green-100 text-green-700 border-green-200",
-  FAILED:     "bg-red-100 text-red-700 border-red-200",
+const STAGE_COLORS: Record<string, string> = {
+  SCRIPT: "bg-violet-400", IMAGES: "bg-sky-400", IMAGE_TO_VIDEO: "bg-teal-400",
+  VOICEOVER: "bg-amber-400", BGM: "bg-pink-400", SFX: "bg-orange-400",
+  ASSEMBLY: "bg-emerald-400", UPLOADING: "bg-gray-400", DISCOVER: "bg-cyan-400",
+  DOWNLOAD: "bg-blue-400", HEATMAP: "bg-indigo-400", CLIP: "bg-purple-400",
+  ENHANCE: "bg-rose-400",
 };
 
-// ── Components ──
+// ── Sub-components ──
+
+function EventChip({ video, onClick }: { video: VideoItem; onClick: () => void }) {
+  const time = fmtTime(video.schedule.scheduledPostTime ?? video.createdAt);
+  const statusColor = STATUS_DOT[video.status] ?? "bg-gray-400";
+
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className={`group flex items-center gap-1 w-full rounded px-1.5 py-0.5 text-[10px] leading-tight truncate border transition-all hover:shadow-sm ${STATUS_CHIP[video.status] ?? "bg-gray-50 border-gray-200 text-gray-700"}`}
+    >
+      <span className={`shrink-0 h-1.5 w-1.5 rounded-full ${statusColor}`} />
+      {video.isClip
+        ? <Scissors className="h-2.5 w-2.5 shrink-0 opacity-60" />
+        : <Clapperboard className="h-2.5 w-2.5 shrink-0 opacity-60" />
+      }
+      <span className="font-medium shrink-0">{time}</span>
+      <span className="truncate opacity-70">{video.title || video.niche}</span>
+    </button>
+  );
+}
+
+function DayCell({
+  day, videos, isCurrentMonth, isToday, isSelected, onSelect, onEventClick,
+}: {
+  day: Date;
+  videos: VideoItem[];
+  isCurrentMonth: boolean;
+  isToday: boolean;
+  isSelected: boolean;
+  onSelect: () => void;
+  onEventClick: (v: VideoItem) => void;
+}) {
+  const maxVisible = 3;
+  const visible = videos.slice(0, maxVisible);
+  const overflow = videos.length - maxVisible;
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`min-h-[90px] md:min-h-[110px] border-b border-r p-1 cursor-pointer transition-colors ${
+        isSelected
+          ? "bg-primary/5 ring-2 ring-primary/30 ring-inset"
+          : "hover:bg-muted/40"
+      } ${!isCurrentMonth ? "bg-muted/20" : ""}`}
+    >
+      <div className="flex items-center justify-between mb-0.5">
+        <span
+          className={`inline-flex items-center justify-center h-6 w-6 rounded-full text-xs font-medium ${
+            isToday
+              ? "bg-primary text-primary-foreground"
+              : isCurrentMonth
+              ? "text-foreground"
+              : "text-muted-foreground/50"
+          }`}
+        >
+          {day.getDate()}
+        </span>
+        {videos.length > 0 && (
+          <span className="text-[9px] text-muted-foreground">{videos.length}</span>
+        )}
+      </div>
+      <div className="space-y-0.5">
+        {visible.map((v) => (
+          <EventChip key={v.id} video={v} onClick={() => onEventClick(v)} />
+        ))}
+        {overflow > 0 && (
+          <div className="text-[9px] text-muted-foreground pl-1 font-medium">
+            +{overflow} more
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function PlatformBadge({ p }: { p: PlatformInfo }) {
   const platCfg = PLAT_ICON[p.platform];
-  const statusCfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.pending;
+  const statusCfg = PLAT_STATUS_CFG[p.status] ?? PLAT_STATUS_CFG.pending;
   const Icon = platCfg?.icon ?? Zap;
   const StatusIcon = statusCfg.icon;
 
@@ -140,9 +247,7 @@ function PlatformBadge({ p }: { p: PlatformInfo }) {
         </span>
       )}
       {p.status === "scheduled" && p.scheduledFor && (
-        <span className="text-[10px] opacity-70">
-          {fmtTime(p.scheduledFor)}
-        </span>
+        <span className="text-[10px] opacity-70">{fmtTime(p.scheduledFor)}</span>
       )}
     </div>
   );
@@ -156,32 +261,16 @@ function StageBar({ stages }: { stages: StageEntry[] }) {
   const total = sorted.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
   if (total === 0) return null;
 
-  const STAGE_COLORS: Record<string, string> = {
-    SCRIPT: "bg-violet-400",
-    IMAGES: "bg-sky-400",
-    IMAGE_TO_VIDEO: "bg-teal-400",
-    VOICEOVER: "bg-amber-400",
-    BGM: "bg-pink-400",
-    SFX: "bg-orange-400",
-    ASSEMBLY: "bg-emerald-400",
-    UPLOADING: "bg-gray-400",
-    DISCOVER: "bg-cyan-400",
-    DOWNLOAD: "bg-blue-400",
-    HEATMAP: "bg-indigo-400",
-    CLIP: "bg-purple-400",
-    ENHANCE: "bg-rose-400",
-  };
-
   return (
-    <div className="space-y-1">
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted/40">
+    <div className="space-y-1.5">
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted/40">
         {sorted.map((s, i) => {
-          const pct = total > 0 ? ((s.durationMs ?? 0) / total) * 100 : 0;
+          const pct = ((s.durationMs ?? 0) / total) * 100;
           if (pct < 0.5) return null;
           return (
             <div
               key={i}
-              className={`${STAGE_COLORS[s.name] ?? "bg-gray-300"} transition-all`}
+              className={STAGE_COLORS[s.name] ?? "bg-gray-300"}
               style={{ width: `${pct}%` }}
               title={`${s.name}: ${fmtDuration(s.durationMs)}`}
             />
@@ -200,287 +289,359 @@ function StageBar({ stages }: { stages: StageEntry[] }) {
   );
 }
 
-function VideoCard({ video }: { video: VideoItem }) {
-  const [expanded, setExpanded] = useState(false);
+function DetailPanel({
+  video, onClose,
+}: {
+  video: VideoItem;
+  onClose: () => void;
+}) {
   const { build, schedule, platforms } = video;
-
-  const hasCooldown = platforms.some((p) => p.status === "cooldown");
+  const [stagesOpen, setStagesOpen] = useState(false);
 
   return (
-    <Card className={`transition-shadow hover:shadow-md ${hasCooldown ? "ring-1 ring-amber-300" : ""}`}>
-      <CardContent className="p-4 space-y-3">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            {video.isClip
-              ? <Scissors className="h-4 w-4 text-purple-500 shrink-0" />
-              : <Clapperboard className="h-4 w-4 text-blue-500 shrink-0" />
-            }
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate">
-                {video.title || video.id.slice(0, 12)}
-              </p>
-              <p className="text-[11px] text-muted-foreground truncate">
-                {video.automationName ?? "Manual"} · {video.niche}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Badge variant="outline" className={`text-[10px] ${VIDEO_STATUS_BADGE[video.status] ?? ""}`}>
-              {video.status}
-            </Badge>
-            {video.duration && (
-              <span className="text-[10px] text-muted-foreground">{video.duration}s</span>
-            )}
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {video.isClip
+            ? <Scissors className="h-5 w-5 text-purple-500 shrink-0" />
+            : <Clapperboard className="h-5 w-5 text-blue-500 shrink-0" />
+          }
+          <div className="min-w-0">
+            <p className="font-semibold truncate">{video.title || video.id.slice(0, 16)}</p>
+            <p className="text-xs text-muted-foreground">{video.automationName ?? "Manual"} · {video.niche}</p>
           </div>
         </div>
+        <button onClick={onClose} className="p-1 hover:bg-muted rounded-md transition-colors">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
 
-        {/* Timeline summary */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            <span>Built</span>
-          </div>
-          <div className="text-right font-mono">
-            {fmtTime(build.startedAt ?? video.createdAt)}
+      <div className="flex items-center gap-2">
+        <Badge variant="outline" className={`text-xs ${STATUS_CHIP[video.status] ?? ""}`}>
+          {video.status}
+        </Badge>
+        {video.duration && <span className="text-xs text-muted-foreground">{video.duration}s video</span>}
+        <span className="text-xs text-muted-foreground">
+          {video.isClip ? "Viral Clip" : "AI Video"}
+        </span>
+      </div>
+
+      {/* Timeline */}
+      <Card>
+        <CardContent className="p-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Timeline</p>
+          <div className="space-y-2 text-sm">
+            <TimelineRow
+              icon={<Clock className="h-3.5 w-3.5" />}
+              label="Build started"
+              value={fmtDateTime(build.startedAt ?? video.createdAt)}
+            />
             {build.durationMs != null && (
-              <span className="ml-1 text-muted-foreground">({fmtDuration(build.durationMs)})</span>
+              <TimelineRow
+                icon={<Zap className="h-3.5 w-3.5 text-amber-500" />}
+                label="Build duration"
+                value={fmtDuration(build.durationMs)}
+                accent
+              />
+            )}
+            <TimelineRow
+              icon={<Timer className="h-3.5 w-3.5 text-blue-500" />}
+              label="Scheduled for"
+              value={fmtDateTime(schedule.scheduledPostTime)}
+            />
+            {schedule.postedAt && (
+              <TimelineRow
+                icon={<CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                label="Published"
+                value={fmtDateTime(schedule.postedAt)}
+              />
+            )}
+            {schedule.schedToPostMs != null && (
+              <TimelineRow
+                icon={<ArrowRight className="h-3.5 w-3.5" />}
+                label="Schedule accuracy"
+                value={`${schedule.schedToPostMs > 0 ? "+" : ""}${fmtDuration(Math.abs(schedule.schedToPostMs))} ${schedule.schedToPostMs > 0 ? "late" : "early"}`}
+              />
             )}
           </div>
+        </CardContent>
+      </Card>
 
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Timer className="h-3 w-3" />
-            <span>Scheduled</span>
-          </div>
-          <div className="text-right font-mono">
-            {fmtTime(schedule.scheduledPostTime)}
-          </div>
-
-          {schedule.postedAt && (
-            <>
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <CheckCircle2 className="h-3 w-3 text-green-500" />
-                <span>Posted</span>
-              </div>
-              <div className="text-right font-mono">
-                {fmtTime(schedule.postedAt)}
-                {schedule.schedToPostMs != null && (
-                  <span className="ml-1 text-muted-foreground">
-                    ({schedule.schedToPostMs > 0 ? "+" : ""}{fmtDuration(Math.abs(schedule.schedToPostMs))} {schedule.schedToPostMs > 0 ? "late" : "early"})
-                  </span>
+      {/* Platforms */}
+      {platforms.length > 0 && (
+        <Card>
+          <CardContent className="p-3 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Platforms</p>
+            <div className="space-y-1.5">
+              {platforms.map((p) => (
+                <PlatformBadge key={p.platform} p={p} />
+              ))}
+            </div>
+            {platforms.filter((p) => p.status === "cooldown").map((p) => (
+              <div key={`cd-${p.platform}`} className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800">
+                <Pause className="h-3.5 w-3.5" />
+                <span className="font-medium">{p.platform}</span> cooldown
+                {p.retryAfter && (
+                  <>
+                    <ArrowRight className="h-3 w-3" />
+                    retry {fmtDateTime(new Date(p.retryAfter).toISOString())}
+                  </>
                 )}
               </div>
-            </>
-          )}
-        </div>
-
-        {/* Platforms */}
-        {platforms.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {platforms.map((p) => (
-              <PlatformBadge key={p.platform} p={p} />
             ))}
-          </div>
-        )}
-
-        {/* Expand for stages */}
-        {build.stages.length > 0 && (
-          <div>
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Build stages
-            </button>
-            {expanded && (
-              <div className="mt-2">
-                <StageBar stages={build.stages} />
+            {platforms.filter((p) => p.status === "failed" && p.error).map((p) => (
+              <div key={`err-${p.platform}`} className="flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-1.5 text-xs text-red-700">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span><strong>{p.platform}:</strong> {p.error}</span>
               </div>
-            )}
-          </div>
-        )}
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
-        {/* Cooldown details */}
-        {platforms.filter((p) => p.status === "cooldown").map((p) => (
-          <div key={p.platform} className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800">
-            <Pause className="h-3.5 w-3.5" />
-            <span className="font-medium">{p.platform}</span> cooldown
-            {p.retryAfter && (
-              <>
-                <ArrowRight className="h-3 w-3" />
-                retry at {fmtDateTime(new Date(p.retryAfter).toISOString())}
-              </>
-            )}
-          </div>
-        ))}
+      {/* Build stages */}
+      {build.stages.length > 0 && (
+        <Card>
+          <CardContent className="p-3 space-y-2">
+            <button
+              onClick={() => setStagesOpen(!stagesOpen)}
+              className="flex items-center gap-1 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
+            >
+              {stagesOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Build Stages
+            </button>
+            {stagesOpen && <StageBar stages={build.stages} />}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
 
-        {/* Failed platform errors */}
-        {platforms.filter((p) => p.status === "failed" && p.error).map((p) => (
-          <div key={p.platform} className="flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-1.5 text-xs text-red-700">
-            <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-            <span><span className="font-medium">{p.platform}:</span> {p.error}</span>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
+function TimelineRow({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {icon}
+        <span className="text-xs">{label}</span>
+      </div>
+      <span className={`text-xs font-mono ${accent ? "font-semibold text-amber-600" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+function DayDetailList({ videos, onEventClick }: { videos: VideoItem[]; onEventClick: (v: VideoItem) => void }) {
+  if (videos.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No videos this day</p>;
+  return (
+    <div className="space-y-1.5">
+      {videos.map((v) => {
+        const time = fmtTime(v.schedule.scheduledPostTime ?? v.createdAt);
+        return (
+          <button
+            key={v.id}
+            onClick={() => onEventClick(v)}
+            className={`flex items-center gap-2 w-full rounded-lg border px-3 py-2 text-left transition-all hover:shadow-sm ${STATUS_CHIP[v.status] ?? "bg-muted/30 border-border"}`}
+          >
+            <span className={`h-2 w-2 rounded-full shrink-0 ${STATUS_DOT[v.status] ?? "bg-gray-400"}`} />
+            {v.isClip
+              ? <Scissors className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              : <Clapperboard className="h-3.5 w-3.5 shrink-0 opacity-60" />
+            }
+            <span className="text-xs font-medium shrink-0">{time}</span>
+            <span className="text-xs truncate flex-1">{v.title || v.niche}</span>
+            <div className="flex items-center gap-0.5 shrink-0">
+              {v.platforms.map((p) => {
+                const cfg = PLAT_ICON[p.platform];
+                if (!cfg) return null;
+                const I = cfg.icon;
+                return <I key={p.platform} className={`h-3 w-3 ${cfg.color}`} />;
+              })}
+            </div>
+            {v.build.durationMs != null && (
+              <span className="text-[10px] text-muted-foreground shrink-0">{fmtDuration(v.build.durationMs)}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
 // ── Main Page ──
 
 export default function CalendarPage() {
-  const [days, setDays] = useState(7);
+  const today = useMemo(() => new Date(), []);
+  const [viewDate, setViewDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [data, setData] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDay, setSelectedDay] = useState<string | null>(dateKey(today));
+  const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
 
-  const fetchData = useCallback(async (d: number) => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/calendar?days=${d}`);
+      const res = await fetch(`/api/calendar?days=90`);
       if (res.ok) {
         const json = await res.json();
         setData(json.videos ?? []);
       }
-    } catch {
-      // ignore
-    } finally {
+    } catch { /* ignore */ } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchData(days); }, [days, fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  const grouped = useMemo(() => {
+  const videosByDay = useMemo(() => {
     const map = new Map<string, VideoItem[]>();
     for (const v of data) {
-      const key = fmtDateKey(v.createdAt);
+      const key = videoDateKey(v);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(v);
     }
-    return [...map.entries()];
+    return map;
   }, [data]);
 
-  // Summary stats
-  const stats = useMemo(() => {
-    let totalBuilt = 0;
-    let totalBuildMs = 0;
-    let totalPosted = 0;
-    let totalCooldowns = 0;
-    let totalScheduled = 0;
-    for (const v of data) {
-      if (v.build.durationMs != null) {
-        totalBuilt++;
-        totalBuildMs += v.build.durationMs;
+  const weeks = useMemo(
+    () => getMonthGrid(viewDate.getFullYear(), viewDate.getMonth()),
+    [viewDate],
+  );
+
+  const todayKey = dateKey(today);
+  const monthLabel = viewDate.toLocaleDateString([], { month: "long", year: "numeric" });
+
+  const prevMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1));
+  const nextMonth = () => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1));
+  const goToday = () => {
+    setViewDate(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelectedDay(todayKey);
+    setSelectedVideo(null);
+  };
+
+  const selectedDayVideos = selectedDay ? (videosByDay.get(selectedDay) ?? []) : [];
+
+  const monthStats = useMemo(() => {
+    let built = 0, buildMs = 0, posted = 0, cooldowns = 0;
+    for (const [key, vids] of videosByDay) {
+      const d = new Date(key);
+      if (!sameMonth(d, viewDate)) continue;
+      for (const v of vids) {
+        if (v.build.durationMs != null) { built++; buildMs += v.build.durationMs; }
+        if (v.status === "POSTED") posted++;
+        cooldowns += v.platforms.filter((p) => p.status === "cooldown").length;
       }
-      if (v.status === "POSTED") totalPosted++;
-      if (v.status === "SCHEDULED") totalScheduled++;
-      totalCooldowns += v.platforms.filter((p) => p.status === "cooldown").length;
     }
-    return {
-      total: data.length,
-      built: totalBuilt,
-      avgBuildMs: totalBuilt > 0 ? totalBuildMs / totalBuilt : 0,
-      posted: totalPosted,
-      scheduled: totalScheduled,
-      cooldowns: totalCooldowns,
-    };
-  }, [data]);
+    return { built, avgBuildMs: built > 0 ? buildMs / built : 0, posted, cooldowns };
+  }, [videosByDay, viewDate]);
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <CalendarIcon className="h-6 w-6" />
+    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+      {/* Top bar */}
+      <div className="flex items-center justify-between gap-4 px-4 py-3 border-b shrink-0">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
+            <CalendarIcon className="h-5 w-5" />
             Calendar
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Build timelines, post schedules, and platform status
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border overflow-hidden">
-            {DAY_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setDays(opt.value)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  days === opt.value
-                    ? "bg-primary text-primary-foreground"
-                    : "hover:bg-muted"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="hidden md:flex items-center gap-3 ml-4 text-xs text-muted-foreground">
+            <span>{monthStats.built} built</span>
+            <span className="text-muted-foreground/30">|</span>
+            <span>avg {fmtDuration(monthStats.avgBuildMs)}</span>
+            <span className="text-muted-foreground/30">|</span>
+            <span className="text-green-600">{monthStats.posted} posted</span>
+            {monthStats.cooldowns > 0 && (
+              <>
+                <span className="text-muted-foreground/30">|</span>
+                <span className="text-amber-600">{monthStats.cooldowns} cooldowns</span>
+              </>
+            )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => fetchData(days)} disabled={loading}>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button variant="outline" size="sm" onClick={goToday} className="text-xs h-7 px-2">Today</Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={prevMonth}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <span className="text-sm font-semibold min-w-[140px] text-center">{monthLabel}</span>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={nextMonth}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="icon" className="h-7 w-7 ml-1" onClick={fetchData} disabled={loading}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <SummaryCard label="Total Videos" value={String(stats.total)} />
-        <SummaryCard label="Avg Build Time" value={fmtDuration(stats.avgBuildMs)} />
-        <SummaryCard label="Posted" value={String(stats.posted)} accent="green" />
-        <SummaryCard label="Scheduled" value={String(stats.scheduled)} accent="blue" />
-        <SummaryCard label="Cooldowns" value={String(stats.cooldowns)} accent={stats.cooldowns > 0 ? "amber" : undefined} />
-      </div>
-
-      {/* Loading */}
-      {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!loading && data.length === 0 && (
-        <div className="text-center py-16 text-muted-foreground">
-          <CalendarIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No videos found in the last {days} day{days > 1 ? "s" : ""}</p>
-        </div>
-      )}
-
-      {/* Timeline grouped by day */}
-      {!loading && grouped.map(([dateLabel, videos]) => (
-        <div key={dateLabel} className="space-y-3">
-          <div className="sticky top-14 z-10 bg-background/95 backdrop-blur-sm py-2 border-b">
-            <h2 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-              <CalendarIcon className="h-4 w-4" />
-              {dateLabel}
-              <Badge variant="outline" className="text-[10px] ml-1">{videos.length}</Badge>
-            </h2>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {videos.map((v) => (
-              <VideoCard key={v.id} video={v} />
+      {/* Body: calendar grid + side panel */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Calendar grid */}
+        <div className="flex-1 flex flex-col overflow-auto">
+          {/* Weekday headers */}
+          <div className="grid grid-cols-7 border-b shrink-0">
+            {WEEKDAYS.map((wd) => (
+              <div key={wd} className="text-center text-[11px] font-medium text-muted-foreground py-2 border-r last:border-r-0">
+                {wd}
+              </div>
             ))}
           </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
-function SummaryCard({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  const accentClass = accent === "green"
-    ? "text-green-600"
-    : accent === "blue"
-    ? "text-blue-600"
-    : accent === "amber"
-    ? "text-amber-600"
-    : "";
-  return (
-    <Card>
-      <CardContent className="p-3">
-        <p className="text-[11px] text-muted-foreground">{label}</p>
-        <p className={`text-lg font-bold ${accentClass}`}>{value}</p>
-      </CardContent>
-    </Card>
+          {loading ? (
+            <div className="flex-1 flex items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="flex-1">
+              {weeks.map((week, wi) => (
+                <div key={wi} className="grid grid-cols-7">
+                  {week.map((day) => {
+                    const dk = dateKey(day);
+                    const dayVideos = videosByDay.get(dk) ?? [];
+                    return (
+                      <DayCell
+                        key={dk}
+                        day={day}
+                        videos={dayVideos}
+                        isCurrentMonth={sameMonth(day, viewDate)}
+                        isToday={dk === todayKey}
+                        isSelected={dk === selectedDay}
+                        onSelect={() => { setSelectedDay(dk); setSelectedVideo(null); }}
+                        onEventClick={(v) => { setSelectedDay(dk); setSelectedVideo(v); }}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Side panel */}
+        {selectedDay && (
+          <div className="w-[320px] lg:w-[360px] border-l bg-background overflow-y-auto shrink-0 hidden md:block">
+            <div className="p-4 space-y-4">
+              {selectedVideo ? (
+                <DetailPanel
+                  video={selectedVideo}
+                  onClose={() => setSelectedVideo(null)}
+                />
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold">
+                      {new Date(selectedDay + "T12:00:00").toLocaleDateString([], {
+                        weekday: "long", month: "long", day: "numeric",
+                      })}
+                    </h3>
+                    <Badge variant="outline" className="text-[10px]">{selectedDayVideos.length}</Badge>
+                  </div>
+                  <DayDetailList videos={selectedDayVideos} onEventClick={setSelectedVideo} />
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
