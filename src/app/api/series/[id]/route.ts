@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import fs from "fs/promises";
-import path from "path";
+import { cleanupVideoFiles } from "@/lib/video-cleanup";
 
 export async function DELETE(
   _req: NextRequest,
@@ -29,17 +28,7 @@ export async function DELETE(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const videosDir = path.join(process.cwd(), "public", "videos");
-    await Promise.allSettled(
-      series.videos.map(async (v) => {
-        if (v.videoUrl?.includes("/video.mp4")) {
-          const dir = path.join(process.cwd(), "public", v.videoUrl.replace(/^\//, "").replace(/\/video\.mp4$/, ""));
-          await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-        }
-        await fs.unlink(path.join(videosDir, `${v.id}.mp4`)).catch(() => {});
-        await fs.rm(path.join(videosDir, v.id), { recursive: true, force: true }).catch(() => {});
-      }),
-    );
+    await cleanupVideoFiles(series.videos);
 
     await db.series.delete({ where: { id } });
 
