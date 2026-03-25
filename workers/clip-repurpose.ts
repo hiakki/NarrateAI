@@ -7,10 +7,10 @@ import { upsertNicheTrendingFromDiscovery } from "../src/services/clip-repurpose
 import { downloadVideoAuto, parseVideoInfo } from "../src/services/clip-repurpose/downloader";
 import { findPeakSegment, findPeakViaTranscript } from "../src/services/clip-repurpose/heatmap";
 import { extractAndCrop, parseVttForSegment, buildAssFile, enhanceClip, detectSpeechSegments, alignCuesToAudio, SPEED_FACTOR } from "../src/services/clip-repurpose/clip-processor";
-import { postVideoToSocials } from "../src/services/social-poster";
 import { buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath } from "../src/lib/video-paths";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
 import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
+import { enqueueScheduledPost } from "../src/services/queue";
 import type { ClipRepurposeJobData } from "../src/services/queue";
 import fs from "fs/promises";
 import path from "path";
@@ -139,27 +139,19 @@ const worker = new Worker<ClipRepurposeJobData>(
     fl?.worker(`JOB START: video=${videoId}, niche=${clipConfig.clipNiche}, dur=${clipConfig.clipDurationSec}s`);
 
     try {
-      // ── Guard: if video is already READY (BullMQ retry after posting failure), skip to posting ──
       const existingVideo = await db.video.findUnique({ where: { id: videoId }, select: { status: true, videoUrl: true } });
       if (existingVideo?.status === "READY" && existingVideo?.videoUrl) {
-        log.log(`[RETRY-POST]`, `Video ${videoId} already READY, skipping reprocessing — going straight to posting`);
-        fl?.worker(`RETRY-POST: video=${videoId} already READY, skipping to posting`);
+        log.log(`[RETRY-POST]`, `Video ${videoId} already READY, re-enqueuing post job`);
+        fl?.worker(`RETRY-POST: video=${videoId} already READY, enqueuing post`);
         const jobTargets = (targetPlatforms ?? []) as string[];
         if (process.env.DRY_RUN === "1") {
-          log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
-          fl?.worker(`DRY_RUN: skipping post/schedule`);
+          log.log(`[SCHEDULE]`, `DRY_RUN — skipping post enqueue`);
         } else if (jobTargets.length > 0) {
           const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
-          const scheduledAt = freshVideo?.scheduledPostTime
-            ? new Date(freshVideo.scheduledPostTime)
-            : new Date(Date.now() + 60 * 60 * 1000);
-          const results = await postVideoToSocials(videoId, undefined, scheduledAt, fl ?? undefined);
-          const ok = results.filter((r) => r.success).map((r) => r.platform);
-          if (ok.length > 0) {
-            await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
-            log.log(`[SCHEDULE]`, `Retry-post SCHEDULED → ${ok.join(", ")}`);
-            fl?.worker(`RETRY-POST DONE: SCHEDULED → ${ok.join(", ")}`);
-          }
+          const schedAt = freshVideo?.scheduledPostTime ? new Date(freshVideo.scheduledPostTime) : null;
+          await enqueueScheduledPost(videoId, schedAt, jobTargets);
+          log.log(`[SCHEDULE]`, `Enqueued delayed post for ${schedAt?.toISOString() ?? "immediate"}`);
+          fl?.worker(`RETRY-POST: enqueued for ${schedAt?.toISOString() ?? "immediate"}`);
         }
         return;
       }
@@ -416,38 +408,22 @@ const worker = new Worker<ClipRepurposeJobData>(
       // Clean up tmp
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 
-      // ── SCHEDULE via native platform APIs (never post immediately) ──
       const jobTargets = (targetPlatforms ?? []) as string[];
       if (process.env.DRY_RUN === "1") {
-        log.log(`[SCHEDULE]`, `DRY_RUN — skipping post/schedule to ${jobTargets.join(", ") || "(none)"}`);
-        fl?.worker(`DRY_RUN: skipping post/schedule`);
+        log.log(`[SCHEDULE]`, `DRY_RUN — skipping post enqueue`);
+        fl?.worker(`DRY_RUN: skipping post enqueue`);
       } else if (jobTargets.length === 0) {
         log.log(`[POST]`, `Skipped — no target platforms in job`);
         fl?.worker(`SCHEDULE: no target platforms`);
       } else {
         try {
           const freshVideo = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true } });
-          const scheduledAt = freshVideo?.scheduledPostTime
-            ? new Date(freshVideo.scheduledPostTime)
-            : new Date(Date.now() + 60 * 60 * 1000);
-          log.log(`[SCHEDULE]`, `Scheduling for ${scheduledAt.toISOString()} on ${jobTargets.join(", ")}`);
-          fl?.poster(`SCHEDULE: video=${videoId} to [${jobTargets.join(", ")}] at ${scheduledAt.toISOString()}`);
-          const results = await postVideoToSocials(videoId, undefined, scheduledAt, fl ?? undefined);
-          if (results.length > 0) {
-            const ok = results.filter((r) => r.success).map((r) => r.platform);
-            const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-            if (ok.length > 0) {
-              log.log(`[SCHEDULE]`, `SCHEDULED → ${ok.join(", ")}`);
-              await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
-              fl?.poster(`DONE: video=${videoId} → SCHEDULED (${ok.join(", ")})`);
-            }
-            if (failed.length > 0) {
-              log.warn(`[SCHEDULE]`, `SCHEDULE_FAIL: ${failed.join("; ")}`);
-              fl?.poster(`PARTIAL_FAIL: ${failed.join("; ")}`);
-            }
-          }
+          const schedAt = freshVideo?.scheduledPostTime ? new Date(freshVideo.scheduledPostTime) : null;
+          await enqueueScheduledPost(videoId, schedAt, jobTargets);
+          log.log(`[SCHEDULE]`, `Enqueued delayed post for ${schedAt?.toISOString() ?? "immediate"} → ${jobTargets.join(", ")}`);
+          fl?.poster(`SCHEDULE: video=${videoId} enqueued for ${schedAt?.toISOString() ?? "immediate"} → ${jobTargets.join(", ")}`);
         } catch (postErr) {
-          log.warn(`[SCHEDULE]`, `SCHEDULE_ERR:`, postErr);
+          log.warn(`[SCHEDULE]`, `SCHEDULE_ENQUEUE_ERR:`, postErr);
           fl?.poster(`ERROR: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
         }
       }

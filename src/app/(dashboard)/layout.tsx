@@ -7,7 +7,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {
   LayoutDashboard, Sparkles, Bot, Film, Settings, LogOut, Shield,
   Share2, Star, BarChart2, Scissors, PanelLeftClose, PanelLeft,
-  CalendarClock, Trophy, ChevronRight,
+  CalendarClock, CalendarDays, Trophy, ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -51,6 +51,7 @@ const navGroups: NavGroup[] = [
     label: "Library",
     items: [
       { href: "/dashboard/videos", label: "Videos", icon: Film },
+      { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/dashboard/scheduler", label: "Scheduler", icon: CalendarClock },
     ],
   },

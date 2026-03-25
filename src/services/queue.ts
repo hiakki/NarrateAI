@@ -157,3 +157,73 @@ export async function enqueueClipRepurpose(data: ClipRepurposeJobData): Promise<
   const job = await queue.add("clip-repurpose", data, { jobId });
   return job.id ?? jobId;
 }
+
+// ---------------------------------------------------------------------------
+// Scheduled-post queue (delayed BullMQ jobs for exact-time posting)
+// ---------------------------------------------------------------------------
+
+export interface PostVideoJobData {
+  videoId: string;
+  platforms: string[];
+  scheduledAt?: string;
+}
+
+let postQueueInstance: Queue<PostVideoJobData> | null = null;
+
+function getPostQueue(): Queue<PostVideoJobData> {
+  if (!postQueueInstance) {
+    postQueueInstance = new Queue<PostVideoJobData>("post-video", {
+      connection: createRedisConnection() as never,
+      defaultJobOptions: {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 30000 },
+        removeOnComplete: { count: 200 },
+        removeOnFail: { count: 100 },
+      },
+    });
+  }
+  return postQueueInstance;
+}
+
+export function getPostVideoQueue(): Queue<PostVideoJobData> {
+  return getPostQueue();
+}
+
+export async function enqueueScheduledPost(
+  videoId: string,
+  scheduledPostTime: Date | null,
+  platforms: string[],
+): Promise<string> {
+  const queue = getPostQueue();
+  const jobId = `post-${videoId}`;
+  const delay = scheduledPostTime
+    ? Math.max(0, scheduledPostTime.getTime() - Date.now())
+    : 0;
+
+  try {
+    const existing = await queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (["failed", "completed", "unknown", "waiting", "delayed"].includes(state)) {
+        await existing.remove();
+      } else if (state === "active") {
+        log.log(`Post job ${jobId} already active, skipping re-enqueue`);
+        return jobId;
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not check/remove existing post job ${jobId}:`, e);
+  }
+
+  const delaySec = Math.round(delay / 1000);
+  const at = scheduledPostTime?.toISOString() ?? "immediate";
+  log.log(`Enqueuing post job ${jobId}: ${platforms.join(",")} at ${at} (delay=${delaySec}s)`);
+
+  const job = await queue.add("post-video", {
+    videoId,
+    platforms,
+    scheduledAt: scheduledPostTime?.toISOString(),
+  }, { jobId, delay });
+
+  return job.id ?? jobId;
+}

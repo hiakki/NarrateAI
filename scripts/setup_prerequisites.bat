@@ -1,22 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: NarrateAI — Setup & Verify Prerequisites (Windows)
+:: NarrateAI — Setup everything and verify it works (Windows)
 ::
-:: Default: checks prerequisites, starts Docker containers, installs deps,
-:: syncs DB schema. Does NOT start the app — you run it manually.
+:: Use this once to install tools, start infra, build, and optionally restore.
+:: To run the app afterward, use: pnpm dev:all
 ::
 :: Usage:
-::   scripts\setup_prerequisites.bat                       Check prereqs + deps + DB + build
-::   scripts\setup_prerequisites.bat --deploy              Setup + build + PM2 + tunnel
-::   scripts\setup_prerequisites.bat --stop                Stop all PM2 services
-::   scripts\setup_prerequisites.bat --status              Show Docker & PM2 status
-::   scripts\setup_prerequisites.bat --skip-prereqs        Skip tool install checks
-::   scripts\setup_prerequisites.bat --restore file.tar.gz Setup + restore DB
-::
-:: After setup (without --deploy), run the app yourself:
-::   pnpm dev:all          (development)
-::   pnpm build && pnpm start  (production web)
+::   scripts\setup_prerequisites.bat                                  Full setup + deploy
+::   scripts\setup_prerequisites.bat --restore backups\backup.tar.gz   Setup + restore backup
+::   scripts\setup_prerequisites.bat --skip-prereqs                   Skip tool installs
+::   scripts\setup_prerequisites.bat --stop                           Stop services
+::   scripts\setup_prerequisites.bat --status                          Show status
 
 set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%.."
@@ -29,14 +24,13 @@ if not defined PORT set "PORT=3000"
 set "NODE_MAJOR=22"
 set "SKIP_PREREQS=0"
 set "RESTORE_FILE="
-set "ACTION=setup"
+set "ACTION=deploy"
 set "ORIGINAL_PATH=%PATH%"
 
 :parse_args
 if "%~1"=="" goto :done_args
 if "%~1"=="--skip-prereqs" set "SKIP_PREREQS=1" & shift & goto :parse_args
 if "%~1"=="--restore" set "RESTORE_FILE=%~2" & shift & shift & goto :parse_args
-if "%~1"=="--deploy" set "ACTION=deploy" & shift & goto :parse_args
 if "%~1"=="--stop" set "ACTION=stop" & shift & goto :parse_args
 if "%~1"=="--status" set "ACTION=status" & shift & goto :parse_args
 if "%~1"=="--help" goto :show_help
@@ -47,24 +41,23 @@ exit /b 1
 
 if "%ACTION%"=="stop" goto :do_stop
 if "%ACTION%"=="status" goto :do_status
-goto :do_setup
+goto :do_deploy
 
 :show_help
 echo.
-echo NarrateAI Setup Script
+echo NarrateAI - Setup everything and verify it works
 echo.
 echo Usage:
-echo   %~nx0                       Check prereqs + deps + DB + build
-echo   %~nx0 --deploy              Setup + build + PM2 + tunnel
-echo   %~nx0 --stop                Stop all PM2 services
-echo   %~nx0 --status              Show Docker ^& PM2 status
+echo   %~nx0                       Full setup: install tools, start infra, build
 echo   %~nx0 --restore file.tar.gz Setup and restore from backup
-echo   %~nx0 --skip-prereqs        Skip tool installation
+echo   %~nx0 --skip-prereqs       Skip tool installation
+echo   %~nx0 --stop               Stop all services
+echo   %~nx0 --status             Show status
 echo.
-echo After setup, run the app manually:
-echo   pnpm dev:all                Development (app + workers)
-echo   pnpm start                  Production (after --build)
-echo   pm2 start ecosystem.config.cjs  Production via PM2
+echo After setup:
+echo   Run app:           pnpm dev:all
+echo   Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)
+echo Backup/restore:      scripts\backup-restore.bat
 echo.
 exit /b 0
 
@@ -266,7 +259,7 @@ goto :eof
 :: ─────────────────────────────────────────────────────────────────────────────
 :install_all
 echo.
-echo --- Checking prerequisites ---
+echo --- Installing prerequisites ---
 call :detect_pkg
 call :install_wsl
 call :install_docker
@@ -281,7 +274,7 @@ goto :eof
 :: ─────────────────────────────────────────────────────────────────────────────
 :start_infra
 echo.
-echo --- Checking Docker containers (PostgreSQL + Redis) ---
+echo --- Starting infrastructure ---
 pushd "%PROJECT_DIR%"
 
 where docker >nul 2>nul
@@ -331,7 +324,7 @@ if errorlevel 1 (
     )
 )
 
-echo [INFO]  Checking PostgreSQL...
+echo [INFO]  Waiting for PostgreSQL...
 set "_R=30"
 :pg_wait
 if !_R! LEQ 0 (
@@ -348,7 +341,7 @@ goto :pg_wait
 :pg_ok
 echo [ OK ]  PostgreSQL is ready
 
-echo [INFO]  Checking Redis...
+echo [INFO]  Waiting for Redis...
 set "_R=15"
 :redis_wait
 if !_R! LEQ 0 (
@@ -400,7 +393,7 @@ goto :eof
 :: ─────────────────────────────────────────────────────────────────────────────
 :prepare_project
 echo.
-echo --- Installing dependencies ^& syncing database ---
+echo --- Preparing project (deps + schema) ---
 pushd "%PROJECT_DIR%"
 
 echo [INFO]  Installing Node.js dependencies...
@@ -424,10 +417,6 @@ echo [ OK ]  Database schema synced
 popd
 goto :eof
 
-:: ══════════════════════════════════════════════════════════════════════════════
-:: DEPLOY MODE (--deploy): build + PM2 + tunnel
-:: ══════════════════════════════════════════════════════════════════════════════
-
 :: ─────────────────────────────────────────────────────────────────────────────
 :gen_pm2_config
 set "_CWD=%PROJECT_DIR:\=/%"
@@ -436,7 +425,6 @@ set "_CWD=%PROJECT_DIR:\=/%"
     echo   apps: [
     echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT%", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%" }, max_memory_restart: "512M" },
     echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "1G" },
-    echo     { name: "narrateai-clip-worker", script: "node_modules/.bin/tsx", args: "workers/clip-repurpose.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "1G" },
     echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "256M" },
     echo   ],
     echo };
@@ -445,28 +433,13 @@ echo [ OK ]  PM2 config generated
 goto :eof
 
 :: ─────────────────────────────────────────────────────────────────────────────
-:build_project
-echo.
-echo --- Building for production ---
-pushd "%PROJECT_DIR%"
-call pnpm build
-if errorlevel 1 (
-    echo [ERR ] Production build failed
-    popd
-    exit /b 1
-)
-echo [ OK ]  Production build complete
-popd
-goto :eof
-
-:: ─────────────────────────────────────────────────────────────────────────────
 :start_app
 echo.
-echo --- Starting NarrateAI via PM2 ---
+echo --- Starting NarrateAI ---
 pushd "%PROJECT_DIR%"
 call :gen_pm2_config
 
-call pm2 delete narrateai-web narrateai-worker narrateai-clip-worker narrateai-scheduler >nul 2>nul
+call pm2 delete narrateai-web narrateai-worker narrateai-scheduler >nul 2>nul
 call pm2 start "%PM2_ECO%"
 echo [ OK ]  Application started via PM2
 
@@ -537,11 +510,7 @@ echo   Local:   http://localhost:%PORT%
 if defined _TURL echo   Public:  !_TURL!
 if not defined _TURL echo   [WARN] Could not detect tunnel URL -- check: pm2 logs narrateai-tunnel
 echo.
-echo   Useful commands:
-echo     pm2 status                      -- see all processes
-echo     pm2 logs                        -- tail all logs
-echo     pm2 restart all                 -- restart everything
-echo     %~nx0 --stop                    -- stop all services
+echo   pm2 status / pm2 logs / %~nx0 --stop
 echo.
 goto :eof
 
@@ -549,7 +518,7 @@ goto :eof
 :do_stop
 echo.
 echo --- Stopping NarrateAI ---
-call pm2 delete narrateai-web narrateai-worker narrateai-clip-worker narrateai-scheduler narrateai-tunnel >nul 2>nul
+call pm2 delete narrateai-web narrateai-worker narrateai-scheduler narrateai-tunnel >nul 2>nul
 echo [ OK ]  All NarrateAI processes stopped
 echo   To stop Docker too: docker compose down
 echo.
@@ -558,22 +527,20 @@ exit /b 0
 :: ─────────────────────────────────────────────────────────────────────────────
 :do_status
 echo.
+echo NarrateAI Process Status
+echo.
+call pm2 list 2>nul
+echo.
 echo Docker Services
 echo.
 pushd "%PROJECT_DIR%"
 docker compose ps 2>nul
 popd
 echo.
-echo PM2 Processes
-echo.
-call pm2 list 2>nul
-echo.
 exit /b 0
 
-:: ═════════════════════════════════════════════════════════════════════════════
-:: MAIN SETUP FLOW
-:: ═════════════════════════════════════════════════════════════════════════════
-:do_setup
+:: ─────────────────────────────────────────────────────────────────────────────
+:do_deploy
 echo.
 echo +================================================+
 echo     NarrateAI -- Setup Prerequisites
@@ -595,39 +562,23 @@ if errorlevel 1 exit /b 1
 if not "%RESTORE_FILE%"=="" (
     call :restore_backup
     if errorlevel 1 (
-        echo [WARN]  Restore failed or skipped.
-        echo [INFO]  To restore later: scripts\backup-restore.bat restore "%RESTORE_FILE%"
+        echo [WARN]  Restore failed or skipped. Ensure PostgreSQL client is installed for restore.
+        echo [WARN]  Videos, DB data, and other backup contents were NOT restored.
+        echo [INFO]  To restore later: install PostgreSQL client, then run:
+        echo         scripts\backup-restore.bat restore "%RESTORE_FILE%"
+        echo [INFO]  Continuing: schema will be pushed so the app can run.
     )
 )
 
 call :prepare_project
 if errorlevel 1 exit /b 1
 
-:: Always build
-call :build_project
-if errorlevel 1 exit /b 1
-
-:: Start PM2 + tunnel only for --deploy
-if "%ACTION%"=="deploy" (
-    call :start_app
-    call :start_tunnel
-) else (
-    echo.
-    echo ================================================================
-    echo   Setup complete. Ready to run.
-    echo ================================================================
-    echo.
-    echo   Run the app manually:
-    echo     pnpm start                      Production web server
-    echo     pnpm worker                     Video generation worker
-    echo     pnpm worker:clip                Clip repurpose worker
-    echo     pnpm scheduler                  Scheduler
-    echo     pnpm dev:all                    Development mode
-    echo.
-    echo   Or deploy everything at once:
-    echo     %~nx0 --deploy                  PM2 + tunnel
-    echo.
-    echo   Status: %~nx0 --status
-    echo.
-)
+echo.
+echo ================================================================
+echo   Setup complete.
+echo   Run app:           pnpm dev:all
+echo   Run app + tunnel:  pnpm dev:tunnel   (public URL via cloudflared)
+echo   (Dev deprecation warning suppressed. Localtunnel not used.)
+echo ================================================================
+echo.
 exit /b 0

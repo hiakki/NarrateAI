@@ -106,7 +106,13 @@ export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: 
   const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
 
   if (auto.lastRunAt === null) {
-    return { build: false, reason: "new automation — will run on next scheduled day (use Run button for immediate)" };
+    if (auto.postTime && postTimeReachableToday(auto.postTime, tz)) {
+      if (isInBuildWindow()) {
+        return { build: true, reason: "new automation — post time reachable today, building now" };
+      }
+      return { build: false, reason: "new automation — post time reachable today, waiting for build window" };
+    }
+    return { build: false, reason: "new automation — post time passed today, will build tomorrow" };
   }
 
   if (daysSince < gapDays) {
@@ -154,7 +160,10 @@ export function computeNextRunAt(auto: NextRunAuto): Date | null {
   const buildWindowEnd = todayBuild.getTime() + BUILD_WINDOW_MINUTES * 60000;
 
   if (auto.lastRunAt === null) {
-    if (now.getTime() < buildWindowEnd) return todayBuild;
+    if (auto.postTime && postTimeReachableToday(auto.postTime, tz)) {
+      if (now.getTime() < buildWindowEnd) return todayBuild;
+      return now;
+    }
     return new Date(todayBuild.getTime() + 24 * 60 * 60 * 1000);
   }
 
@@ -182,6 +191,20 @@ export function computeNextPostAt(postTime: string, timezone: string): Date {
   const pt = localTimeToUTC(postSlot, timezone);
   if (pt.getTime() < Date.now()) {
     return new Date(pt.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return pt;
+}
+
+/**
+ * Parse the first post-time slot, convert to UTC, and bump to next day
+ * if the resulting time is less than 15 min from now.
+ * Shared by both clip-repurpose and video-gen automation paths.
+ */
+export function computeAndGuardPostTime(postTime: string, timezone: string): Date {
+  const postSlot = postTime.split(",")[0].trim();
+  let pt = localTimeToUTC(postSlot, timezone);
+  if (pt.getTime() < Date.now() + 15 * 60 * 1000) {
+    pt = new Date(pt.getTime() + 24 * 60 * 60 * 1000);
   }
   return pt;
 }

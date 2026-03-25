@@ -2,29 +2,25 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NarrateAI — Setup & Verify Prerequisites
+# NarrateAI — Setup everything and verify it works
 #
-# Default: checks prerequisites, starts Docker containers, installs deps,
-# syncs DB schema. Does NOT start the app — you run it manually.
+# Use once to install tools, start infra (Docker Postgres + Redis), build,
+# and optionally restore from backup. After setup, run the app with: pnpm dev:all
 #
 # Usage:
-#   ./scripts/setup_prerequisites.sh                       # check + setup + build
-#   ./scripts/setup_prerequisites.sh --deploy              # setup + build + PM2 + tunnel
-#   ./scripts/setup_prerequisites.sh --stop                # stop PM2 processes
-#   ./scripts/setup_prerequisites.sh --status              # show Docker & PM2 status
-#   ./scripts/setup_prerequisites.sh --skip-prereqs        # skip tool install checks
-#   ./scripts/setup_prerequisites.sh --restore backup.tar.gz  # setup + restore DB
+#   ./scripts/setup_prerequisites.sh                      # full setup + deploy
+#   ./scripts/setup_prerequisites.sh --restore backup.tar.gz  # setup + restore
+#   ./scripts/setup_prerequisites.sh --skip-prereqs       # skip tool installs
+#   ./scripts/setup_prerequisites.sh --stop               # stop all services
+#   ./scripts/setup_prerequisites.sh --status             # show status
 #
-# After setup (without --deploy), run the app yourself:
-#   pnpm dev:all          (development)
-#   pnpm build && pnpm start  (production web)
-#   pnpm worker           (video generation worker)
-#   pnpm worker:clip      (clip repurpose worker)
-#   pnpm scheduler        (scheduler)
+# Run the app: pnpm dev:all   |   Backup/restore only: scripts/backup-restore.sh
+# Supports: Ubuntu/Debian (apt), macOS (brew)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOG_FILE="$PROJECT_DIR/deploy.log"
 PM2_ECOSYSTEM="$PROJECT_DIR/ecosystem.config.cjs"
 PORT="${PORT:-3000}"
 # Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
@@ -57,10 +53,10 @@ detect_os() {
   info "Detected OS: $OS (package manager: $PKG)"
 }
 
-# ── Check / install: Docker ──────────────────────────────────────────────────
-check_docker() {
+# ── Prerequisite: Docker ─────────────────────────────────────────────────────
+install_docker() {
   if command -v docker &>/dev/null; then
-    ok "Docker installed ($(docker --version | head -1))"
+    ok "Docker already installed ($(docker --version | head -1))"
     return
   fi
 
@@ -89,24 +85,25 @@ check_docker() {
       sudo usermod -aG docker "$USER" 2>/dev/null || true
       ;;
     *)
-      err "Cannot auto-install Docker. Install manually: https://docs.docker.com/get-docker/"
+      err "Cannot auto-install Docker on this OS. Install it manually: https://docs.docker.com/get-docker/"
       exit 1
       ;;
   esac
   ok "Docker installed"
 }
 
-# ── Check / install: Node.js ─────────────────────────────────────────────────
-check_node() {
+# ── Prerequisite: Node.js (22 LTS; avoid 24+ due to DEP0169) ───────────────────
+install_node() {
   if command -v node &>/dev/null; then
     local ver
     ver="$(node -v | sed 's/v//' | cut -d. -f1)"
     if [[ "$ver" -ge 24 ]]; then
-      warn "Node.js $(node -v) detected. Node 22 LTS recommended (DEP0169 warnings)."
+      warn "Node.js $(node -v) detected. Node 22 LTS is recommended to avoid deprecation warnings (DEP0169)."
+      info "Install Node 22: brew install node@22 (macOS) or https://nodejs.org/en/download"
       return
     fi
     if [[ "$ver" -ge "$NODE_MAJOR" ]]; then
-      ok "Node.js installed ($(node -v))"
+      ok "Node.js already installed ($(node -v))"
       return
     fi
     warn "Node.js $(node -v) found, need v${NODE_MAJOR}+. Installing..."
@@ -127,17 +124,17 @@ check_node() {
       sudo dnf install -y nodejs
       ;;
     *)
-      err "Cannot auto-install Node.js. Install v${NODE_MAJOR} LTS: https://nodejs.org"
+      err "Cannot auto-install Node.js. Install v${NODE_MAJOR} LTS manually: https://nodejs.org"
       exit 1
       ;;
   esac
   ok "Node.js installed ($(node -v))"
 }
 
-# ── Check / install: pnpm ────────────────────────────────────────────────────
-check_pnpm() {
+# ── Prerequisite: pnpm ───────────────────────────────────────────────────────
+install_pnpm() {
   if command -v pnpm &>/dev/null; then
-    ok "pnpm installed ($(pnpm -v))"
+    ok "pnpm already installed ($(pnpm -v))"
     return
   fi
 
@@ -146,16 +143,17 @@ check_pnpm() {
     sudo corepack enable 2>/dev/null || corepack enable 2>/dev/null || true
     corepack prepare pnpm@latest --activate 2>/dev/null || true
   fi
+
   if ! command -v pnpm &>/dev/null; then
     npm install -g pnpm 2>/dev/null
   fi
   ok "pnpm installed ($(pnpm -v))"
 }
 
-# ── Check / install: FFmpeg ──────────────────────────────────────────────────
-check_ffmpeg() {
+# ── Prerequisite: FFmpeg ─────────────────────────────────────────────────────
+install_ffmpeg() {
   if command -v ffmpeg &>/dev/null && command -v ffprobe &>/dev/null; then
-    ok "FFmpeg installed ($(ffmpeg -version 2>/dev/null | head -1 | cut -d' ' -f1-3))"
+    ok "FFmpeg already installed ($(ffmpeg -version 2>/dev/null | head -1 | cut -d' ' -f1-3))"
     return
   fi
 
@@ -169,10 +167,10 @@ check_ffmpeg() {
   ok "FFmpeg installed"
 }
 
-# ── Check / install: yt-dlp ──────────────────────────────────────────────────
-check_ytdlp() {
+# ── Prerequisite: yt-dlp (for clip-repurpose pipeline) ─────────────────────
+install_ytdlp() {
   if command -v yt-dlp &>/dev/null; then
-    ok "yt-dlp installed ($(yt-dlp --version 2>/dev/null))"
+    ok "yt-dlp already installed ($(yt-dlp --version 2>/dev/null))"
     return
   fi
 
@@ -186,10 +184,10 @@ check_ytdlp() {
   ok "yt-dlp installed"
 }
 
-# ── Check / install: PM2 ────────────────────────────────────────────────────
-check_pm2() {
+# ── Prerequisite: PM2 ───────────────────────────────────────────────────────
+install_pm2() {
   if command -v pm2 &>/dev/null; then
-    ok "PM2 installed ($(pm2 -v))"
+    ok "PM2 already installed ($(pm2 -v))"
     return
   fi
 
@@ -198,10 +196,10 @@ check_pm2() {
   ok "PM2 installed"
 }
 
-# ── Check / install: cloudflared ─────────────────────────────────────────────
-check_cloudflared() {
+# ── Prerequisite: cloudflared ────────────────────────────────────────────────
+install_cloudflared() {
   if command -v cloudflared &>/dev/null; then
-    ok "cloudflared installed ($(cloudflared --version 2>&1 | head -1))"
+    ok "cloudflared already installed ($(cloudflared --version 2>&1 | head -1))"
     return
   fi
 
@@ -226,22 +224,22 @@ check_cloudflared() {
   ok "cloudflared installed"
 }
 
-# ── Run all prerequisite checks ──────────────────────────────────────────────
-check_all_prereqs() {
-  step "Checking prerequisites"
+# ── Install all prerequisites ────────────────────────────────────────────────
+install_all_prereqs() {
+  step "Installing prerequisites"
   detect_os
-  check_docker
-  check_node
-  check_pnpm
-  check_ffmpeg
-  check_ytdlp
-  check_pm2
-  check_cloudflared
+  install_docker
+  install_node
+  install_pnpm
+  install_ffmpeg
+  install_ytdlp
+  install_pm2
+  install_cloudflared
 }
 
-# ── Ensure Docker containers are running ─────────────────────────────────────
-ensure_containers() {
-  step "Checking Docker containers (PostgreSQL + Redis)"
+# ── Start infrastructure (Postgres + Redis) ──────────────────────────────────
+start_infra() {
+  step "Starting infrastructure (PostgreSQL + Redis)"
   cd "$PROJECT_DIR"
 
   if ! command -v docker &>/dev/null; then
@@ -274,21 +272,14 @@ ensure_containers() {
     fi
   fi
 
-  # Start containers if not already running
-  if ! docker compose ps --status running 2>/dev/null | grep -q postgres; then
-    info "Starting Docker containers..."
-    if ! docker compose up -d 2>/dev/null; then
-      if ! docker-compose up -d 2>/dev/null; then
-        err "docker compose up failed. Check docker-compose.yml and Docker status."
-        exit 1
-      fi
+  if ! docker compose up -d 2>/dev/null; then
+    if ! docker-compose up -d 2>/dev/null; then
+      err "docker compose up failed. Check docker-compose.yml and Docker status."
+      exit 1
     fi
-  else
-    ok "Docker containers already running"
   fi
 
-  # Wait for PostgreSQL
-  info "Checking PostgreSQL..."
+  info "Waiting for PostgreSQL to be ready..."
   local retries=30
   while [[ $retries -gt 0 ]]; do
     if docker compose exec -T postgres pg_isready -U narrateai &>/dev/null 2>&1; then
@@ -300,11 +291,11 @@ ensure_containers() {
   done
   if [[ $retries -eq 0 ]]; then
     err "PostgreSQL did not become ready in 30s"
+    info "Check: docker compose ps / docker compose logs postgres"
     exit 1
   fi
 
-  # Wait for Redis
-  info "Checking Redis..."
+  info "Waiting for Redis to be ready..."
   retries=15
   while [[ $retries -gt 0 ]]; do
     if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
@@ -316,6 +307,7 @@ ensure_containers() {
   done
   if [[ $retries -eq 0 ]]; then
     err "Redis did not become ready in 15s"
+    info "Check: docker compose ps / docker compose logs redis"
     exit 1
   fi
 }
@@ -329,7 +321,7 @@ setup_env() {
 
   if [[ -f "$PROJECT_DIR/.env.example" ]]; then
     cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
-    warn ".env created from .env.example — edit it with your API keys before running"
+    warn ".env created from .env.example — edit it with your API keys before use"
   else
     err "No .env or .env.example found. Create .env with required variables."
     exit 1
@@ -356,9 +348,9 @@ restore_backup() {
   bash "$SCRIPT_DIR/backup-restore.sh" restore "$archive" --yes
 }
 
-# ── Install deps + sync DB schema ────────────────────────────────────────────
+# ── Prepare project (deps + schema) ───────────────────────────────────────────
 prepare_project() {
-  step "Installing dependencies & syncing database"
+  step "Preparing project (dependencies + schema)"
   cd "$PROJECT_DIR"
 
   info "Installing Node.js dependencies..."
@@ -376,25 +368,6 @@ prepare_project() {
   fi
   ok "Database schema synced"
 }
-
-# ── Show status ──────────────────────────────────────────────────────────────
-do_status() {
-  echo ""
-  echo -e "${BOLD}Docker Services${NC}"
-  echo ""
-  cd "$PROJECT_DIR"
-  docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null || warn "Docker Compose not available"
-
-  echo ""
-  echo -e "${BOLD}PM2 Processes${NC}"
-  echo ""
-  pm2 list 2>/dev/null || info "No PM2 processes running"
-  echo ""
-}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DEPLOY MODE (--deploy): build + PM2 + tunnel
-# ══════════════════════════════════════════════════════════════════════════════
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
 generate_pm2_config() {
@@ -439,17 +412,9 @@ PMEOF
   ok "PM2 ecosystem config generated"
 }
 
-# ── Build Next.js for production ─────────────────────────────────────────────
-build_project() {
-  step "Building for production"
-  cd "$PROJECT_DIR"
-  pnpm build
-  ok "Production build complete"
-}
-
-# ── Start application via PM2 ────────────────────────────────────────────────
+# ── Start application ────────────────────────────────────────────────────────
 start_app() {
-  step "Starting NarrateAI via PM2"
+  step "Starting NarrateAI"
   cd "$PROJECT_DIR"
   generate_pm2_config
 
@@ -525,7 +490,7 @@ start_tunnel() {
   echo "    pm2 logs narrateai-scheduler    — scheduler logs"
   echo "    pm2 logs narrateai-tunnel       — tunnel logs"
   echo "    pm2 restart all               — restart everything"
-  echo "    $0 --stop                       — stop all services"
+    echo "    ./scripts/setup_prerequisites.sh --stop    — stop all services"
   echo ""
 }
 
@@ -537,6 +502,21 @@ do_stop() {
   echo ""
   echo "  Infrastructure (Postgres/Redis) is still running in Docker."
   echo "  To stop everything:  docker compose down"
+  echo ""
+}
+
+# ── Show status ──────────────────────────────────────────────────────────────
+do_status() {
+  echo ""
+  echo -e "${BOLD}NarrateAI Process Status${NC}"
+  echo ""
+  pm2 list 2>/dev/null || warn "PM2 not running"
+
+  echo ""
+  echo -e "${BOLD}Docker Services${NC}"
+  echo ""
+  cd "$PROJECT_DIR"
+  docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null || warn "Docker Compose not available"
   echo ""
 }
 
@@ -552,7 +532,6 @@ main() {
     case "$1" in
       --skip-prereqs) skip_prereqs=true; shift ;;
       --restore)      restore_file="${2:-}"; shift 2 ;;
-      --deploy)       action="deploy"; shift ;;
       --stop)         action="stop"; shift ;;
       --status)       action="status"; shift ;;
       --help|-h)
@@ -560,20 +539,18 @@ main() {
         echo "NarrateAI Setup Script"
         echo ""
         echo "Usage:"
-        echo "  $0                                      Check prereqs + deps + DB + build"
-        echo "  $0 --deploy                             Setup + build + PM2 + tunnel"
-        echo "  $0 --stop                               Stop all PM2 services"
-        echo "  $0 --status                             Show Docker & PM2 status"
+        echo "  $0                                      Full setup (prereqs + deps + schema)"
         echo "  $0 --restore <backup.tar.gz>            Setup and restore from backup"
-        echo "  $0 --skip-prereqs                       Skip tool install checks"
+        echo "  $0 --skip-prereqs                       Skip prerequisite installation"
+        echo "  $0 --skip-prereqs --restore <file>      Restore without installing"
+        echo "  $0 --stop                               Stop all NarrateAI services"
+        echo "  $0 --status                             Show running status"
         echo ""
-        echo "Prerequisites checked/installed:"
+        echo "Prerequisites installed automatically:"
         echo "  Docker, Node.js ${NODE_MAJOR}, pnpm, FFmpeg, yt-dlp, PM2, cloudflared"
         echo ""
-        echo "After setup, run the app manually:"
-        echo "  pnpm dev:all                            Development (app + workers)"
-        echo "  pnpm start                              Production (after --build)"
-        echo "  pm2 start ecosystem.config.cjs          Production via PM2"
+        echo "Environment:"
+        echo "  PORT     Web server port (default: 3000)"
         echo ""
         exit 0
         ;;
@@ -594,55 +571,65 @@ main() {
 
   # 1. Prerequisites
   if $skip_prereqs; then
-    info "Skipping prerequisite checks (--skip-prereqs)"
+    info "Skipping prerequisite installation (--skip-prereqs)"
     detect_os
   else
-    check_all_prereqs
+    install_all_prereqs
   fi
 
-  # 2. Ensure Docker containers are up
-  ensure_containers
+  # 2. Start infrastructure
+  start_infra
 
-  # 3. Setup .env if missing
+  # 3. Setup .env (before restore, so restore can overwrite)
   setup_env
 
   # 4. Restore from backup if provided
   if [[ -n "$restore_file" ]]; then
     if ! restore_backup "$restore_file"; then
-      warn "Restore failed or skipped."
-      info "To restore later: scripts/backup-restore.sh restore $restore_file"
+      warn "Restore failed or skipped. Ensure PostgreSQL client is installed for restore."
+      warn "Videos, DB data, and other backup contents were NOT restored."
+      info "To restore later: install PostgreSQL client, then run:"
+      echo "    scripts/backup-restore.sh restore $restore_file"
+      info "Continuing: schema will be pushed so the app can run."
     fi
   fi
 
-  # 5. Install deps + sync DB schema
+  # 5. Prepare project (deps + schema only; no build, no PM2)
   prepare_project
 
-  # 6. Build
-  build_project
-
-  # 7. If --deploy, start PM2 + tunnel
-  if [[ "$action" == "deploy" ]]; then
-    start_app
-    start_tunnel
+  # 6. Optional: FB/IG cookie setup for clip repurposing
+  if [[ ! -f "data/ytdlp-cookies.txt" ]] && [[ -z "${YTDLP_COOKIES_FILE:-}" ]]; then
+    echo ""
+    info "FB/IG Content Discovery (optional)"
+    info "To discover and clip trending videos from Facebook and Instagram,"
+    info "you can log in now. A browser window will open — just sign in."
+    echo ""
+    read -rp "  Set up Facebook/Instagram access now? [y/N] " cookie_answer
+    if [[ "${cookie_answer,,}" == "y" ]]; then
+      info "Opening browser for Facebook login..."
+      npx tsx -e "
+        const { extractPlatformCookies } = require('./src/lib/cookie-extract');
+        extractPlatformCookies('facebook').then(r => {
+          console.log(r.success ? 'Cookies saved: ' + r.cookieCount + ' entries' : 'Skipped: ' + r.message);
+          process.exit(r.success ? 0 : 1);
+        });
+      " 2>/dev/null || warn "Cookie setup skipped. You can do this later from Settings > Content Discovery Access."
+    else
+      info "Skipped. You can set this up later from Settings > Content Discovery Access."
+    fi
   else
-    echo ""
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Setup complete. Ready to run.${NC}"
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo "  Run the app manually:"
-    echo "    pnpm start                              Production web server"
-    echo "    pnpm worker                             Video generation worker"
-    echo "    pnpm worker:clip                        Clip repurpose worker"
-    echo "    pnpm scheduler                          Scheduler"
-    echo "    pnpm dev:all                            Development mode"
-    echo ""
-    echo "  Or deploy everything at once:"
-    echo "    $0 --deploy                             PM2 + tunnel"
-    echo ""
-    echo "  Status:  $0 --status"
-    echo ""
+    info "Platform cookies already configured."
   fi
+
+  echo ""
+  echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}  Setup complete.${NC}"
+  echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+  echo ""
+  echo "  Development:    pnpm dev:all"
+  echo "  Production:     ./scripts/setup_prerequisites.sh --deploy"
+  echo "  Stop:           ./scripts/setup_prerequisites.sh --stop"
+  echo ""
 }
 
 main "$@"

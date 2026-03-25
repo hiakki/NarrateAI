@@ -58,12 +58,13 @@ interface PostResult {
 
 interface PlatformEntry {
   platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted";
+  success?: boolean | "uploading" | "scheduled" | "deleted" | "cooldown";
   postId?: string | null;
   url?: string | null;
   error?: string;
   startedAt?: number;
   scheduledFor?: string;
+  retryAfter?: number;
 }
 
 const STALE_UPLOAD_MS = 10 * 60 * 1000; // 10 minutes
@@ -152,11 +153,16 @@ function shouldSkip(entry: PlatformEntry | undefined): { skip: boolean; reason: 
     if (age < STALE_UPLOAD_MS) {
       return { skip: true, reason: `upload in progress (${Math.round(age / 1000)}s ago)` };
     }
-    // Stale upload — treat as failed, allow retry
     return { skip: false, reason: "" };
   }
 
-  // success === false → failed, allow retry
+  if (entry.success === "cooldown") {
+    if (entry.retryAfter && Date.now() < entry.retryAfter) {
+      return { skip: true, reason: `cooldown until ${new Date(entry.retryAfter).toISOString()}` };
+    }
+    return { skip: false, reason: "" };
+  }
+
   return { skip: false, reason: "" };
 }
 
@@ -408,8 +414,6 @@ export async function postVideoToSocials(
       return { platform, success: false, error: "No connected account" };
     }
 
-    // Enforce minimum gap between successful posts per platform per user.
-    // Skip cooldown when scheduling for a future time — the actual post will be checked again later.
     const isDeferred = !!scheduledAt;
     const gapMs = Math.max(0, PLATFORM_POST_GAP_MINUTES) * 60 * 1000;
     if (gapMs > 0 && !isDeferred) {
@@ -421,11 +425,24 @@ export async function postVideoToSocials(
       if (latestSuccessAt) {
         const elapsedMs = Date.now() - latestSuccessAt.getTime();
         if (elapsedMs < gapMs) {
+          const retryAfterMs = latestSuccessAt.getTime() + gapMs;
           const remainingMin = Math.ceil((gapMs - elapsedMs) / 60000);
-          const msg = `Platform cooldown active: wait ~${remainingMin}m before next ${platform} post`;
-          log.warn(`${msg} (video=${videoId})`);
+          const msg = `Platform cooldown: retrying automatically in ~${remainingMin}m`;
+          log.warn(`${msg} (video=${videoId}, retryAfter=${new Date(retryAfterMs).toISOString()})`);
           fileLogger?.poster(`${platform}: COOLDOWN — ${msg}`);
-          await finalizePlatform(videoId, { platform, success: false, error: msg });
+
+          const entries = await getPlatformEntries(videoId);
+          const filtered = [...entries.values()].filter((e) => e.platform !== platform);
+          filtered.push({
+            platform,
+            success: "cooldown",
+            error: msg,
+            retryAfter: retryAfterMs,
+          });
+          await db.video.update({
+            where: { id: videoId },
+            data: { postedPlatforms: filtered as never },
+          });
           return { platform, success: false, error: msg };
         }
       }
@@ -455,10 +472,46 @@ export async function postVideoToSocials(
       const schedUnix = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
       const schedIso = scheduledAt ? scheduledAt.toISOString() : undefined;
 
-      // Instagram doesn't support native Reel scheduling — defer to internal scheduler
+      // Instagram: attempt native scheduling, fall back to deferred if it fails
       if (platform === "INSTAGRAM" && scheduledAt) {
-        log.log(`Deferring Instagram publish for ${videoId} to ${scheduledAt.toISOString()} (native scheduling not supported for Reels)`);
-        fileLogger?.poster(`INSTAGRAM: DEFERRED to ${scheduledAt.toISOString()} (native scheduling not supported)`);
+        const igSchedUnix = Math.floor(scheduledAt.getTime() / 1000);
+        log.log(`Attempting native IG scheduling for ${videoId} at ${scheduledAt.toISOString()} (unix=${igSchedUnix})`);
+        fileLogger?.poster(`INSTAGRAM: attempting native schedule at ${scheduledAt.toISOString()}`);
+        try {
+          const nativeResult = await postInstagramReel(
+            accounts[0].platformUserId,
+            accessToken,
+            videoPath,
+            igCaption,
+            refreshToken,
+            accounts[0].pageId,
+            igSchedUnix,
+          );
+          if (nativeResult.success) {
+            log.log(`IG native scheduling succeeded for ${videoId}: containerId=${nativeResult.postId}`);
+            fileLogger?.poster(`INSTAGRAM: NATIVE SCHEDULED containerId=${nativeResult.postId}`);
+            await finalizePlatformEx(videoId, {
+              platform: "INSTAGRAM",
+              success: "scheduled",
+              postId: nativeResult.postId ?? null,
+              url: null,
+            });
+            const entries = await getPlatformEntries(videoId);
+            const igEntry = entries.get("INSTAGRAM");
+            if (igEntry) {
+              igEntry.scheduledFor = scheduledAt.toISOString();
+              const allEntries = [...entries.values()];
+              await db.video.update({ where: { id: videoId }, data: { postedPlatforms: allEntries as never } });
+            }
+            return { platform: "INSTAGRAM", success: true, postId: nativeResult.postId };
+          }
+          log.warn(`IG native scheduling failed: ${nativeResult.error} — falling back to deferred`);
+        } catch (nativeErr) {
+          log.warn(`IG native scheduling error: ${nativeErr instanceof Error ? nativeErr.message : nativeErr} — falling back to deferred`);
+        }
+
+        log.log(`Deferring Instagram publish for ${videoId} to ${scheduledAt.toISOString()}`);
+        fileLogger?.poster(`INSTAGRAM: DEFERRED to ${scheduledAt.toISOString()} (native scheduling failed)`);
         await finalizePlatformEx(videoId, {
           platform: "INSTAGRAM",
           success: "scheduled",

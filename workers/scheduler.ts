@@ -1,7 +1,15 @@
 import "dotenv/config";
 import cron from "node-cron";
-import { Prisma, PrismaClient } from "@prisma/client";
-import { enqueueVideoGeneration, enqueueClipRepurpose } from "../src/services/queue";
+import { Worker as BullWorker } from "bullmq";
+import IORedis from "ioredis";
+import { PrismaClient } from "@prisma/client";
+import {
+  enqueueVideoGeneration,
+  enqueueClipRepurpose,
+  enqueueScheduledPost,
+  getPostVideoQueue,
+  type PostVideoJobData,
+} from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { refreshInsightsForUser } from "../src/services/insights";
 import { getYouTubeVideoPrivacy } from "../src/lib/social/youtube";
@@ -18,8 +26,8 @@ import {
   BUILD_ALL_TIME,
   BUILD_ALL_TIMEZONE,
   BUILD_WINDOW_MINUTES,
-  localTimeToUTC,
   shouldBuildNow,
+  computeAndGuardPostTime,
 } from "../src/lib/scheduler-utils";
 import { probeAllNicheTrends } from "../src/services/clip-repurpose/trending-probe";
 
@@ -220,24 +228,25 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
           if (typeof entry === "string") return false;
           return entry.success !== true && entry.success !== "scheduled";
         });
-        log(`[POST-READY]`, `Video ${readyVideo.id} READY — posting to remaining: ${remaining.join(", ")}`);
-        fl.scheduler(`POST-READY: video ${readyVideo.id} has ${remaining.length} unposted platform(s), triggering post`);
+        log(`[POST-READY]`, `Video ${readyVideo.id} READY — enqueuing post for remaining: ${remaining.join(", ")}`);
+        fl.scheduler(`POST-READY: video ${readyVideo.id} has ${remaining.length} unposted platform(s)`);
         try {
-          const scheduledAt = readyVideo.scheduledPostTime
-            ? new Date(readyVideo.scheduledPostTime as unknown as string)
-            : new Date(Date.now() + 60 * 60 * 1000);
-          const results = await postVideoToSocials(readyVideo.id, remaining, scheduledAt, fl ?? undefined);
-          const ok = results.filter((r) => r.success).map((r) => r.platform);
-          if (ok.length >= remaining.length) {
-            await db.video.update({ where: { id: readyVideo.id }, data: { status: "SCHEDULED" } });
-            log(`[POST-READY]`, `Video ${readyVideo.id} → SCHEDULED (all platforms done)`);
-            fl.scheduler(`POST-READY: DONE — ${ok.join(", ")} scheduled`);
-          } else {
-            fl.scheduler(`POST-READY: PARTIAL — ${ok.length}/${remaining.length} OK, will retry next cycle`);
+          const scheduledAt = (() => {
+            if (readyVideo.scheduledPostTime) {
+              const existing = new Date(readyVideo.scheduledPostTime as unknown as string);
+              if (existing.getTime() > Date.now() + 10 * 60 * 1000) return existing;
+            }
+            return computeAndGuardPostTime(auto.postTime, auto.timezone);
+          })();
+          if (scheduledAt.getTime() !== readyVideo.scheduledPostTime?.getTime()) {
+            await db.video.update({ where: { id: readyVideo.id }, data: { scheduledPostTime: scheduledAt } });
           }
+          await enqueueScheduledPost(readyVideo.id, scheduledAt, remaining);
+          log(`[POST-READY]`, `Video ${readyVideo.id} → enqueued for ${scheduledAt.toISOString()}`);
+          fl.scheduler(`POST-READY: enqueued for ${scheduledAt.toISOString()} → ${remaining.join(", ")}`);
         } catch (postErr) {
           const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
-          warn(`[POST-READY]`, `Failed to post video ${readyVideo.id}: ${errMsg}`);
+          warn(`[POST-READY]`, `Failed to enqueue post for ${readyVideo.id}: ${errMsg}`);
           fl.scheduler(`POST-READY ERROR: ${errMsg.slice(0, 500)}`);
         }
         await writeSchedulerLog(auto.id, "skipped", `Posted/scheduled READY video ${readyVideo.id} instead of creating new`, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
@@ -272,11 +281,7 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
 
   if (autoType === "clip-repurpose") {
     const clipConfig = (auto.clipConfig as Record<string, unknown>) ?? {};
-    const postSlot = auto.postTime.split(",")[0].trim();
-    let scheduledPostTime = localTimeToUTC(postSlot, auto.timezone);
-    if (scheduledPostTime.getTime() < Date.now() + 15 * 60 * 1000) {
-      scheduledPostTime = new Date(scheduledPostTime.getTime() + 24 * 60 * 60 * 1000);
-    }
+    const scheduledPostTime = computeAndGuardPostTime(auto.postTime, auto.timezone);
     try {
       const video = await db.video.create({
         data: {
@@ -415,8 +420,7 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
     auto.user,
   );
 
-  const origPostSlot = auto.postTime.split(",")[0].trim();
-  const origScheduledPostTime = localTimeToUTC(origPostSlot, auto.timezone);
+  const origScheduledPostTime = computeAndGuardPostTime(auto.postTime, auto.timezone);
   try {
     const video = await db.video.create({
       data: {
@@ -473,7 +477,7 @@ async function runInBatches<T>(items: T[], concurrency: number, fn: (item: T) =>
   }
 }
 
-async function checkSchedules() {
+async function planDailyBuilds() {
   try {
     const automations = await db.automation.findMany({
       where: { enabled: true },
@@ -501,215 +505,17 @@ async function checkSchedules() {
       },
     });
 
-    debug(`${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
+    log(`planDailyBuilds: ${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
     await runInBatches(automations as unknown as AutoRow[], SCHEDULER_CONCURRENCY, processAutomation);
   } catch (e) {
-    err("Error in schedule check:", e);
+    err("planDailyBuilds error:", e);
   }
 }
 
-async function checkReadyVideosForPosting() {
-  try {
-    const now = new Date();
+// checkReadyVideosForPosting — REMOVED: replaced by post-video BullMQ delayed queue
 
-    const readyVideos = await db.video.findMany({
-      where: {
-        status: "READY",
-        scheduledPostTime: { lte: now },
-        NOT: { scheduledPlatforms: { equals: Prisma.JsonNull } },
-      },
-      include: {
-        series: {
-          select: {
-            automation: { select: { id: true, name: true } },
-            user: { select: { id: true, name: true, email: true } },
-          },
-        },
-      },
-      take: 15,
-    });
-
-    if (readyVideos.length === 0) return;
-
-    const STALE_UPLOAD_MS = 10 * 60 * 1000;
-    const postTasks: { videoId: string; remaining: string[] }[] = [];
-
-    for (const video of readyVideos) {
-      const scheduled = (video.scheduledPlatforms ?? []) as string[];
-      if (scheduled.length === 0) continue;
-
-      const rawPosted = (video.postedPlatforms ?? []) as (
-        | string
-        | { platform: string; success?: boolean | "uploading"; postId?: string; url?: string; startedAt?: number }
-      )[];
-
-      const remaining = scheduled.filter((t) => {
-        const entry = rawPosted.find((p) =>
-          typeof p === "string" ? p === t : p.platform === t,
-        );
-        if (!entry) return true;
-        if (typeof entry === "string") return false;
-        if (entry.success === true) return false;
-        if ((entry as { success?: string }).success === "scheduled") return false;
-        if (entry.success === undefined && (entry.postId || entry.url)) return false;
-        if (entry.success === "uploading") {
-          const age = Date.now() - (entry.startedAt ?? 0);
-          return age >= STALE_UPLOAD_MS;
-        }
-        return true;
-      });
-
-      if (remaining.length > 0) {
-        postTasks.push({ videoId: video.id, remaining });
-      }
-    }
-
-    if (postTasks.length > 0) {
-      log(`Scheduling ${postTasks.length} ready video(s) on native platforms`);
-      await Promise.allSettled(
-        postTasks.map(async ({ videoId, remaining }) => {
-          const vidRow = readyVideos.find((rv) => rv.id === videoId) as
-            (typeof readyVideos[number] & { series?: { automation?: { id: string; name: string } | null; user?: { id: string; name: string | null; email: string } | null } }) | undefined;
-          const autoInfo = vidRow?.series?.automation;
-          const userInfo = vidRow?.series?.user;
-          const fl = autoInfo && userInfo
-            ? getAutomationFileLogger(userInfo.id, userInfo.name ?? userInfo.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
-            : null;
-
-          const v = await db.video.findUnique({ where: { id: videoId }, select: { scheduledPostTime: true, updatedAt: true } });
-          const age = Date.now() - new Date(v?.updatedAt ?? 0).getTime();
-          if (age < 30_000) {
-            debug(`Skipping ${videoId} — became READY ${Math.round(age / 1000)}s ago, clip worker may still be posting`);
-            fl?.scheduler(`POST-SKIP: video=${videoId} became READY ${Math.round(age / 1000)}s ago, waiting for worker`);
-            return;
-          }
-          const scheduledAt = v?.scheduledPostTime
-            ? new Date(v.scheduledPostTime)
-            : new Date(Date.now() + 60 * 60 * 1000);
-          log(`Scheduling video ${videoId} to ${remaining.join(", ")} for ${scheduledAt.toISOString()}`);
-          fl?.poster(`POST: video=${videoId} to [${remaining.join(", ")}] at ${scheduledAt.toISOString()}`);
-          const results = await postVideoToSocials(videoId, remaining, scheduledAt, fl ?? undefined);
-          const ok = results.filter((r) => r.success);
-          if (ok.length >= remaining.length) {
-            await db.video.update({ where: { id: videoId }, data: { status: "SCHEDULED" } });
-            log(`Video ${videoId} → SCHEDULED (all platforms done)`);
-            fl?.poster(`DONE: video=${videoId} → SCHEDULED (${ok.length}/${remaining.length} platforms OK)`);
-          } else {
-            fl?.poster(`PARTIAL: video=${videoId} — ${ok.length}/${remaining.length} platforms OK, will retry`);
-          }
-          return results;
-        }),
-      );
-    }
-  } catch (e) {
-    err("Error checking ready videos:", e);
-  }
-}
-
-/**
- * Instagram Reels don't support native scheduling via API (requires whitelisted app).
- * The social-poster defers IG by storing success="scheduled" + scheduledFor timestamp.
- * This function checks for those deferred entries and publishes them when the time arrives.
- */
-async function checkDeferredInstagramPosts() {
-  try {
-    const now = new Date();
-
-    // Only check SCHEDULED videos (deferred IG posts always move to SCHEDULED)
-    // and filter to recent updatedAt to avoid scanning entire history
-    const candidates = await db.video.findMany({
-      where: {
-        status: "SCHEDULED",
-      },
-      select: { id: true, postedPlatforms: true },
-      orderBy: { updatedAt: "desc" },
-    });
-
-    const igPostTasks: string[] = [];
-
-    for (const video of candidates) {
-      const rawPosted = (video.postedPlatforms ?? []) as (
-        | string
-        | { platform: string; success?: boolean | string; scheduledFor?: string }
-      )[];
-
-      const igEntry = rawPosted.find((p) =>
-        typeof p === "string" ? p === "INSTAGRAM" : p.platform === "INSTAGRAM",
-      );
-      if (!igEntry || typeof igEntry === "string") continue;
-
-      if (igEntry.success !== "scheduled") continue;
-      if (!igEntry.scheduledFor) continue;
-
-      const scheduledFor = new Date(igEntry.scheduledFor);
-      if (scheduledFor > now) continue;
-
-      igPostTasks.push(video.id);
-    }
-
-    if (igPostTasks.length === 0) return;
-
-    log(`Publishing ${igPostTasks.length} deferred Instagram Reel(s) (scheduled time has arrived)`);
-
-    await Promise.allSettled(
-      igPostTasks.map(async (videoId) => {
-        try {
-          log(`Deferred IG publish: video ${videoId} — resetting entry and posting immediately`);
-
-          // Reset IG entry from "scheduled" to allow postVideoToSocials to proceed
-          const video = await db.video.findUnique({
-            where: { id: videoId },
-            select: { postedPlatforms: true },
-          });
-          if (video) {
-            const entries = (video.postedPlatforms ?? []) as { platform: string; success?: unknown; scheduledFor?: string }[];
-            const updated = entries.map((e) => {
-              if (e.platform === "INSTAGRAM" && e.success === "scheduled") {
-                return { ...e, success: false, scheduledFor: undefined };
-              }
-              return e;
-            });
-            await db.video.update({
-              where: { id: videoId },
-              data: { postedPlatforms: updated as never },
-            });
-          }
-
-          const vidRow = await db.video.findUnique({
-            where: { id: videoId },
-            select: { series: { select: { automation: { select: { id: true, name: true } }, user: { select: { id: true, name: true, email: true } } } } },
-          });
-          const igFl = vidRow?.series?.automation && vidRow?.series?.user
-            ? getAutomationFileLogger(vidRow.series.user.id, vidRow.series.user.name ?? vidRow.series.user.email?.split("@")[0] ?? "user", vidRow.series.automation.id, vidRow.series.automation.name)
-            : null;
-          igFl?.poster(`DEFERRED IG: publishing video=${videoId} (scheduled time arrived)`);
-          const igResults = await postVideoToSocials(videoId, ["INSTAGRAM"], undefined, igFl ?? undefined);
-          const igOk = igResults.filter((r) => r.success);
-          if (igOk.length > 0) igFl?.poster(`DEFERRED IG DONE: video=${videoId} posted to Instagram`);
-          return igResults;
-        } catch (e) {
-          err(`Deferred IG publish failed for ${videoId}:`, e);
-          // Ensure the entry doesn't stay stuck at "uploading"
-          try {
-            const v = await db.video.findUnique({ where: { id: videoId }, select: { postedPlatforms: true } });
-            if (v) {
-              const entries = (v.postedPlatforms ?? []) as { platform: string; success?: unknown; error?: string }[];
-              const fixed = entries.map((ent) =>
-                ent.platform === "INSTAGRAM" && ent.success === "uploading"
-                  ? { ...ent, success: false, error: `Posting failed: ${e instanceof Error ? e.message : "unknown error"}` }
-                  : ent,
-              );
-              await db.video.update({ where: { id: videoId }, data: { postedPlatforms: fixed as never } });
-            }
-          } catch { /* best effort */ }
-        }
-      }),
-    );
-  } catch (e) {
-    err("Error checking deferred Instagram posts:", e);
-  }
-}
+// checkDeferredInstagramPosts — REMOVED: replaced by native IG scheduling + post-video BullMQ queue
 
 async function recoverStuckVideos() {
   try {
@@ -904,16 +710,28 @@ async function recoverStuckVideos() {
  *      platform API to check if the post is now live. If so, flip to success:true.
  *      - YouTube: check privacyStatus === "public"
  *      - Facebook: check published === true
- *      - Instagram: handled by checkDeferredInstagramPosts (posts on our behalf)
+ *      - Instagram: check via IG natively-scheduled container or deferred handler
  *   2. After resolving scheduled entries, if all targeted platforms show
  *      success:true (or deleted), promote the video status to POSTED.
+ *
+ * Optimised: only fetches videos whose scheduledPostTime is within a
+ * targeted window (2h ago → 10m from now) plus any stuck/null entries,
+ * and only logs when something actually changes.
  */
 async function reconcileScheduledPosts() {
   try {
-    // Check ALL video statuses — not just READY/SCHEDULED — because a video marked
-    // POSTED by one platform might still have "scheduled" entries for other platforms
+    const now = new Date();
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const tenMinFromNow = new Date(now.getTime() + 10 * 60 * 1000);
+
     const videos = await db.video.findMany({
-      where: { status: { in: ["READY", "SCHEDULED", "POSTED"] } },
+      where: {
+        status: { in: ["READY", "SCHEDULED"] },
+        OR: [
+          { scheduledPostTime: { gte: twoHoursAgo, lte: tenMinFromNow } },
+          { scheduledPostTime: null, status: "SCHEDULED" },
+        ],
+      },
       select: {
         id: true,
         status: true,
@@ -940,12 +758,11 @@ async function reconcileScheduledPosts() {
       },
     });
 
-    // Gather videos that need reconciliation
     type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string; error?: string };
     const toCheck: { video: typeof videos[number]; entries: PlatEntry[]; scheduledEntries: PlatEntry[] }[] = [];
 
-    const now = Date.now();
-    const UPLOADING_STALE_MS = 10 * 60 * 1000; // 10 minutes
+    const nowMs = now.getTime();
+    const UPLOADING_STALE_MS = 10 * 60 * 1000;
 
     for (const video of videos) {
       const entries = (video.postedPlatforms ?? []) as PlatEntry[];
@@ -953,14 +770,15 @@ async function reconcileScheduledPosts() {
       const scheduledEntries = entries.filter((e) => e.success === "scheduled");
       const hasUnpromotedSuccess = video.status !== "POSTED" && entries.some((e) => e.success === true);
       const hasStuckUploading = entries.some((e) => e.success === "uploading") &&
-        (now - new Date(video.updatedAt).getTime()) > UPLOADING_STALE_MS;
+        (nowMs - new Date(video.updatedAt).getTime()) > UPLOADING_STALE_MS;
       if (scheduledEntries.length > 0 || hasUnpromotedSuccess || hasStuckUploading) {
         toCheck.push({ video, entries, scheduledEntries });
       }
     }
 
-    log(`Reconcile: ${videos.length} total, ${toCheck.length} need attention`);
     if (toCheck.length === 0) return;
+
+    debug(`Reconcile: ${videos.length} in window, ${toCheck.length} need attention`);
 
     for (const { video, entries, scheduledEntries } of toCheck) {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
@@ -970,28 +788,27 @@ async function reconcileScheduledPosts() {
         : null;
       let changed = false;
 
-      // Step 0: mark "uploading" entries as failed if stuck for >10 min
-      const videoAge = now - new Date(video.updatedAt).getTime();
+      const videoAge = nowMs - new Date(video.updatedAt).getTime();
       for (const entry of entries) {
         if (entry.success === "uploading" && videoAge > UPLOADING_STALE_MS) {
           entry.success = false;
           entry.error = "Upload timed out (stuck for >10 min)";
           changed = true;
-          log(`  Reconciled ${entry.platform} for ${video.id}: uploading → failed (stale ${Math.round(videoAge / 60000)}m)`);
+          log(`Reconciled ${entry.platform} for ${video.id}: uploading → failed (stale ${Math.round(videoAge / 60000)}m)`);
         }
       }
 
-      // Step 1: for "scheduled" entries, check platform API.
-      // We check ALL entries (even future ones) because the platform may have
-      // published early or the stored scheduledTime might be wrong.
-      const FORCE_PROMOTE_MS = 90 * 60 * 1000; // 90 min past scheduled time → force-promote
+      const FORCE_PROMOTE_MS = 90 * 60 * 1000;
       if (scheduledEntries.length > 0) {
         const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
         for (const entry of scheduledEntries) {
           const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
           const effectiveSchedTime = entrySchedTime || videoSchedTime;
-          const isPastSchedule = effectiveSchedTime <= now || effectiveSchedTime === 0;
-          const overdueMins = effectiveSchedTime > 0 ? Math.round((now - effectiveSchedTime) / 60000) : 0;
+          const isPastSchedule = effectiveSchedTime <= nowMs || effectiveSchedTime === 0;
+          const overdueMins = effectiveSchedTime > 0 ? Math.round((nowMs - effectiveSchedTime) / 60000) : 0;
+
+          if (!isPastSchedule) continue;
+
           let isLive = false;
           let apiChecked = false;
 
@@ -1005,46 +822,33 @@ async function reconcileScheduledPosts() {
                 const privacy = await getYouTubeVideoPrivacy(
                   accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
                 );
-                log(`  YT privacy check for ${video.id}: postId=${entry.postId} → ${privacy ?? "error"} (scheduled ${isPastSchedule ? `${overdueMins}m overdue` : `in ${-overdueMins}m`})`);
                 isLive = privacy === "public";
-              } else {
-                log(`  YT: no account found for video ${video.id}`);
+                if (isLive) log(`YT ${video.id}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
               }
             } else if (entry.platform === "FACEBOOK") {
-              // FB Graph API can't read scheduled/unpublished videos — only check after scheduled time
-              if (!isPastSchedule) {
-                debug(`  FB: skipping API check for ${video.id} (scheduled in ${-overdueMins}m, FB can't read unpublished videos)`);
-              } else {
-                const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
-                if (account) {
-                  apiChecked = true;
-                  let accessToken = decrypt(account.accessTokenEnc);
-                  if (account.refreshTokenEnc && account.pageId) {
-                    try {
-                      accessToken = await getFreshFacebookToken(
-                        account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
-                      );
-                    } catch { /* use existing token */ }
-                  }
-                  const published = await getFacebookVideoPublished(entry.postId, accessToken);
-                  log(`  FB published check for ${video.id}: postId=${entry.postId} → ${published} (${overdueMins}m overdue)`);
-                  isLive = published === true;
-                } else {
-                  log(`  FB: no account found for video ${video.id}`);
+              const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+              if (account) {
+                apiChecked = true;
+                let accessToken = decrypt(account.accessTokenEnc);
+                if (account.refreshTokenEnc && account.pageId) {
+                  try {
+                    accessToken = await getFreshFacebookToken(
+                      account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                    );
+                  } catch { /* use existing token */ }
                 }
+                const published = await getFacebookVideoPublished(entry.postId, accessToken);
+                isLive = published === true;
+                if (isLive) log(`FB ${video.id}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
               }
             } else if (entry.platform === "INSTAGRAM") {
-              log(`  IG: deferred entry for ${video.id} (handled by checkDeferredInstagramPosts)`);
+              debug(`IG ${video.id}: deferred/native entry (handled by checkDeferredInstagramPosts or platform auto-publish)`);
               continue;
             }
           }
 
-          // Force-promote only for OVERDUE entries (past scheduled time + buffer)
-          if (!isLive && isPastSchedule && !apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
-            log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, no API check possible (no postId or account)`);
-            isLive = true;
-          } else if (!isLive && isPastSchedule && apiChecked && effectiveSchedTime > 0 && (now - effectiveSchedTime) > FORCE_PROMOTE_MS) {
-            log(`  Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue, API returned not-live but trusting schedule`);
+          if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+            log(`Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue`);
             isLive = true;
           }
 
@@ -1052,13 +856,12 @@ async function reconcileScheduledPosts() {
             entry.success = true;
             delete entry.scheduledFor;
             changed = true;
-            log(`  Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
-            rfl?.poster(`RECONCILE: ${entry.platform} for video=${video.id} → posted (live confirmed)`);
+            log(`Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
+            rfl?.poster(`RECONCILE: ${entry.platform} for video=${video.id} → posted`);
           }
         }
       }
 
-      // Step 2: promote video to POSTED if all targeted platforms are done
       const targeted = (video.scheduledPlatforms ?? []) as string[];
       const hasAnySuccess = entries.some((e) => e.success === true);
       if (!hasAnySuccess && !changed) continue;
@@ -1082,14 +885,14 @@ async function reconcileScheduledPosts() {
             ...(changed ? { postedPlatforms: entries as never } : {}),
           },
         });
-        log(`  ${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+        log(`${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
         rfl?.poster(`PROMOTED: video=${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
       } else if (changed) {
         await db.video.update({
           where: { id: video.id },
           data: { postedPlatforms: entries as never },
         });
-        log(`  ${video.id}: updated platform entries (status stays ${video.status})`);
+        debug(`${video.id}: updated platform entries (status stays ${video.status})`);
       }
     }
   } catch (e) {
@@ -1097,22 +900,14 @@ async function reconcileScheduledPosts() {
   }
 }
 
-let running = false;
+// checkCooldownRetries + tick — REMOVED: cooldown handled by post-video worker self-re-enqueue
 
-async function tick() {
-  if (running) {
-    log("Previous check still running, skipping this tick");
-    return;
-  }
-  running = true;
+async function safetyNet() {
   try {
     await recoverStuckVideos();
-    await checkSchedules();
-    await checkReadyVideosForPosting();
-    await checkDeferredInstagramPosts();
     await reconcileScheduledPosts();
-  } finally {
-    running = false;
+  } catch (e) {
+    err("safetyNet error:", e);
   }
 }
 
@@ -1138,9 +933,148 @@ async function refreshInsightsDaily() {
   }
 }
 
-cron.schedule("*/5 * * * *", () => {
-  log("Running schedule check...");
-  tick();
+// ── BullMQ post-video worker (inline — fires at exact scheduled time) ──
+
+const postRedis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+  maxRetriesPerRequest: null,
+});
+
+const postWorker = new BullWorker<PostVideoJobData>(
+  "post-video",
+  async (job) => {
+    const { videoId, platforms, scheduledAt } = job.data;
+    const schedDate = scheduledAt ? new Date(scheduledAt) : undefined;
+
+    log(`[POST-WORKER] Posting video ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
+
+    const video = await db.video.findUnique({
+      where: { id: videoId },
+      select: {
+        status: true,
+        videoUrl: true,
+        series: {
+          select: {
+            automation: { select: { id: true, name: true } },
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+
+    if (!video || !video.videoUrl) {
+      log(`[POST-WORKER] Video ${videoId} not found or no URL, skipping`);
+      return;
+    }
+    if (!["READY", "SCHEDULED"].includes(video.status)) {
+      log(`[POST-WORKER] Video ${videoId} status=${video.status}, skipping`);
+      return;
+    }
+
+    const autoInfo = video.series?.automation;
+    const userInfo = video.series?.user;
+    const fl = autoInfo && userInfo
+      ? getAutomationFileLogger(userInfo.id, userInfo.name ?? userInfo.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
+      : null;
+
+    fl?.poster(`POST-WORKER: posting video=${videoId} → ${platforms.join(", ")}`);
+
+    try {
+      const results = await postVideoToSocials(videoId, platforms, schedDate, fl ?? undefined);
+
+      const ok = results.filter((r) => r.success).map((r) => r.platform);
+      const cooldowns: { platform: string; retryAfter: number }[] = [];
+      const failed = results.filter((r) => !r.success).map((r) => {
+        return `${r.platform}: ${r.error}`;
+      });
+
+      if (ok.length > 0) {
+        log(`[POST-WORKER] ${videoId} OK → ${ok.join(", ")}`);
+        fl?.poster(`POST OK: ${ok.join(", ")}`);
+      }
+      if (failed.length > 0) {
+        log(`[POST-WORKER] ${videoId} FAIL → ${failed.join("; ")}`);
+        fl?.poster(`POST FAIL: ${failed.join("; ")}`);
+      }
+
+      // Check for cooldown entries that need re-enqueue
+      const freshRow = await db.video.findUnique({
+        where: { id: videoId },
+        select: { postedPlatforms: true },
+      });
+      const entries = (freshRow?.postedPlatforms ?? []) as Array<{
+        platform: string;
+        success?: boolean | string;
+        retryAfter?: number;
+        scheduledFor?: string;
+      }>;
+
+      for (const e of entries) {
+        if (e.success === "cooldown" && e.retryAfter) {
+          cooldowns.push({ platform: e.platform, retryAfter: e.retryAfter });
+        }
+      }
+
+      if (cooldowns.length > 0) {
+        const earliest = Math.min(...cooldowns.map((c) => c.retryAfter));
+        const retryDate = new Date(earliest);
+        const retryPlatforms = cooldowns.map((c) => c.platform);
+        log(`[POST-WORKER] ${videoId} cooldown → re-enqueue for ${retryDate.toISOString()} (${retryPlatforms.join(", ")})`);
+        fl?.poster(`COOLDOWN RETRY: enqueued for ${retryDate.toISOString()} → ${retryPlatforms.join(", ")}`);
+        await enqueueScheduledPost(videoId, retryDate, retryPlatforms);
+      }
+
+      // Check for deferred IG (native scheduling failed, fell back to deferred)
+      for (const e of entries) {
+        if (e.platform === "INSTAGRAM" && e.success === "scheduled" && e.scheduledFor && !e.retryAfter) {
+          const igDate = new Date(e.scheduledFor);
+          if (igDate.getTime() > Date.now() + 60000) {
+            log(`[POST-WORKER] ${videoId} IG deferred → re-enqueue for ${igDate.toISOString()}`);
+            fl?.poster(`IG DEFERRED: enqueued for ${igDate.toISOString()}`);
+            await enqueueScheduledPost(videoId, igDate, ["INSTAGRAM"]);
+          }
+        }
+      }
+
+    } catch (e) {
+      err(`[POST-WORKER] Error posting ${videoId}:`, e);
+      fl?.poster(`POST ERROR: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
+  },
+  {
+    connection: postRedis as never,
+    concurrency: 3,
+    limiter: { max: 5, duration: 60000 },
+  },
+);
+
+postWorker.on("failed", (job, e) => {
+  err(`[POST-WORKER] Job ${job?.id} failed:`, e.message);
+});
+postWorker.on("completed", (job) => {
+  debug(`[POST-WORKER] Job ${job.id} completed`);
+});
+
+// ── Cron: Build planning at BUILD_ALL_TIME ──
+
+const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
+cron.schedule(`${buildM} ${buildH} * * *`, () => {
+  log(`planDailyBuilds: BUILD_ALL_TIME (${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}) triggered`);
+  planDailyBuilds();
+});
+
+// Catch-up cron: 2 hours after build window, pick up anything missed
+const catchUpMin = (buildM + BUILD_WINDOW_MINUTES + 60) % 60;
+const catchUpH = (buildH + Math.floor((buildM + BUILD_WINDOW_MINUTES + 60) / 60)) % 24;
+cron.schedule(`${catchUpMin} ${catchUpH} * * *`, () => {
+  log("planDailyBuilds: catch-up run (BUILD_ALL_TIME + 2h)");
+  planDailyBuilds();
+});
+
+// Safety net: recover stuck videos + reconcile overdue posts (every 4h)
+cron.schedule("0 */4 * * *", () => {
+  debug("safetyNet: running recovery + reconciliation");
+  safetyNet();
 });
 
 // Run insights refresh once per day at 02:00 (server TZ)
@@ -1196,6 +1130,16 @@ async function backfillLastRunAt() {
   }
 }
 
-log(`Started. Build window: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min). Posts scheduled per-video. Tick every 5 min.`);
+// ── Startup ──
+
+log(`Started. Event-driven scheduler.`);
+log(`  Build: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min window)`);
+log(`  Post-video: BullMQ delayed queue (exact-time posting)`);
+log(`  Safety net: every 4h (recovery + reconciliation)`);
+log(`  Catch-up: ${catchUpH}:${String(catchUpMin).padStart(2, "0")} (BUILD_ALL_TIME + 2h)`);
+
 cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
-backfillLastRunAt().then(() => tick());
+backfillLastRunAt().then(() => {
+  planDailyBuilds();
+  safetyNet();
+});

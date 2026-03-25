@@ -123,9 +123,11 @@ export async function postInstagramReel(
   caption: string,
   pageAccessToken?: string | null,
   pageId?: string | null,
+  scheduledPublishTime?: number,
 ): Promise<PostResult> {
   try {
-    log.log(`Starting resumable upload for IG user ${igUserId}`);
+    const isScheduled = !!scheduledPublishTime;
+    log.log(`Starting resumable upload for IG user ${igUserId}${isScheduled ? ` (scheduled for ${new Date(scheduledPublishTime! * 1000).toISOString()})` : ""}`);
 
     const envAppId = process.env.FACEBOOK_APP_ID ?? "(not set)";
     const tokenInfo = await debugToken(accessToken);
@@ -140,6 +142,11 @@ export async function postInstagramReel(
       upload_type: "resumable",
       caption,
     };
+
+    if (isScheduled) {
+      containerBody.published = false;
+      containerBody.scheduled_publish_time = scheduledPublishTime;
+    }
 
     const createRes = await fetch(`${GRAPH_API}/${igUserId}/media`, {
       method: "POST",
@@ -218,6 +225,11 @@ export async function postInstagramReel(
     const pollResult = await pollMediaStatus(containerId, accessToken);
     if (!pollResult.ready) {
       return { success: false, error: pollResult.error ?? "Media container processing timed out" };
+    }
+
+    if (isScheduled) {
+      log.log(`Container ${containerId} ready — natively scheduled for ${new Date(scheduledPublishTime! * 1000).toISOString()}, skipping immediate publish`);
+      return { success: true, postId: containerId, postUrl: undefined };
     }
 
     log.log(`Container ${containerId} ready, publishing...`);

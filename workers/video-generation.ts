@@ -10,7 +10,7 @@ import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File, calcu
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
-import { postVideoToSocials } from "../src/services/social-poster";
+import { enqueueScheduledPost } from "../src/services/queue";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
 import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
 import {
@@ -627,22 +627,22 @@ const worker = new Worker<VideoJobData>(
       fl?.worker(`READY: video=${videoId} → ${relVideoUrl}`);
 
       try {
-        const results = await postVideoToSocials(videoId, undefined, undefined, fl ?? undefined);
-        if (results.length > 0) {
-          const posted = results.filter((r) => r.success).map((r) => r.platform);
-          const failed = results.filter((r) => !r.success).map((r) => `${r.platform}: ${r.error}`);
-          if (posted.length > 0) {
-            log.log(`[POST]`, `POSTED → ${posted.join(", ")}`);
-            fl?.worker(`POST OK: ${posted.join(", ")}`);
-          }
-          if (failed.length > 0) {
-            log.warn(`[POST]`, `POST_FAIL: ${failed.join("; ")}`);
-            fl?.worker(`POST FAIL: ${failed.join("; ")}`);
-          }
+        const freshRow = await db.video.findUnique({
+          where: { id: videoId },
+          select: { scheduledPostTime: true, scheduledPlatforms: true },
+        });
+        const schedAt = freshRow?.scheduledPostTime ? new Date(freshRow.scheduledPostTime) : null;
+        const platforms = (freshRow?.scheduledPlatforms ?? []) as string[];
+        if (platforms.length > 0) {
+          await enqueueScheduledPost(videoId, schedAt, platforms);
+          log.log(`[POST]`, `Enqueued delayed post for ${schedAt?.toISOString() ?? "immediate"} → ${platforms.join(", ")}`);
+          fl?.worker(`POST: enqueued for ${schedAt?.toISOString() ?? "immediate"} → ${platforms.join(", ")}`);
+        } else {
+          log.log(`[POST]`, `No target platforms, skipping post enqueue`);
         }
       } catch (postErr) {
-        log.warn(`[POST]`, `POST_ERR:`, postErr);
-        fl?.worker(`POST ERROR: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
+        log.warn(`[POST]`, `POST_ENQUEUE_ERR:`, postErr);
+        fl?.worker(`POST ENQUEUE ERROR: ${postErr instanceof Error ? postErr.message : String(postErr)}`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
