@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next dev",
-    "dev:all": "concurrently -n app,worker,clip,sched -c blue,green,magenta,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm worker:clip\" \"pnpm scheduler\"",
+    "dev:all": "concurrently -p \"[{time}]\" --timestamp-format \"yyyy-MM-dd HH:mm:ss\" -n app,worker,clip,sched -c blue,green,magenta,yellow \"pnpm dev\" \"pnpm worker\" \"pnpm worker:clip\" \"pnpm scheduler\"",
     "dev:tunnel": "node scripts/run-dev-tunnel.js",
     "tunnel": "node scripts/run-tunnel-only.js",
     "build": "next build",

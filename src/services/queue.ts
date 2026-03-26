@@ -214,6 +214,72 @@ async function clearExistingJob(queue: Queue<PostVideoJobData>, jobId: string): 
  *   YT / FB  → delay=0, scheduledAt passed to platform API for native scheduling
  *   IG       → delay until scheduledAt, then posts directly (app-level scheduling)
  */
+// ---------------------------------------------------------------------------
+// Reconcile queue — exact-time check that natively-scheduled posts went live
+// ---------------------------------------------------------------------------
+
+export interface ReconcileJobData {
+  videoId: string;
+  attempt: number;
+}
+
+const MAX_RECONCILE_ATTEMPTS = 6;
+const RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
+
+let reconcileQueueInstance: Queue<ReconcileJobData> | null = null;
+
+function getReconcileQueue(): Queue<ReconcileJobData> {
+  if (!reconcileQueueInstance) {
+    reconcileQueueInstance = new Queue<ReconcileJobData>("reconcile-video", {
+      connection: createRedisConnection() as never,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { count: 200 },
+        removeOnFail: { count: 100 },
+      },
+    });
+  }
+  return reconcileQueueInstance;
+}
+
+export function getReconcileVideoQueue(): Queue<ReconcileJobData> {
+  return getReconcileQueue();
+}
+
+export async function enqueueReconcileCheck(
+  videoId: string,
+  reconcileAt: Date,
+  attempt: number = 0,
+): Promise<string | null> {
+  if (attempt >= MAX_RECONCILE_ATTEMPTS) {
+    log.log(`Reconcile for ${videoId}: max attempts (${MAX_RECONCILE_ATTEMPTS}) reached, safetyNet will handle`);
+    return null;
+  }
+  const queue = getReconcileQueue();
+  const jobId = `reconcile-${videoId}-${attempt}`;
+
+  try {
+    const existing = await queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (["failed", "completed", "unknown", "waiting", "delayed"].includes(state)) {
+        await existing.remove();
+      } else if (state === "active") {
+        return null;
+      }
+    }
+  } catch {
+    // best-effort cleanup
+  }
+
+  const delay = Math.max(0, reconcileAt.getTime() - Date.now());
+  log.log(`Enqueuing ${jobId}: check in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${MAX_RECONCILE_ATTEMPTS})`);
+  const job = await queue.add("reconcile-video", { videoId, attempt }, { jobId, delay });
+  return job.id ?? jobId;
+}
+
+export { MAX_RECONCILE_ATTEMPTS, RECONCILE_INTERVAL_MS };
+
 export async function enqueueScheduledPost(
   videoId: string,
   scheduledPostTime: Date | null,

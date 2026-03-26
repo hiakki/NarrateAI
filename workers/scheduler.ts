@@ -7,8 +7,12 @@ import {
   enqueueVideoGeneration,
   enqueueClipRepurpose,
   enqueueScheduledPost,
+  enqueueReconcileCheck,
   getPostVideoQueue,
+  getReconcileVideoQueue,
+  RECONCILE_INTERVAL_MS,
   type PostVideoJobData,
+  type ReconcileJobData,
 } from "../src/services/queue";
 import { postVideoToSocials } from "../src/services/social-poster";
 import { refreshInsightsForUser } from "../src/services/insights";
@@ -21,7 +25,7 @@ import { getNicheById } from "../src/config/niches";
 import { resolveProviders } from "../src/services/providers/resolve";
 import { getDefaultVoiceId } from "../src/config/voices";
 import { createLogger, runWithAutomationIdAsync } from "../src/lib/logger";
-import { getAutomationFileLogger, cleanupOldLogs } from "../src/lib/file-logger";
+import { getAutomationFileLogger, getSchedulerFileLogger, cleanupOldLogs } from "../src/lib/file-logger";
 import {
   BUILD_ALL_TIME,
   BUILD_ALL_TIMEZONE,
@@ -42,6 +46,7 @@ const db = new PrismaClient();
 const DAILY_CLIP_POSTS_PER_PLATFORM = parseInt(process.env.DAILY_CLIP_POSTS_PER_PLATFORM ?? "6", 10);
 const logger = createLogger("Scheduler");
 const { log, warn, error: err, debug } = logger;
+const sfl = getSchedulerFileLogger();
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
@@ -514,10 +519,13 @@ async function planDailyBuilds() {
     });
 
     log(`planDailyBuilds: ${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
+    sfl.action(`planDailyBuilds: ${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
     await runInBatches(automations as unknown as AutoRow[], SCHEDULER_CONCURRENCY, processAutomation);
+    sfl.action(`planDailyBuilds: completed`);
   } catch (e) {
     err("planDailyBuilds error:", e);
+    sfl.error(`planDailyBuilds: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -563,6 +571,7 @@ async function recoverStuckVideos() {
 
     if (recoverable.length === 0) return;
     log(`Found ${recoverable.length} video(s) in GENERATING/QUEUED/FAILED state, checking for recoverable ones...`);
+    sfl.action(`recoverStuckVideos: ${recoverable.length} video(s) to check`);
 
     for (const video of recoverable) {
       const age = now - new Date(video.updatedAt).getTime();
@@ -787,6 +796,7 @@ async function reconcileScheduledPosts() {
     if (toCheck.length === 0) return;
 
     debug(`Reconcile: ${videos.length} in window, ${toCheck.length} need attention`);
+    sfl.reconcile(`${videos.length} in window, ${toCheck.length} need attention`);
 
     for (const { video, entries, scheduledEntries } of toCheck) {
       const user = (video as { series?: { user?: typeof videos[number]["series"]["user"] } }).series?.user;
@@ -866,6 +876,7 @@ async function reconcileScheduledPosts() {
             changed = true;
             log(`Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
             rfl?.poster(`RECONCILE: ${entry.platform} for video=${video.id} → posted`);
+            sfl.reconcile(`${video.id}: ${entry.platform} scheduled → posted`);
           }
         }
       }
@@ -893,8 +904,10 @@ async function reconcileScheduledPosts() {
             ...(changed ? { postedPlatforms: entries as never } : {}),
           },
         });
-        log(`${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
-        rfl?.poster(`PROMOTED: video=${video.id} → POSTED (${entries.filter(e => e.success === true).map(e => e.platform).join(", ")})`);
+        const postedPlats = entries.filter(e => e.success === true).map(e => e.platform).join(", ");
+        log(`${video.id} → POSTED (${postedPlats})`);
+        rfl?.poster(`PROMOTED: video=${video.id} → POSTED (${postedPlats})`);
+        sfl.reconcile(`${video.id} → POSTED (${postedPlats})`);
       } else if (changed) {
         await db.video.update({
           where: { id: video.id },
@@ -954,6 +967,7 @@ const postWorker = new BullWorker<PostVideoJobData>(
     const schedDate = scheduledAt ? new Date(scheduledAt) : undefined;
 
     log(`[POST-WORKER] Posting video ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
+    sfl.action(`POST-WORKER: posting ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
 
     const video = await db.video.findUnique({
       where: { id: videoId },
@@ -1031,6 +1045,16 @@ const postWorker = new BullWorker<PostVideoJobData>(
         await enqueueScheduledPost(videoId, retryDate, retryPlatforms);
       }
 
+      // Enqueue exact-time reconcile for natively-scheduled platforms (YT/FB)
+      const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.scheduledFor);
+      if (scheduledEntries.length > 0) {
+        const latestSchedMs = Math.max(...scheduledEntries.map((e) => new Date(e.scheduledFor!).getTime()));
+        const reconcileAt = new Date(latestSchedMs + RECONCILE_INTERVAL_MS);
+        await enqueueReconcileCheck(videoId, reconcileAt, 0);
+        log(`[POST-WORKER] ${videoId} → reconcile check at ${reconcileAt.toISOString()}`);
+        fl?.poster(`RECONCILE: scheduled check at ${reconcileAt.toISOString()}`);
+      }
+
     } catch (e) {
       err(`[POST-WORKER] Error posting ${videoId}:`, e);
       fl?.poster(`POST ERROR: ${e instanceof Error ? e.message : String(e)}`);
@@ -1051,11 +1075,180 @@ postWorker.on("completed", (job) => {
   debug(`[POST-WORKER] Job ${job.id} completed`);
 });
 
+// ── BullMQ reconcile worker (exact-time check: scheduled → posted) ──
+
+const reconcileRedis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+  maxRetriesPerRequest: null,
+});
+
+const reconcileWorker = new BullWorker<ReconcileJobData>(
+  "reconcile-video",
+  async (job) => {
+    const { videoId, attempt } = job.data;
+    log(`[RECONCILE] Checking video ${videoId} (attempt ${attempt + 1})`);
+    sfl.reconcile(`Checking video ${videoId} (attempt ${attempt + 1})`);
+
+    const video = await db.video.findUnique({
+      where: { id: videoId },
+      select: {
+        id: true,
+        status: true,
+        postedPlatforms: true,
+        scheduledPostTime: true,
+        scheduledPlatforms: true,
+        series: {
+          select: {
+            automation: { select: { id: true, name: true } },
+            user: {
+              select: {
+                id: true, name: true, email: true,
+                socialAccounts: {
+                  select: {
+                    id: true, platform: true, accessTokenEnc: true, refreshTokenEnc: true,
+                    platformUserId: true, pageId: true, tokenExpiresAt: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!video) {
+      log(`[RECONCILE] Video ${videoId} not found, skipping`);
+      return;
+    }
+    if (!["READY", "SCHEDULED"].includes(video.status)) {
+      log(`[RECONCILE] Video ${videoId} status=${video.status}, nothing to reconcile`);
+      return;
+    }
+
+    type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string; error?: string };
+    const entries = (video.postedPlatforms ?? []) as PlatEntry[];
+    const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
+    if (scheduledEntries.length === 0) {
+      log(`[RECONCILE] Video ${videoId}: no scheduled entries to check`);
+      return;
+    }
+
+    const user = video.series?.user;
+    const autoInfo = video.series?.automation;
+    const rfl = autoInfo && user
+      ? getAutomationFileLogger(user.id, user.name ?? user.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
+      : null;
+
+    let changed = false;
+    const nowMs = Date.now();
+    const FORCE_PROMOTE_MS = 90 * 60 * 1000;
+
+    for (const entry of scheduledEntries) {
+      const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
+      const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
+      const effectiveSchedTime = entrySchedTime || videoSchedTime;
+      const overdueMins = effectiveSchedTime > 0 ? Math.round((nowMs - effectiveSchedTime) / 60000) : 0;
+
+      let isLive = false;
+
+      if (entry.platform === "YOUTUBE" && user) {
+        const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
+        if (account) {
+          const accessToken = decrypt(account.accessTokenEnc);
+          const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+          const privacy = await getYouTubeVideoPrivacy(
+            accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+          );
+          isLive = privacy === "public";
+          if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
+        }
+      } else if (entry.platform === "FACEBOOK" && user) {
+        const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+        if (account) {
+          let accessToken = decrypt(account.accessTokenEnc);
+          if (account.refreshTokenEnc && account.pageId) {
+            try {
+              accessToken = await getFreshFacebookToken(
+                account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+              );
+            } catch { /* use existing */ }
+          }
+          const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+          isLive = published === true;
+          if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+        }
+      }
+
+      if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+        log(`[RECONCILE] Force-promoting ${entry.platform} for ${videoId}: ${overdueMins}m overdue`);
+        isLive = true;
+      }
+
+      if (isLive) {
+        entry.success = true;
+        delete entry.scheduledFor;
+        changed = true;
+        log(`[RECONCILE] ${entry.platform} ${videoId}: scheduled → posted`);
+        rfl?.poster(`RECONCILE: ${entry.platform} → posted`);
+        sfl.reconcile(`${videoId}: ${entry.platform} scheduled → posted`);
+      }
+    }
+
+    const targeted = (video.scheduledPlatforms ?? []) as string[];
+    const allTargetedDone = targeted.length > 0 && targeted.every((plat) => {
+      const e = entries.find((x) => x.platform === plat);
+      return e && (e.success === true || e.success === "deleted");
+    });
+    const allEntriesDone = entries.length > 0 && entries.every(
+      (e) => e.success === true || e.success === "deleted",
+    );
+    const shouldPromote = video.status !== "POSTED" && (allTargetedDone || allEntriesDone);
+
+    if (shouldPromote) {
+      await db.video.update({
+        where: { id: videoId },
+        data: { status: "POSTED", postedPlatforms: entries as never },
+      });
+      const postedPlats = entries.filter(e => e.success === true).map(e => e.platform).join(", ");
+      log(`[RECONCILE] ${videoId} → POSTED (${postedPlats})`);
+      rfl?.poster(`PROMOTED: video=${videoId} → POSTED (${postedPlats})`);
+      sfl.reconcile(`${videoId} → POSTED (${postedPlats})`);
+    } else if (changed) {
+      await db.video.update({
+        where: { id: videoId },
+        data: { postedPlatforms: entries as never },
+      });
+
+      const stillScheduled = entries.filter((e) => e.success === "scheduled").length;
+      if (stillScheduled > 0) {
+        const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
+        await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
+        log(`[RECONCILE] ${videoId}: ${stillScheduled} platform(s) still scheduled, re-check at ${nextAt.toISOString()}`);
+      }
+    } else {
+      const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
+      await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
+      log(`[RECONCILE] ${videoId}: no change, re-check at ${nextAt.toISOString()}`);
+    }
+  },
+  {
+    connection: reconcileRedis as never,
+    concurrency: 5,
+  },
+);
+
+reconcileWorker.on("failed", (job, e) => {
+  err(`[RECONCILE] Job ${job?.id} failed:`, e.message);
+});
+reconcileWorker.on("completed", (job) => {
+  debug(`[RECONCILE] Job ${job.id} completed`);
+});
+
 // ── Cron: Build planning at BUILD_ALL_TIME ──
 
 const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
 cron.schedule(`${buildM} ${buildH} * * *`, () => {
   log(`planDailyBuilds: BUILD_ALL_TIME (${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}) triggered`);
+  sfl.action(`CRON: planDailyBuilds triggered (BUILD_ALL_TIME ${BUILD_ALL_TIME})`);
   planDailyBuilds();
 });
 
@@ -1064,28 +1257,34 @@ const catchUpMin = (buildM + BUILD_WINDOW_MINUTES + 60) % 60;
 const catchUpH = (buildH + Math.floor((buildM + BUILD_WINDOW_MINUTES + 60) / 60)) % 24;
 cron.schedule(`${catchUpMin} ${catchUpH} * * *`, () => {
   log("planDailyBuilds: catch-up run (BUILD_ALL_TIME + 2h)");
+  sfl.action(`CRON: catch-up planDailyBuilds triggered`);
   planDailyBuilds();
 });
 
 // Safety net: recover stuck videos + reconcile overdue posts (every 4h)
 cron.schedule("0 */4 * * *", () => {
   debug("safetyNet: running recovery + reconciliation");
+  sfl.action(`CRON: safetyNet triggered (every 4h)`);
   safetyNet();
 });
 
 // Run insights refresh once per day at 02:00 (server TZ)
 cron.schedule("0 2 * * *", () => {
   log("Running daily insights refresh...");
+  sfl.action(`CRON: daily insights refresh triggered`);
   refreshInsightsDaily();
 });
 
 // Probe niche trending data at 03:00, then optimize clip automations from scorecard
 cron.schedule("0 3 * * *", async () => {
   log("Running daily niche trending probe...");
+  sfl.action(`CRON: daily niche probe + optimize triggered`);
   try {
     await probeAllNicheTrends(db);
+    sfl.action(`Niche trending probe completed`);
   } catch (e) {
     err("probeAllNicheTrends error:", e);
+    sfl.error(`probeAllNicheTrends: ${e instanceof Error ? e.message : String(e)}`);
   }
   log("Optimizing clip automations from today's scorecard...");
   await optimizeClipAutomations();
@@ -1154,6 +1353,7 @@ async function bootstrapClipAutomations() {
       if (missing.length === 0) continue;
 
       log(`[BOOTSTRAP] Creating ${missing.length} clip automation(s) for user ${user.id}`);
+      sfl.action(`BOOTSTRAP: creating ${missing.length} clip automation(s) for user ${user.id}`);
 
       let created = 0;
       for (const niche of missing) {
@@ -1197,9 +1397,11 @@ async function bootstrapClipAutomations() {
         }
       }
       log(`[BOOTSTRAP] Created ${created}/${missing.length} clip automation(s) for user ${user.id}`);
+      sfl.action(`BOOTSTRAP: created ${created}/${missing.length} clip automation(s) for user ${user.id}`);
     }
   } catch (e) {
     err("bootstrapClipAutomations error:", e);
+    sfl.error(`bootstrapClipAutomations: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -1215,6 +1417,7 @@ async function optimizeClipAutomations() {
       data: { enabled: false },
     });
     log(`[OPTIMIZE] Reset ${disabledCount} clip automation(s) to disabled`);
+    sfl.action(`OPTIMIZE: reset ${disabledCount} clip automation(s) to disabled`);
 
     // Step 2: Read today's NicheTrending data
     const todayStart = new Date();
@@ -1251,6 +1454,7 @@ async function optimizeClipAutomations() {
     // Step 4: Pick top N to fill DAILY_CLIP_POSTS_PER_PLATFORM per platform
     const selected = pickTopNichesForTarget(ranked, DAILY_CLIP_POSTS_PER_PLATFORM);
     log(`[OPTIMIZE] Selected ${selected.length} niche(s) for ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform`);
+    sfl.action(`OPTIMIZE: selected ${selected.length} niche(s) for ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform`);
 
     // Step 5: Compute staggered schedule
     const schedule = computeStaggeredSchedule(selected, PLATFORM_POST_GAP_MINUTES);
@@ -1274,12 +1478,15 @@ async function optimizeClipAutomations() {
 
       if (updated.count > 0) {
         log(`[OPTIMIZE] Enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}`);
+        sfl.action(`OPTIMIZE: enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}`);
       }
     }
 
     log(`[OPTIMIZE] Done. ${selected.length} clip automation(s) enabled for today.`);
+    sfl.action(`OPTIMIZE: done. ${selected.length} clip automation(s) enabled for today.`);
   } catch (e) {
     err("optimizeClipAutomations error:", e);
+    sfl.error(`optimizeClipAutomations: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -1291,6 +1498,8 @@ log(`  Post-video: BullMQ delayed queue (exact-time posting)`);
 log(`  Clip optimizer: ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform, ${PLATFORM_POST_GAP_MINUTES}min gap`);
 log(`  Safety net: every 4h (recovery + reconciliation)`);
 log(`  Catch-up: ${catchUpH}:${String(catchUpMin).padStart(2, "0")} (BUILD_ALL_TIME + 2h)`);
+
+sfl.action(`Scheduler started — Build: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}, Clip optimizer: ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform, Safety net: every 4h`);
 
 cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
 backfillLastRunAt()

@@ -16,6 +16,13 @@ interface ExhaustionRecord {
   reason: string;
 }
 
+export interface ProviderExhaustionStatus {
+  envVar: string;
+  totalKeys: number;
+  availableKeys: number;
+  exhaustedKeys: Array<{ masked: string; reason: string; expiresAt: number }>;
+}
+
 export class KeyRotator {
   private readonly envVar: string;
   private readonly aliases: string[];
@@ -111,6 +118,19 @@ export class KeyRotator {
     return n;
   }
 
+  getStatus(envVar: string): ProviderExhaustionStatus {
+    this.pruneExpired();
+    const exhaustedKeys: ProviderExhaustionStatus["exhaustedKeys"] = [];
+    for (const k of this.keys) {
+      const rec = this.exhausted.get(k);
+      if (rec) {
+        const masked = k.length > 8 ? k.slice(0, 4) + "…" + k.slice(-4) : "***";
+        exhaustedKeys.push({ masked, reason: rec.reason, expiresAt: rec.until });
+      }
+    }
+    return { envVar, totalKeys: this.keys.length, availableKeys: this.availableCount, exhaustedKeys };
+  }
+
   private pruneExpired(): void {
     const now = Date.now();
     for (const [key, rec] of this.exhausted) {
@@ -132,10 +152,25 @@ export function getKeyRotator(envVar: string, aliases?: string[]): KeyRotator {
 }
 
 /**
- * Reset exhaustion records across ALL singleton KeyRotators.
- * Call at the start of each new video's I2V generation so providers
- * whose quotas have reset (daily Leonardo tokens, Pollinations pollen, etc.)
- * get a fresh chance instead of being blocked by stale exhaustion data.
+ * Reset exhaustion records for daily-reset providers only.
+ * One-time credit providers keep their exhaustion state across builds
+ * since their credits never replenish.
+ */
+export function resetDailyExhaustion(dailyEnvVars: Set<string>): void {
+  let cleared = 0;
+  for (const [envVar, rotator] of rotators) {
+    if (!dailyEnvVars.has(envVar)) continue;
+    if (rotator.availableCount < rotator.count) {
+      log.log(`[${envVar}] Clearing daily-reset exhaustion (${rotator.count - rotator.availableCount} exhausted → fresh)`);
+      cleared++;
+    }
+    rotator.reset();
+  }
+  if (cleared > 0) log.log(`Reset exhaustion for ${cleared} daily-reset provider(s)`);
+}
+
+/**
+ * Reset exhaustion for ALL providers (used on app restart).
  */
 export function resetAllExhaustion(): void {
   let cleared = 0;
@@ -146,7 +181,18 @@ export function resetAllExhaustion(): void {
     }
     rotator.reset();
   }
-  if (cleared > 0) log.log(`Reset exhaustion for ${cleared} provider key pool(s) — fresh start for new video`);
+  if (cleared > 0) log.log(`Reset exhaustion for ${cleared} provider key pool(s) — fresh start`);
+}
+
+/**
+ * Get exhaustion status for all known rotators.
+ */
+export function getAllExhaustionStatus(): ProviderExhaustionStatus[] {
+  const result: ProviderExhaustionStatus[] = [];
+  for (const [envVar, rotator] of rotators) {
+    result.push(rotator.getStatus(envVar));
+  }
+  return result;
 }
 
 /**

@@ -46,9 +46,18 @@ export async function GET(
       const stream = fs.createReadStream(filePath, { start, end });
       const body = new ReadableStream({
         start(controller) {
-          stream.on("data", (chunk) => controller.enqueue(chunk));
-          stream.on("end", () => controller.close());
-          stream.on("error", (err) => controller.error(err));
+          stream.on("data", (chunk) => {
+            try { controller.enqueue(chunk); } catch { stream.destroy(); }
+          });
+          stream.on("end", () => {
+            try { controller.close(); } catch { /* already closed */ }
+          });
+          stream.on("error", (err) => {
+            try { controller.error(err); } catch { /* already closed */ }
+          });
+        },
+        cancel() {
+          stream.destroy();
         },
       });
 

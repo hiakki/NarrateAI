@@ -7,11 +7,13 @@ import { createLogger } from "@/lib/logger";
 import {
   getImageToVideoProvider,
   getAvailableImageToVideoProviders,
+  IMAGE_TO_VIDEO_PROVIDERS,
   type ImageToVideoProviderInfo,
 } from "@/config/image-to-video-providers";
 import { getLocalBackendUrl, wrapLocalBackendFetchError } from "@/lib/local-backend";
 import { requireHuggingFaceToken } from "@/lib/huggingface";
-import { getKeyRotator, resetAllExhaustion, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS } from "@/lib/api-key-rotation";
+import { getKeyRotator, resetDailyExhaustion, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS, getAllExhaustionStatus } from "@/lib/api-key-rotation";
+import type { ProviderExhaustionStatus } from "@/lib/api-key-rotation";
 
 const log = createLogger("ImageToVideo");
 
@@ -228,13 +230,17 @@ async function tryProviderWithRotation(
         lastKeyError = err instanceof Error ? err : new Error(String(err));
         if (isRetryableI2VError(lastKeyError)) {
           const msg = lastKeyError.message.toLowerCase();
-          const isDailyLimit = msg.includes("daily limit") || msg.includes("daily quota");
+          const isOneTime = provider.creditType === "one-time";
+          const isQuota = /\b(402|403)\b/.test(lastKeyError.message) || msg.includes("insufficient") || msg.includes("quota");
           const isAccountLevel = /\b(401|404)\b/.test(lastKeyError.message);
-          const ttl = isDailyLimit
-            ? 2 * 60 * 60 * 1000   // 2h for daily limits (providers reset at varying times)
-            : isAccountLevel
-              ? 4 * 60 * 60 * 1000 // 4h for bad keys (401/404)
-              : msg.includes("429") ? RATE_LIMIT_TTL_MS : DEFAULT_EXHAUSTION_TTL_MS;
+          const isRateLimit = /\b429\b/.test(lastKeyError.message);
+          const ttl = isOneTime && isQuota
+            ? 24 * 60 * 60 * 1000  // 24h for one-time providers with depleted credits
+            : isRateLimit
+              ? RATE_LIMIT_TTL_MS
+              : isAccountLevel
+                ? 4 * 60 * 60 * 1000
+                : DEFAULT_EXHAUSTION_TTL_MS;
           rotator.markExhausted(key, ttl, lastKeyError.message.slice(0, 100));
           continue;
         }
@@ -256,34 +262,62 @@ async function tryProviderWithRotation(
 }
 
 /**
- * Build a prioritized fallback order. The user-selected provider goes first,
- * then all other available providers (excluding "local" and non-configured),
- * sorted so providers on independent credit pools come before shared-pool ones.
+ * Build a prioritized fallback order:
+ *   1. User-selected provider first
+ *   2. Group A (one-time credits) — use these first while they last
+ *   3. Group B (daily-reset credits) — conserve these, used when Group A exhausted
+ *
+ * Within each group, providers are sorted by type priority.
  */
 const PROVIDER_PRIORITY: Record<string, number> = {
-  leonardo: 1,
+  fal: 1,
   deapi: 2,
   pixverse: 3,
   siliconflow: 4,
-  pollinations: 5,
-  huggingface: 6,
-  wavespeed: 7,
-  "gradio-space": 8,
-  fal: 9,
-  freepik: 10,
-  replicate: 11,
-  "gemini-veo": 12,
+  freepik: 5,
+  "gemini-veo": 6,
+  replicate: 7,
+  leonardo: 10,
+  pollinations: 11,
+  huggingface: 12,
+  wavespeed: 13,
+  "gradio-space": 14,
 };
+
+/** Env vars that belong to daily-reset providers — used for selective exhaustion reset. */
+const DAILY_RESET_ENV_VARS = new Set<string>();
 
 function buildFallbackChain(primaryId: string): ImageToVideoProviderInfo[] {
   const primary = getImageToVideoProvider(primaryId);
   const available = getAvailableImageToVideoProviders()
-    .filter((p) => p.type !== "local" && p.id !== primaryId)
+    .filter((p) => p.type !== "local" && p.id !== primaryId);
+
+  const groupA = available
+    .filter((p) => p.creditType === "one-time")
     .sort((a, b) => (PROVIDER_PRIORITY[a.type] ?? 99) - (PROVIDER_PRIORITY[b.type] ?? 99));
+  const groupB = available
+    .filter((p) => p.creditType === "daily-reset")
+    .sort((a, b) => (PROVIDER_PRIORITY[a.type] ?? 99) - (PROVIDER_PRIORITY[b.type] ?? 99));
+
+  for (const p of groupB) {
+    if (p.envVar) DAILY_RESET_ENV_VARS.add(p.envVar);
+  }
+
   const chain: ImageToVideoProviderInfo[] = [];
   if (primary) chain.push(primary);
-  chain.push(...available);
+  for (const p of [...groupA, ...groupB]) {
+    if (!chain.some((c) => c.id === p.id)) chain.push(p);
+  }
   return chain;
+}
+
+function getDailyResetEnvVars(): Set<string> {
+  if (DAILY_RESET_ENV_VARS.size === 0) {
+    for (const p of Object.values(getAvailableImageToVideoProviders())) {
+      if (p.creditType === "daily-reset" && p.envVar) DAILY_RESET_ENV_VARS.add(p.envVar);
+    }
+  }
+  return DAILY_RESET_ENV_VARS;
 }
 
 /**
@@ -1733,6 +1767,42 @@ export function calculateI2VAllocation(totalSlots: number, cachedSlots: number):
   return { maxSlots: cap, reason: `${cap}/${totalSlots} slots (I2V_MAX_CLIPS_PER_VIDEO=${perVideo})` };
 }
 
+/** Return per-provider exhaustion status for the dashboard. */
+export function getI2VProviderStatus(): Array<{
+  id: string;
+  name: string;
+  creditType: "one-time" | "daily-reset";
+  costEstimate: string;
+  configured: boolean;
+  totalKeys: number;
+  availableKeys: number;
+  exhaustedKeys: ProviderExhaustionStatus["exhaustedKeys"];
+}> {
+  const available = getAvailableImageToVideoProviders();
+  const allProviders = Object.values(IMAGE_TO_VIDEO_PROVIDERS);
+
+  return allProviders
+    .filter((p) => p.type !== "local")
+    .map((p) => {
+      const configured = available.some((a) => a.id === p.id);
+      const rotator = configured && KEY_ROTATABLE_TYPES.has(p.type) && p.envVar
+        ? getKeyRotator(p.envVar)
+        : null;
+      const status = rotator ? rotator.getStatus(p.envVar) : null;
+
+      return {
+        id: p.id,
+        name: PROVIDER_FRIENDLY_NAMES[p.id] ?? p.name,
+        creditType: p.creditType,
+        costEstimate: p.costEstimate ?? "—",
+        configured,
+        totalKeys: status?.totalKeys ?? 0,
+        availableKeys: status?.availableKeys ?? 0,
+        exhaustedKeys: status?.exhaustedKeys ?? [],
+      };
+    });
+}
+
 /**
  * Generate clips for multiple scene images (parallel, concurrency-limited).
  * When noFallback is true, any scene failure throws (no static-image fallback).
@@ -1754,7 +1824,7 @@ export async function generateClipsFromImages(
     maxSlots?: number;
   } = {}
 ): Promise<{ results: (string | null)[]; ctxLines: string[]; actualI2VProvider?: string }> {
-  const concurrency = options.concurrency ?? 3;
+  let concurrency = options.concurrency ?? 3;
   const results: (string | null)[] = new Array(imagePaths.length).fill(null);
   const durationSec = options.durationSec ?? 5;
   const noFallback = options.noFallback === true;
@@ -1791,32 +1861,47 @@ export async function generateClipsFromImages(
     return { results, ctxLines: ctx };
   }
 
-  // Fresh start: clear stale exhaustion records from previous video generations.
-  // Providers like Leonardo (150 daily tokens), Pollinations (daily pollen reset)
-  // may have replenished since the last run hours ago.
-  resetAllExhaustion();
+  // Only reset daily-reset providers (Leonardo, Pollinations, HF, etc.).
+  // One-time credit providers keep exhaustion state across builds.
+  resetDailyExhaustion(getDailyResetEnvVars());
 
   const chain = buildFallbackChain(primaryId);
+
+  // Check group availability
+  let groupAAvailable = false;
+  let groupBAvailable = false;
+  const exhaustedProviders: string[] = [];
+  for (const p of chain) {
+    if (KEY_ROTATABLE_TYPES.has(p.type) && p.envVar) {
+      const rotator = getKeyRotator(p.envVar);
+      if (rotator.availableCount > 0) {
+        if (p.creditType === "one-time") groupAAvailable = true;
+        else groupBAvailable = true;
+      } else {
+        exhaustedProviders.push(PROVIDER_FRIENDLY_NAMES[p.id] ?? p.id);
+      }
+    } else if (p.type === "local" || p.type === "replicate") {
+      groupAAvailable = true;
+    }
+  }
+
+  const anyAvailable = groupAAvailable || groupBAvailable;
+  const groupBOnly = !groupAAvailable && groupBAvailable;
+
   const chainNames = chain.map((p) => {
     const name = PROVIDER_FRIENDLY_NAMES[p.id] ?? p.id;
     const rotator = KEY_ROTATABLE_TYPES.has(p.type) && p.envVar ? getKeyRotator(p.envVar) : null;
     const keys = rotator ? `${rotator.availableCount}/${rotator.count} keys` : (p.type === "local" ? "local" : "n/a");
-    return `${name} (${keys})`;
+    const group = p.creditType === "one-time" ? "A" : "B";
+    return `${name} [${group}] (${keys})`;
   });
   ctx.push(`Fallback chain (${chain.length} providers): ${chainNames.join(" → ")}`);
+  if (groupBOnly) {
+    ctx.push(`⚠ Group A (one-time) exhausted — running on Group B (daily-reset) only, concurrency=1`);
+    concurrency = 1;
+  }
   ctx.push("");
 
-  const exhaustedProviders: string[] = [];
-  let anyAvailable = false;
-  for (const p of chain) {
-    if (KEY_ROTATABLE_TYPES.has(p.type) && p.envVar) {
-      const rotator = getKeyRotator(p.envVar);
-      if (rotator.availableCount > 0) { anyAvailable = true; break; }
-      exhaustedProviders.push(PROVIDER_FRIENDLY_NAMES[p.id] ?? p.id);
-    } else if (p.type === "local" || p.type === "replicate") {
-      anyAvailable = true; break;
-    }
-  }
   if (!anyAvailable && chain.length > 0) {
     const msg = `All ${exhaustedProviders.length} I2V providers currently exhausted — skipping I2V entirely. Exhausted: ${exhaustedProviders.join(", ")}`;
     log.warn(`[I2V]`, msg);
@@ -1826,7 +1911,7 @@ export async function generateClipsFromImages(
     return { results, ctxLines: ctx };
   }
 
-  log.log(`[I2V]`, `Generating ${toGenerate.length}/${imagePaths.length} clips (×${concurrency} parallel, ${primaryId})`);
+  log.log(`[I2V]`, `Generating ${toGenerate.length}/${imagePaths.length} clips (×${concurrency} parallel, ${primaryId}${groupBOnly ? " [Group B only]" : ""})`);
 
   let active = 0;
   let nextIdx = 0;

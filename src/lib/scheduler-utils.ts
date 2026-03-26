@@ -104,31 +104,28 @@ export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: 
   const gapDays = FREQ_DAYS[auto.frequency] ?? 1;
   const tz = auto.timezone || BUILD_ALL_TIMEZONE;
   const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
+  const reachable = auto.postTime ? postTimeReachableToday(auto.postTime, tz) : true;
 
   if (auto.lastRunAt === null) {
-    if (auto.postTime && postTimeReachableToday(auto.postTime, tz)) {
-      if (isInBuildWindow()) {
-        return { build: true, reason: "new automation — post time reachable today, building now" };
-      }
-      return { build: false, reason: "new automation — post time reachable today, waiting for build window" };
+    if (isInBuildWindow()) {
+      return { build: true, reason: `new automation — building now${reachable ? ", post today" : ", post bumped to tomorrow"}` };
     }
-    return { build: false, reason: "new automation — post time passed today, will build tomorrow" };
+    if (reachable) {
+      return { build: false, reason: "new automation — waiting for build window" };
+    }
+    return { build: false, reason: "new automation — post time passed, will build tomorrow" };
   }
 
   if (daysSince < gapDays) {
     return { build: false, reason: `ran ${daysSince}d ago (calendar), need ${gapDays}d gap` };
   }
 
-  if (auto.postTime && !postTimeReachableToday(auto.postTime, tz)) {
-    return { build: false, reason: `post time ${auto.postTime} already passed today, deferring to next day` };
-  }
-
   if (isInBuildWindow()) {
-    return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)` };
+    return { build: true, reason: `build window active, due for build (last ran ${daysSince}d ago)${reachable ? "" : " — post bumped to tomorrow"}` };
   }
 
   if (daysSince > gapDays) {
-    return { build: true, reason: `catch-up: overdue by ${daysSince - gapDays}d, running now` };
+    return { build: true, reason: `catch-up: overdue by ${daysSince - gapDays}d, running now${reachable ? "" : " — post bumped to tomorrow"}` };
   }
 
   const todayBuild = localTimeToUTC(BUILD_ALL_TIME, BUILD_ALL_TIMEZONE);

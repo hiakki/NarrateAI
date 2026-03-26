@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info, Video, Cookie, Upload, Trash2, CheckCircle2, XCircle, ExternalLink, LogIn } from "lucide-react";
+import { Loader2, Check, Cpu, Mic, Image as ImageIcon, Info, Video, Cookie, Upload, Trash2, CheckCircle2, XCircle, ExternalLink, LogIn, RefreshCw } from "lucide-react";
 import { timeAgo } from "@/lib/format-utils";
 
 interface ProviderInfo {
@@ -648,7 +648,134 @@ export default function SettingsPage() {
             </details>
           </CardContent>
         </Card>
+
+        <I2VStatusCard />
       </div>
     </div>
+  );
+}
+
+// ── I2V Provider Status Card ──
+
+interface I2VProvider {
+  id: string;
+  name: string;
+  creditType: "one-time" | "daily-reset";
+  costEstimate: string;
+  configured: boolean;
+  totalKeys: number;
+  availableKeys: number;
+  exhaustedKeys: Array<{ masked: string; reason: string; expiresAt: number }>;
+}
+
+function I2VStatusCard() {
+  const [providers, setProviders] = useState<I2VProvider[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/i2v-status");
+      if (res.ok) {
+        const data = await res.json();
+        setProviders(data.providers ?? []);
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const groupA = providers.filter((p) => p.creditType === "one-time");
+  const groupB = providers.filter((p) => p.creditType === "daily-reset");
+
+  const groupAActive = groupA.filter((p) => p.configured && p.availableKeys > 0).length;
+  const groupATotal = groupA.filter((p) => p.configured).length;
+  const groupBActive = groupB.filter((p) => p.configured && p.availableKeys > 0).length;
+  const groupBTotal = groupB.filter((p) => p.configured).length;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Video className="h-4 w-4" /> I2V Provider Status
+            </CardTitle>
+            <CardDescription className="text-xs mt-1">
+              Live exhaustion status for Image-to-Video providers
+            </CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => { setLoading(true); fetchStatus(); }} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border p-3">
+            <div className="text-xs font-medium text-muted-foreground mb-1">Group A — One-time Credits</div>
+            <div className="text-lg font-bold">{groupAActive}/{groupATotal} <span className="text-xs font-normal text-muted-foreground">available</span></div>
+            {groupAActive === 0 && groupATotal > 0 && (
+              <Badge variant="destructive" className="text-[10px] mt-1">All exhausted</Badge>
+            )}
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="text-xs font-medium text-muted-foreground mb-1">Group B — Daily Reset</div>
+            <div className="text-lg font-bold">{groupBActive}/{groupBTotal} <span className="text-xs font-normal text-muted-foreground">available</span></div>
+            {groupBActive === 0 && groupBTotal > 0 && (
+              <Badge variant="destructive" className="text-[10px] mt-1">All exhausted</Badge>
+            )}
+          </div>
+        </div>
+
+        <Separator />
+
+        {loading ? (
+          <div className="flex items-center justify-center py-4"><Loader2 className="h-4 w-4 animate-spin" /></div>
+        ) : (
+          <div className="space-y-3">
+            {[
+              { label: "Group A — One-time Credits", items: groupA },
+              { label: "Group B — Daily Reset", items: groupB },
+            ].map(({ label, items }) => (
+              <div key={label}>
+                <h4 className="text-xs font-semibold text-muted-foreground mb-2">{label}</h4>
+                <div className="space-y-1.5">
+                  {items.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {p.configured ? (
+                          p.availableKeys > 0
+                            ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                            : <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                        ) : (
+                          <div className="h-3.5 w-3.5 rounded-full border-2 border-muted shrink-0" />
+                        )}
+                        <span className="text-xs font-medium truncate">{p.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[10px] text-muted-foreground">{p.costEstimate}</span>
+                        {p.configured ? (
+                          <Badge variant={p.availableKeys > 0 ? "secondary" : "destructive"} className="text-[10px] px-1.5">
+                            {p.availableKeys}/{p.totalKeys} keys
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] px-1.5">No key</Badge>
+                        )}
+                        {p.exhaustedKeys.length > 0 && (
+                          <span className="text-[10px] text-red-500 max-w-[120px] truncate" title={p.exhaustedKeys[0].reason}>
+                            {p.exhaustedKeys[0].reason}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

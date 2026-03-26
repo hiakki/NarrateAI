@@ -431,40 +431,82 @@ function TimelineRow({ icon, label, value, accent }: { icon: React.ReactNode; la
   );
 }
 
-function DayDetailList({ videos, onEventClick }: { videos: VideoItem[]; onEventClick: (v: VideoItem) => void }) {
+function videoHour(v: VideoItem): number {
+  const iso = v.schedule.scheduledPostTime ?? v.createdAt;
+  return new Date(iso).getHours();
+}
+
+function DayTimetable({ videos, onEventClick }: { videos: VideoItem[]; onEventClick: (v: VideoItem) => void }) {
   if (videos.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No videos this day</p>;
+
+  const byHour = new Map<number, VideoItem[]>();
+  for (const v of videos) {
+    const h = videoHour(v);
+    if (!byHour.has(h)) byHour.set(h, []);
+    byHour.get(h)!.push(v);
+  }
+
+  const minH = Math.min(...videos.map(videoHour));
+  const maxH = Math.max(...videos.map(videoHour));
+  const startHour = Math.max(0, minH - 1);
+  const endHour = Math.min(23, maxH + 1);
+  const hours: number[] = [];
+  for (let h = startHour; h <= endHour; h++) hours.push(h);
+
   return (
-    <div className="space-y-1.5">
-      {videos.map((v) => {
-        const time = fmtTime(v.schedule.scheduledPostTime ?? v.createdAt);
+    <div className="relative">
+      {hours.map((h) => {
+        const vids = byHour.get(h) ?? [];
+        const label = `${String(h).padStart(2, "0")}:00`;
         return (
-          <button
-            key={v.id}
-            onClick={() => onEventClick(v)}
-            className={`flex items-center gap-2 w-full rounded-lg border px-3 py-2 text-left transition-all hover:shadow-sm ${STATUS_CHIP[v.status] ?? "bg-muted/30 border-border"}`}
-          >
-            <span className={`h-2 w-2 rounded-full shrink-0 ${STATUS_DOT[v.status] ?? "bg-gray-400"}`} />
-            {v.isClip
-              ? <Scissors className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              : <Clapperboard className="h-3.5 w-3.5 shrink-0 opacity-60" />
-            }
-            <span className="text-xs font-medium shrink-0">{time}</span>
-            <span className="text-xs truncate flex-1">{v.title || v.niche}</span>
-            <div className="flex items-center gap-0.5 shrink-0">
-              {v.platforms.map((p) => {
-                const cfg = PLAT_ICON[p.platform];
-                if (!cfg) return null;
-                const I = cfg.icon;
-                return <I key={p.platform} className={`h-3 w-3 ${cfg.color}`} />;
-              })}
+          <div key={h} className="flex min-h-[40px] group">
+            <div className="w-[44px] shrink-0 text-[10px] font-mono text-muted-foreground pt-0.5 text-right pr-2 select-none">
+              {label}
             </div>
-            {v.build.durationMs != null && (
-              <span className="text-[10px] text-muted-foreground shrink-0">{fmtDuration(v.build.durationMs)}</span>
-            )}
-          </button>
+            <div className="flex-1 border-t border-dashed border-muted/60 py-0.5 pl-1">
+              {vids.length === 0 ? (
+                <div className="h-[28px]" />
+              ) : (
+                <div className="space-y-0.5">
+                  {vids.map((v) => (
+                    <TimetableEvent key={v.id} video={v} onClick={() => onEventClick(v)} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         );
       })}
     </div>
+  );
+}
+
+function TimetableEvent({ video, onClick }: { video: VideoItem; onClick: () => void }) {
+  const time = fmtTime(video.schedule.scheduledPostTime ?? video.createdAt);
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 w-full rounded-md border px-2 py-1 text-left transition-all hover:shadow-sm ${STATUS_CHIP[video.status] ?? "bg-muted/30 border-border"}`}
+    >
+      <span className={`h-2 w-2 rounded-full shrink-0 ${STATUS_DOT[video.status] ?? "bg-gray-400"}`} />
+      {video.isClip
+        ? <Scissors className="h-3 w-3 shrink-0 opacity-60" />
+        : <Clapperboard className="h-3 w-3 shrink-0 opacity-60" />
+      }
+      <span className="text-[11px] font-medium shrink-0">{time}</span>
+      <span className="text-[11px] truncate flex-1 min-w-0">{video.title || video.niche}</span>
+      <div className="flex items-center gap-0.5 shrink-0">
+        {video.platforms.map((p) => {
+          const cfg = PLAT_ICON[p.platform];
+          if (!cfg) return null;
+          const I = cfg.icon;
+          return <I key={p.platform} className={`h-3 w-3 ${cfg.color}`} />;
+        })}
+      </div>
+      {video.build.durationMs != null && (
+        <span className="text-[9px] text-muted-foreground shrink-0">{fmtDuration(video.build.durationMs)}</span>
+      )}
+    </button>
   );
 }
 
@@ -499,6 +541,13 @@ export default function CalendarPage() {
       const key = videoDateKey(v);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(v);
+    }
+    for (const [, vids] of map) {
+      vids.sort((a, b) => {
+        const ta = new Date(a.schedule.scheduledPostTime ?? a.createdAt).getTime();
+        const tb = new Date(b.schedule.scheduledPostTime ?? b.createdAt).getTime();
+        return ta - tb;
+      });
     }
     return map;
   }, [data]);
@@ -635,7 +684,7 @@ export default function CalendarPage() {
                     </h3>
                     <Badge variant="outline" className="text-[10px]">{selectedDayVideos.length}</Badge>
                   </div>
-                  <DayDetailList videos={selectedDayVideos} onEventClick={setSelectedVideo} />
+                  <DayTimetable videos={selectedDayVideos} onEventClick={setSelectedVideo} />
                 </>
               )}
             </div>

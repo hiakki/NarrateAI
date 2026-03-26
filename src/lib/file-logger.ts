@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 
 const LOGS_ROOT = path.join(process.cwd(), "logs");
+const SCHEDULER_LOGS_DIR = path.join(LOGS_ROOT, "_scheduler");
 const MAX_AGE_DAYS = 30;
 
 function safeName(s: string, maxLen = 80): string {
@@ -73,6 +74,51 @@ export function getAutomationFileLogger(
     worker: (msg: string) => { appendLine(dir, "WORKER", msg); },
     poster: (msg: string) => { appendLine(dir, "POSTER", msg); },
   };
+}
+
+// ── Dedicated scheduler file logger ──
+
+let schedulerDirCreated = false;
+
+async function appendSchedulerLine(tag: string, msg: string) {
+  try {
+    if (!schedulerDirCreated) {
+      await fs.mkdir(SCHEDULER_LOGS_DIR, { recursive: true });
+      schedulerDirCreated = true;
+    }
+    const file = path.join(SCHEDULER_LOGS_DIR, todayFile());
+    const line = `[${ts()}] [${tag}] ${msg}\n`;
+    await fs.appendFile(file, line, "utf-8");
+  } catch {
+    // File logging must never crash the caller
+  }
+}
+
+export interface SchedulerFileLogger {
+  /** Logs a scheduler action: bootstrap, optimize, build-planning, safety-net, etc. */
+  action: (msg: string) => void;
+  /** Logs reconciliation events (scheduled→posted checks). */
+  reconcile: (msg: string) => void;
+  /** Logs errors from scheduler-level operations. */
+  error: (msg: string) => void;
+}
+
+let _schedulerFL: SchedulerFileLogger | null = null;
+
+/**
+ * Returns a singleton file logger that writes to `logs/_scheduler/YYYY-MM-DD.log`.
+ * All scheduler-level events go here (bootstrap, optimize, build planning,
+ * safety net, reconciliation) — separate from per-automation logs.
+ */
+export function getSchedulerFileLogger(): SchedulerFileLogger {
+  if (!_schedulerFL) {
+    _schedulerFL = {
+      action: (msg: string) => { appendSchedulerLine("ACTION", msg); },
+      reconcile: (msg: string) => { appendSchedulerLine("RECONCILE", msg); },
+      error: (msg: string) => { appendSchedulerLine("ERROR", msg); },
+    };
+  }
+  return _schedulerFL;
 }
 
 /**

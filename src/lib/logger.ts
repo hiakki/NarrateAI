@@ -15,12 +15,6 @@ interface LogContext {
 
 export const logContextStorage = new AsyncLocalStorage<LogContext>();
 
-function ts(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 function prefix(tag: string): string {
   const ctx = logContextStorage.getStore();
   if (ctx?.kind === "worker" && ctx.videoId) {
@@ -30,7 +24,7 @@ function prefix(tag: string): string {
     return `[scheduler-${ctx.automationId}] [${tag}]`;
   }
   const videoPart = ctx?.videoId ? ` [${ctx.videoId}]` : "";
-  const base = INSTANCE_ID ? `[${ts()}] [${INSTANCE_ID}] [${tag}]` : `[${ts()}] [${tag}]`;
+  const base = INSTANCE_ID ? `[${INSTANCE_ID}] [${tag}]` : `[${tag}]`;
   return `${base}${videoPart}`;
 }
 
