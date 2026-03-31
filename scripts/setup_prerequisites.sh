@@ -527,6 +527,7 @@ main() {
   local skip_prereqs=false
   local restore_file=""
   local action="setup"
+  local do_deploy=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -534,6 +535,7 @@ main() {
       --restore)      restore_file="${2:-}"; shift 2 ;;
       --stop)         action="stop"; shift ;;
       --status)       action="status"; shift ;;
+      --deploy)       do_deploy=true; shift ;;
       --help|-h)
         echo ""
         echo "NarrateAI Setup Script"
@@ -543,6 +545,7 @@ main() {
         echo "  $0 --restore <backup.tar.gz>            Setup and restore from backup"
         echo "  $0 --skip-prereqs                       Skip prerequisite installation"
         echo "  $0 --skip-prereqs --restore <file>      Restore without installing"
+        echo "  $0 --deploy                            Full setup + PM2 deploy"
         echo "  $0 --stop                               Stop all NarrateAI services"
         echo "  $0 --status                             Show running status"
         echo ""
@@ -627,6 +630,10 @@ main() {
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo ""
   echo "  Development:    pnpm dev:all"
+  if $do_deploy; then
+    start_app
+  fi
+
   echo "  Production:     ./scripts/setup_prerequisites.sh --deploy"
   echo "  Stop:           ./scripts/setup_prerequisites.sh --stop"
   echo ""
