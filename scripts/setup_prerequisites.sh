@@ -8,13 +8,16 @@ set -euo pipefail
 # and optionally restore from backup. After setup, run the app with: pnpm dev:all
 #
 # Usage:
-#   ./scripts/setup_prerequisites.sh                      # full setup + deploy
-#   ./scripts/setup_prerequisites.sh --restore backup.tar.gz  # setup + restore
-#   ./scripts/setup_prerequisites.sh --skip-prereqs       # skip tool installs
-#   ./scripts/setup_prerequisites.sh --stop               # stop all services
-#   ./scripts/setup_prerequisites.sh --status             # show status
+#   ./scripts/setup_prerequisites.sh              # full setup (base + build + deploy)
+#   ./scripts/setup_prerequisites.sh --base       # install tools, start infra, prepare .env
+#   ./scripts/setup_prerequisites.sh --build      # install deps, prisma, optional restore
+#   ./scripts/setup_prerequisites.sh --deploy     # start PM2 processes only
+#   ./scripts/setup_prerequisites.sh --restore backup.tar.gz  # restore during build step
+#   ./scripts/setup_prerequisites.sh --skip-prereqs           # skip tool installs (base phase)
+#   ./scripts/setup_prerequisites.sh --stop       # stop all services
+#   ./scripts/setup_prerequisites.sh --status     # show status
 #
-# Run the app: pnpm dev:all   |   Backup/restore only: scripts/backup-restore.sh
+# Run the app locally: pnpm dev:all   |   Backup/restore only: scripts/backup-restore.sh
 # Supports: Ubuntu/Debian (apt), macOS (brew)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -25,6 +28,7 @@ PM2_ECOSYSTEM="$PROJECT_DIR/ecosystem.config.cjs"
 PORT="${PORT:-3000}"
 # Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
 NODE_MAJOR=22
+prisma_accept_data_loss=false
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -362,7 +366,11 @@ prepare_project() {
   ok "Prisma client generated"
 
   info "Pushing database schema..."
-  if ! pnpm db:push; then
+  local push_cmd=(pnpm db:push)
+  if $prisma_accept_data_loss; then
+    push_cmd+=(--accept-data-loss)
+  fi
+  if ! "${push_cmd[@]}"; then
     err "Database schema push failed. Check DATABASE_URL and that PostgreSQL is running."
     exit 1
   fi
@@ -371,46 +379,34 @@ prepare_project() {
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
 generate_pm2_config() {
-  local pnpm_cmd="pnpm"
-  if [[ "$(uname -s)" == *MINGW* ]]; then
-    pnpm_cmd="pnpm.cmd"
-  fi
   cat > "$PM2_ECOSYSTEM" <<PMEOF
 module.exports = {
   apps: [
     {
       name: "narrateai-web",
-      script: "${pnpm_cmd}",
-      args: "start",
-      cwd: "${PROJECT_DIR}",
-      interpreter: "/bin/bash",
+      script: "/bin/bash",
+      args: "-lc 'cd ${PROJECT_DIR} && pnpm start'",
       env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1" },
       max_memory_restart: "512M",
     },
     {
       name: "narrateai-worker",
-      script: "${pnpm_cmd}",
-      args: "worker",
-      cwd: "${PROJECT_DIR}",
-      interpreter: "/bin/bash",
+      script: "/bin/bash",
+      args: "-lc 'cd ${PROJECT_DIR} && pnpm worker'",
       env: { NODE_ENV: "production" },
       max_memory_restart: "1G",
     },
     {
       name: "narrateai-clip-worker",
-      script: "${pnpm_cmd}",
-      args: "worker:clip",
-      cwd: "${PROJECT_DIR}",
-      interpreter: "/bin/bash",
+      script: "/bin/bash",
+      args: "-lc 'cd ${PROJECT_DIR} && pnpm worker:clip'",
       env: { NODE_ENV: "production" },
       max_memory_restart: "1G",
     },
     {
       name: "narrateai-scheduler",
-      script: "${pnpm_cmd}",
-      args: "scheduler",
-      cwd: "${PROJECT_DIR}",
-      interpreter: "/bin/bash",
+      script: "/bin/bash",
+      args: "-lc 'cd ${PROJECT_DIR} && pnpm scheduler'",
       env: { NODE_ENV: "production" },
       max_memory_restart: "256M",
     },
@@ -535,7 +531,10 @@ main() {
   local skip_prereqs=false
   local restore_file=""
   local action="setup"
-  local do_deploy=false
+  local run_base=false
+  local run_build=false
+  local run_deploy=false
+  local any_phase=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -543,31 +542,78 @@ main() {
       --restore)      restore_file="${2:-}"; shift 2 ;;
       --stop)         action="stop"; shift ;;
       --status)       action="status"; shift ;;
-      --deploy)       do_deploy=true; shift ;;
+      --base)         run_base=true; any_phase=true; shift ;;
+      --build)        run_build=true; any_phase=true; shift ;;
+      --deploy)       run_deploy=true; any_phase=true; shift ;;
+      --accept-data-loss) prisma_accept_data_loss=true; shift ;;
       --help|-h)
-        echo ""
-        echo "NarrateAI Setup Script"
-        echo ""
-        echo "Usage:"
-        echo "  $0                                      Full setup (prereqs + deps + schema)"
-        echo "  $0 --restore <backup.tar.gz>            Setup and restore from backup"
-        echo "  $0 --skip-prereqs                       Skip prerequisite installation"
-        echo "  $0 --skip-prereqs --restore <file>      Restore without installing"
-        echo "  $0 --deploy                            Full setup + PM2 deploy"
-        echo "  $0 --stop                               Stop all NarrateAI services"
-        echo "  $0 --status                             Show running status"
-        echo ""
-        echo "Prerequisites installed automatically:"
-        echo "  Docker, Node.js ${NODE_MAJOR}, pnpm, FFmpeg, yt-dlp, PM2, cloudflared"
-        echo ""
-        echo "Environment:"
-        echo "  PORT     Web server port (default: 3000)"
-        echo ""
+        cat <<USAGE
+
+NarrateAI Setup Script
+
+Usage:
+  $0                        Full setup (base + build + deploy)
+  $0 --base                 Install tools, start infra, create .env
+  $0 --build                Install deps, run Prisma, optional restore
+  $0 --deploy               Start PM2 processes only
+  $0 --restore <file>       Restore backup during build step
+  $0 --skip-prereqs         Skip prerequisite installation (base phase)
+  $0 --accept-data-loss     Allow Prisma schema push to drop data
+  $0 --stop                 Stop all NarrateAI services
+  $0 --status               Show running status
+
+Prerequisites installed automatically:
+  Docker, Node.js ${NODE_MAJOR}, pnpm, FFmpeg, yt-dlp, PM2, cloudflared
+
+Environment:
+  PORT     Web server port (default: 3000)
+
+USAGE
         exit 0
         ;;
       *) err "Unknown option: $1"; echo "Run '$0 --help' for usage."; exit 1 ;;
     esac
   done
+
+  if ! $any_phase; then
+    run_base=true
+    run_build=true
+    run_deploy=true
+  fi
+
+  if $run_base && $skip_prereqs; then
+    info "Skipping prerequisite installation (--skip-prereqs)"
+    detect_os
+  elif $run_base; then
+    install_all_prereqs
+    start_infra
+    setup_env
+  fi
+
+  if $run_build; then
+    if $run_base; then
+      : # already handled infra and .env above
+    else
+      start_infra
+      setup_env
+    }
+    if [[ -n "$restore_file" ]]; then
+      restore_backup "$restore_file" || warn "Restore failed or skipped."
+    fi
+    prepare_project
+  fi
+
+  if $run_deploy; then
+    start_app
+  fi
+
+  if ! $run_base && ! $run_build && ! $run_deploy; then
+    echo ""
+    echo "  Production:     $0 --deploy"
+    echo "  Stop:           $0 --stop"
+    echo ""
+  fi
+  return
 
   case "$action" in
     stop)   do_stop; exit 0 ;;
@@ -638,7 +684,7 @@ main() {
   echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
   echo ""
   echo "  Development:    pnpm dev:all"
-  if $do_deploy; then
+  if $run_deploy || (! $any_phase && ! $run_base && ! $run_build); then
     start_app
   fi
 
