@@ -49,33 +49,16 @@ addHostCandidate(process.env.NEXT_PUBLIC_APP_URL);
 addHostCandidate(process.env.NEXTAUTH_URL);
 addHostCandidate(process.env.AUTH_URL);
 
-let trustHostOption: boolean | string | string[] | undefined;
 const trustHostEnv = process.env.AUTH_TRUST_HOST;
+const hasExplicitTrustHost =
+  typeof trustHostEnv === "string" && trustHostEnv.trim().length > 0;
 
-if (typeof trustHostEnv === "string" && trustHostEnv.trim().length > 0) {
-  const normalized = trustHostEnv.trim().toLowerCase();
-  if (["false", "0", "no"].includes(normalized)) {
-    trustHostOption = false;
-  } else if (["true", "1", "yes"].includes(normalized)) {
-    trustHostOption = true;
-  } else {
-    const entries = trustHostEnv
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .map((entry) => parseUrlLike(entry)?.host ?? entry);
-    if (entries.length === 1) {
-      trustHostOption = entries[0];
-    } else if (entries.length > 1) {
-      trustHostOption = entries;
-    }
-  }
-} else if (hostCandidates.size > 0) {
+if (!hasExplicitTrustHost && hostCandidates.size > 0) {
   const hosts = Array.from(hostCandidates).filter(Boolean);
   if (hosts.length === 1) {
-    trustHostOption = hosts[0];
+    process.env.AUTH_TRUST_HOST = hosts[0];
   } else if (hosts.length > 1) {
-    trustHostOption = hosts;
+    process.env.AUTH_TRUST_HOST = hosts.join(",");
   }
 }
 
@@ -109,7 +92,6 @@ declare module "next-auth" {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(db) as never,
-  trustHost: trustHostOption,
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
