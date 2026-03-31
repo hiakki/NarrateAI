@@ -375,6 +375,13 @@ prepare_project() {
     exit 1
   fi
   ok "Database schema synced"
+
+  info "Building Next.js production bundle..."
+  if ! pnpm build; then
+    err "Next.js build failed. Check logs above for details."
+    exit 1
+  fi
+  ok "Next.js production build ready"
 }
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
