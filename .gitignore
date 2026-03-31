@@ -56,3 +56,8 @@ next-env.d.ts
 
 # automation file logs
 /logs/
+
+# ssl assets
+/ssl/certs/*.pem
+/ssl/certs/*.key
+/ssl/logs/

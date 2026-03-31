@@ -423,7 +423,7 @@ set "_CWD=%PROJECT_DIR:\=/%"
 > "%PM2_ECO%" (
     echo module.exports = {
     echo   apps: [
-    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT%", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%" }, max_memory_restart: "512M" },
+    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT% -H 127.0.0.1", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%" }, max_memory_restart: "512M" },
     echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "1G" },
     echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "256M" },
     echo   ],

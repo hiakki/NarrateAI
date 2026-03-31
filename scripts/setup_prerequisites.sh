@@ -377,7 +377,7 @@ module.exports = {
     {
       name: "narrateai-web",
       script: "node_modules/.bin/next",
-      args: "start -p ${PORT}",
+      args: "start -p ${PORT} -H 127.0.0.1",
       cwd: "${PROJECT_DIR}",
       env: { NODE_ENV: "production", PORT: "${PORT}" },
       max_memory_restart: "512M",

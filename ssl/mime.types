@@ -1,0 +1,11 @@
+types {
+    text/html                             html htm shtml;
+    text/css                              css;
+    application/javascript                js mjs;
+    application/json                      json;
+    image/svg+xml                         svg;
+    image/png                             png;
+    image/jpeg                            jpeg jpg;
+    application/octet-stream              bin exe dll;
+    application/wasm                      wasm;
+}
