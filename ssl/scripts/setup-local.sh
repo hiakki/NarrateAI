@@ -81,9 +81,19 @@ ensure_nginx_prefix_dirs() {
     "$ROOT/scgi_temp"
 }
 
-maybe_stop_system_nginx() {
-  if have systemctl && systemctl is-active --quiet nginx 2>/dev/null; then
-    echo "Note: system nginx is active. Stop it to free ports 80/443: sudo systemctl stop nginx"
+stop_existing_nginx() {
+  echo "Stopping any running nginx instances (system and local)…"
+  if sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf" -s quit 2>/dev/null; then
+    sleep 1
+  fi
+  if sudo nginx -s quit 2>/dev/null; then
+    sleep 1
+  fi
+  if have systemctl; then
+    sudo systemctl stop nginx >/dev/null 2>&1 || true
+  fi
+  if have service; then
+    sudo service nginx stop >/dev/null 2>&1 || true
   fi
 }
 
@@ -114,7 +124,7 @@ maybe_add_hosts() {
 
 main() {
   echo "==> contrib/nginx setup (root: $ROOT)"
-  maybe_stop_system_nginx
+  stop_existing_nginx
   install_nginx
   install_mkcert_optional
   ensure_mkcert_ca
@@ -129,9 +139,12 @@ main() {
   if sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf" -s quit 2>/dev/null; then
     sleep 1
   fi
-  sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf"
+  sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf" || {
+    echo "Failed to start nginx. Check if ports 80/443 are in use." >&2
+    exit 1
+  }
   echo ""
-  echo "Setup complete. nginx now runs in the background (daemon mode)."
+  echo "Setup complete. nginx now runs in the background (daemon mode) on ports 80/443."
   echo "Stop:    sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -s quit"
   echo "Debug:   sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -g 'daemon off;'"
   echo "Ensure backends are running: app :3000, chat :5173"
