@@ -371,38 +371,46 @@ prepare_project() {
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
 generate_pm2_config() {
+  local pnpm_cmd="pnpm"
+  if [[ "$(uname -s)" == *MINGW* ]]; then
+    pnpm_cmd="pnpm.cmd"
+  fi
   cat > "$PM2_ECOSYSTEM" <<PMEOF
 module.exports = {
   apps: [
     {
       name: "narrateai-web",
-      script: "node_modules/.bin/next",
-      args: "start -p ${PORT} -H 127.0.0.1",
+      script: "${pnpm_cmd}",
+      args: "start",
       cwd: "${PROJECT_DIR}",
-      env: { NODE_ENV: "production", PORT: "${PORT}" },
+      interpreter: "/bin/bash",
+      env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1" },
       max_memory_restart: "512M",
     },
     {
       name: "narrateai-worker",
-      script: "node_modules/.bin/tsx",
-      args: "workers/video-generation.ts",
+      script: "${pnpm_cmd}",
+      args: "worker",
       cwd: "${PROJECT_DIR}",
+      interpreter: "/bin/bash",
       env: { NODE_ENV: "production" },
       max_memory_restart: "1G",
     },
     {
       name: "narrateai-clip-worker",
-      script: "node_modules/.bin/tsx",
-      args: "workers/clip-repurpose.ts",
+      script: "${pnpm_cmd}",
+      args: "worker:clip",
       cwd: "${PROJECT_DIR}",
+      interpreter: "/bin/bash",
       env: { NODE_ENV: "production" },
       max_memory_restart: "1G",
     },
     {
       name: "narrateai-scheduler",
-      script: "node_modules/.bin/tsx",
-      args: "workers/scheduler.ts",
+      script: "${pnpm_cmd}",
+      args: "scheduler",
       cwd: "${PROJECT_DIR}",
+      interpreter: "/bin/bash",
       env: { NODE_ENV: "production" },
       max_memory_restart: "256M",
     },
