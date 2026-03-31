@@ -596,7 +596,7 @@ USAGE
     else
       start_infra
       setup_env
-    }
+    fi
     if [[ -n "$restore_file" ]]; then
       restore_backup "$restore_file" || warn "Restore failed or skipped."
     fi
