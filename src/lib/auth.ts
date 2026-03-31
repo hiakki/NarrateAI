@@ -7,8 +7,76 @@ import { db } from "@/lib/db";
 import { validateEmailDomain } from "@/lib/email/validate";
 import type { UserRole, UserPlan } from "@prisma/client";
 
-if (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXTAUTH_URL) {
-  process.env.NEXTAUTH_URL = process.env.NEXT_PUBLIC_APP_URL;
+const parseUrlLike = (value?: string | null) => {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const normalized = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(normalized);
+  } catch {
+    return undefined;
+  }
+};
+
+const canonicalUrl =
+  parseUrlLike(process.env.NEXT_PUBLIC_APP_URL) ??
+  parseUrlLike(process.env.NEXTAUTH_URL) ??
+  parseUrlLike(process.env.AUTH_URL);
+
+if (!process.env.NEXTAUTH_URL && canonicalUrl) {
+  process.env.NEXTAUTH_URL = canonicalUrl.origin;
+}
+if (!process.env.AUTH_URL && canonicalUrl) {
+  process.env.AUTH_URL = canonicalUrl.origin;
+}
+
+const hostCandidates = new Set<string>();
+const addHostCandidate = (value?: string | null) => {
+  if (!value) return;
+  const parsed = parseUrlLike(value);
+  if (parsed) {
+    hostCandidates.add(parsed.host);
+    return;
+  }
+  const trimmed = value.trim();
+  if (trimmed && !["false", "0", "no"].includes(trimmed.toLowerCase())) {
+    hostCandidates.add(trimmed);
+  }
+};
+
+addHostCandidate(process.env.NEXT_PUBLIC_APP_URL);
+addHostCandidate(process.env.NEXTAUTH_URL);
+addHostCandidate(process.env.AUTH_URL);
+
+let trustHostOption: boolean | string | string[] | undefined;
+const trustHostEnv = process.env.AUTH_TRUST_HOST;
+
+if (typeof trustHostEnv === "string" && trustHostEnv.trim().length > 0) {
+  const normalized = trustHostEnv.trim().toLowerCase();
+  if (["false", "0", "no"].includes(normalized)) {
+    trustHostOption = false;
+  } else if (["true", "1", "yes"].includes(normalized)) {
+    trustHostOption = true;
+  } else {
+    const entries = trustHostEnv
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => parseUrlLike(entry)?.host ?? entry);
+    if (entries.length === 1) {
+      trustHostOption = entries[0];
+    } else if (entries.length > 1) {
+      trustHostOption = entries;
+    }
+  }
+} else if (hostCandidates.size > 0) {
+  const hosts = Array.from(hostCandidates).filter(Boolean);
+  if (hosts.length === 1) {
+    trustHostOption = hosts[0];
+  } else if (hosts.length > 1) {
+    trustHostOption = hosts;
+  }
 }
 
 declare module "next-auth" {
@@ -41,6 +109,7 @@ declare module "next-auth" {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(db) as never,
+  trustHost: trustHostOption,
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
