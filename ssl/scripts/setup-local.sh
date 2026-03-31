@@ -125,17 +125,15 @@ main() {
   maybe_add_hosts
   echo "==> nginx config test"
   nginx -t -p "$ROOT" -c "$ROOT/nginx.conf"
+  echo "==> restarting nginx with local config"
+  if sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf" -s quit 2>/dev/null; then
+    sleep 1
+  fi
+  sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf"
   echo ""
-  echo "Setup complete."
-  echo ""
-  echo "Start nginx (ports 80/443 may require sudo):"
-  echo "  sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\""
-  echo "Foreground / debug:"
-  echo "  sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -g 'daemon off;'"
-  echo "Stop:"
-  echo "  sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -s quit"
-  echo "  # or: sudo kill \"\$(cat /tmp/nginx-narrateai.pid)\""
-  echo ""
+  echo "Setup complete. nginx now runs in the background (daemon mode)."
+  echo "Stop:    sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -s quit"
+  echo "Debug:   sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -g 'daemon off;'"
   echo "Ensure backends are running: app :3000, chat :5173"
 }
 
