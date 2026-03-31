@@ -285,6 +285,32 @@ install_chromium() {
   fi
 }
 
+install_xvfb() {
+  if [[ "$(uname)" != "Linux" ]]; then
+    return
+  fi
+
+  if command -v Xvfb &>/dev/null; then
+    ok "Xvfb already installed"
+    return
+  fi
+
+  if [[ "$PKG" == "apt" ]]; then
+    info "Installing Xvfb for headless Chrome..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq xvfb || warn "Failed to install Xvfb automatically. Install manually if you plan to run cookie extraction."
+    return
+  fi
+
+  if [[ "$PKG" == "dnf" ]]; then
+    info "Installing Xvfb for headless Chrome..."
+    sudo dnf install -y xorg-x11-server-Xvfb || warn "Failed to install Xvfb automatically. Install manually if you plan to run cookie extraction."
+    return
+  fi
+
+  warn "Xvfb not installed automatically on this platform. Install it manually if you plan to run cookie extraction."
+}
+
 # ── Install all prerequisites ────────────────────────────────────────────────
 install_all_prereqs() {
   step "Installing prerequisites"
@@ -297,6 +323,15 @@ install_all_prereqs() {
   install_pm2
   install_cloudflared
   install_chromium
+  install_xvfb
+
+  if [[ "$(uname)" == "Linux" ]]; then
+    if ! command -v Xvfb &>/dev/null; then
+      warn "Xvfb not available — Chrome-based flows may require running under xvfb-run."
+    else
+      ok "Xvfb available — use 'xvfb-run -s "-screen 0 1280x720x24" pnpm tsx scripts/cookie-extract.ts' for interactive cookie setup."
+    fi
+  fi
 }
 
 # ── Start infrastructure (Postgres + Redis) ──────────────────────────────────
