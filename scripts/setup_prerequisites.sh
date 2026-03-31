@@ -228,6 +228,63 @@ install_cloudflared() {
   ok "cloudflared installed"
 }
 
+# ── Prerequisite: Chrome/Chromium (for Puppeteer workflows) ──────────────────
+install_chromium() {
+  local chrome_bin=""
+  for candidate in \
+    "${CHROME_PATH:-}" \
+    "$(command -v google-chrome 2>/dev/null)" \
+    "$(command -v google-chrome-stable 2>/dev/null)" \
+    "$(command -v chromium-browser 2>/dev/null)" \
+    "$(command -v chromium 2>/dev/null)" \
+    "/usr/bin/google-chrome" \
+    "/usr/bin/google-chrome-stable" \
+    "/usr/bin/chromium-browser" \
+    "/usr/bin/chromium"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      chrome_bin="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$chrome_bin" ]]; then
+    ok "Chromium-based browser available ($("$chrome_bin" --version 2>/dev/null | head -1))"
+    return
+  fi
+
+  info "Installing headless Chrome/Chromium..."
+  case "$PKG" in
+    apt)
+      curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-linux.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/google-linux.gpg] https://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq google-chrome-stable || sudo apt-get install -y -qq chromium-browser chromium || true
+      ;;
+    brew)
+      brew install --cask google-chrome 2>/dev/null || warn "Install Google Chrome manually from https://www.google.com/chrome/"
+      ;;
+    dnf)
+      sudo dnf install -y google-chrome-stable 2>/dev/null || sudo dnf install -y chromium 2>/dev/null || true
+      ;;
+    *)
+      warn "Cannot auto-install Chrome on this OS. Install Google Chrome or Chromium manually and set CHROME_PATH."
+      return
+      ;;
+  esac
+
+  if command -v google-chrome &>/dev/null; then
+    ok "Google Chrome installed ($(google-chrome --version 2>/dev/null | head -1))"
+  elif command -v google-chrome-stable &>/dev/null; then
+    ok "Google Chrome installed ($(google-chrome-stable --version 2>/dev/null | head -1))"
+  elif command -v chromium-browser &>/dev/null; then
+    ok "Chromium installed ($(chromium-browser --version 2>/dev/null | head -1))"
+  elif command -v chromium &>/dev/null; then
+    ok "Chromium installed ($(chromium --version 2>/dev/null | head -1))"
+  else
+    warn "Chrome/Chromium install attempted but not detected. Install manually and set CHROME_PATH before using clip workflows."
+  fi
+}
+
 # ── Install all prerequisites ────────────────────────────────────────────────
 install_all_prereqs() {
   step "Installing prerequisites"
@@ -239,6 +296,7 @@ install_all_prereqs() {
   install_ytdlp
   install_pm2
   install_cloudflared
+  install_chromium
 }
 
 # ── Start infrastructure (Postgres + Redis) ──────────────────────────────────
