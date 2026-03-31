@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(bash -n /Users/akshaygupta/Documents/work/contrib/NarrateAI/scripts/setup_prerequisites.sh)",
+      "WebFetch(domain:conducting-periodically-struck-refrigerator.trycloudflare.com)",
+      "Bash(pnpm build:*)"
+    ]
+  }
+}

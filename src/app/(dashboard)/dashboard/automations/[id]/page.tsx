@@ -1,0 +1,1339 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  ArrowLeft, Loader2, Clock, Trash2, Instagram, Youtube, Facebook,
+  CheckCircle2, AlertCircle, Play, Film, Pencil, X, Save, Mic, ChevronDown, Zap, Sparkles, Globe, Plus, XCircle,
+  Star, EyeOff, Share2, Smartphone, BarChart2, Eye, Heart,
+} from "lucide-react";
+import { NICHES, getDurationRangeForNiche } from "@/config/niches";
+import { ART_STYLES } from "@/config/art-styles";
+import { LANGUAGES } from "@/config/languages";
+import { getScheduleForNiche, convertTime } from "@/config/posting-schedule";
+import { getVoicesForProvider, getVoiceById, getDefaultVoiceId } from "@/config/voices";
+import { getSuggestionsToImproveScore, type NicheScoreConfig } from "@/lib/niche-score";
+import { getPromptEnhancer } from "@/config/prompt-enhancers";
+import { resolveStoryModel } from "@/config/story-models";
+
+interface PostedEntry { platform: string; postId?: string; url?: string }
+interface Video {
+  id: string;
+  title: string | null;
+  status: string;
+  generationStage: string | null;
+  duration: number | null;
+  postedPlatforms: (string | PostedEntry)[];
+  insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> | null;
+  insightsRefreshedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AutomationDetail {
+  id: string;
+  name: string;
+  niche: string;
+  artStyle: string;
+  tone: string;
+  duration: number;
+  language: string;
+  voiceId: string | null;
+  llmProvider: string | null;
+  ttsProvider: string | null;
+  imageProvider: string | null;
+  imageToVideoProvider: string | null;
+  characterId: string | null;
+  targetPlatforms: string[];
+  enabled: boolean;
+  includeAiTags: boolean;
+  frequency: string;
+  postTime: string;
+  timezone: string;
+  lastRunAt: string | null;
+  createdAt: string;
+  series: { id: string; videos: Video[] } | null;
+}
+
+interface SocialAccount {
+  id: string;
+  platform: "INSTAGRAM" | "YOUTUBE" | "FACEBOOK" | "SHARECHAT" | "MOJ";
+  username: string | null;
+  pageName: string | null;
+}
+
+interface CharacterSummary {
+  id: string;
+  name: string;
+  type: string;
+  fullPrompt: string;
+  previewUrl: string | null;
+}
+
+interface ProviderInfo {
+  id: string;
+  name: string;
+}
+
+interface ProviderData {
+  defaults: { llmProvider: string; ttsProvider: string; imageProvider: string; imageToVideoProvider?: string | null };
+  platformDefaults: { llm: string; tts: string; image: string };
+  available: { llm: ProviderInfo[]; tts: ProviderInfo[]; image: ProviderInfo[] };
+  imageToVideo?: { all: { id: string; name: string; description?: string }[]; availableIds: string[] };
+}
+
+const PLATFORM_CONFIG = {
+  INSTAGRAM: { icon: Instagram, color: "text-pink-600", label: "Instagram Reels" },
+  YOUTUBE: { icon: Youtube, color: "text-red-600", label: "YouTube Shorts" },
+  FACEBOOK: { icon: Facebook, color: "text-blue-600", label: "Facebook Reels" },
+  SHARECHAT: { icon: Share2, color: "text-orange-600", label: "ShareChat" },
+  MOJ: { icon: Smartphone, color: "text-amber-600", label: "Moj" },
+} as const;
+
+const FREQ_LABEL: Record<string, string> = {
+  daily: "Daily", every_other_day: "Every other day", weekly: "Weekly",
+};
+
+const FREQ_THRESHOLDS: Record<string, number> = { daily: 26, every_other_day: 50, weekly: 170 };
+
+function parseSlotMinute(t: string): number {
+  const [h, m] = t.trim().split(":").map((n) => parseInt(n, 10));
+  return (Number.isFinite(h) ? h : 23) * 60 + (Number.isFinite(m) ? m : 59);
+}
+
+function localNowParts(tz: string): { dateKey: string; minuteOfDay: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const hour = parseInt(v("hour") || "0", 10);
+  const minute = parseInt(v("minute") || "0", 10);
+  return {
+    dateKey: `${v("year")}-${v("month")}-${v("day")}`,
+    minuteOfDay: (Number.isFinite(hour) ? hour : 0) * 60 + (Number.isFinite(minute) ? minute : 0),
+  };
+}
+
+function localDateKey(date: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${v("year")}-${v("month")}-${v("day")}`;
+}
+
+function isScheduleMissed(auto: { enabled: boolean; frequency: string; postTime: string; timezone: string; lastRunAt: string | null }): boolean {
+  if (!auto.enabled) return false;
+
+  if (auto.frequency === "daily") {
+    const { dateKey: todayKey, minuteOfDay: nowMinute } = localNowParts(auto.timezone);
+    const slots = auto.postTime.split(",").map((t) => parseSlotMinute(t)).sort((a, b) => a - b);
+    if (slots.length === 0) return false;
+    if (!auto.lastRunAt) return true;
+
+    const lastRunKey = localDateKey(new Date(auto.lastRunAt), auto.timezone);
+    if (lastRunKey === todayKey) return false;
+
+    if (slots.some((m) => m <= nowMinute)) return true;
+
+    const yesterdayKey = localDateKey(new Date(Date.now() - 86_400_000), auto.timezone);
+    return lastRunKey !== yesterdayKey;
+  }
+
+  const timesPerDay = auto.postTime.split(",").length;
+  let threshold = FREQ_THRESHOLDS[auto.frequency] ?? 26;
+  if (timesPerDay > 1) threshold = Math.min(threshold, 26 / timesPerDay);
+  if (!auto.lastRunAt) return true;
+  return (Date.now() - new Date(auto.lastRunAt).getTime()) / 3_600_000 > threshold;
+}
+
+const FREQUENCIES = [
+  { value: "daily", label: "Daily" },
+  { value: "every_other_day", label: "Every Other Day" },
+  { value: "weekly", label: "Weekly" },
+] as const;
+
+const COMMON_TIMEZONES = [
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "Europe/London", "Europe/Paris", "Asia/Kolkata", "Asia/Tokyo", "Australia/Sydney",
+] as const;
+
+const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
+  QUEUED: { label: "Queued", icon: Clock, className: "text-yellow-600 bg-yellow-50" },
+  GENERATING: { label: "Generating", icon: Loader2, className: "text-blue-600 bg-blue-50" },
+  REVIEW: { label: "Review", icon: AlertCircle, className: "text-amber-600 bg-amber-50" },
+  READY: { label: "Ready", icon: CheckCircle2, className: "text-green-600 bg-green-50" },
+  SCHEDULED: { label: "Scheduled", icon: Clock, className: "text-purple-600 bg-purple-50" },
+  POSTED: { label: "Posted", icon: CheckCircle2, className: "text-green-700 bg-green-100" },
+  FAILED: { label: "Failed", icon: AlertCircle, className: "text-red-600 bg-red-50" },
+};
+
+function formatProvider(p: unknown): string {
+  if (!p || typeof p !== "string") return "Default";
+  return p.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export default function AutomationDetailPage() {
+  const router = useRouter();
+  const params = useParams();
+  const id = params.id as string;
+
+  const [auto, setAuto] = useState<AutomationDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [providerData, setProviderData] = useState<ProviderData | null>(null);
+  const [characters, setCharacters] = useState<CharacterSummary[]>([]);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [triggering, setTriggering] = useState(false);
+  const [retryingVideoId, setRetryingVideoId] = useState<string | null>(null);
+  const [resettingProviders, setResettingProviders] = useState(false);
+
+  const [editName, setEditName] = useState("");
+  const [editNiche, setEditNiche] = useState("");
+  const [editArtStyle, setEditArtStyle] = useState("");
+  const [editTone, setEditTone] = useState("");
+  const [editDuration, setEditDuration] = useState(45);
+  const [editLanguage, setEditLanguage] = useState("en");
+  const [editVoiceId, setEditVoiceId] = useState("");
+  const [editLlmProvider, setEditLlmProvider] = useState("");
+  const [editTtsProvider, setEditTtsProvider] = useState("");
+  const [editImageProvider, setEditImageProvider] = useState("");
+  const [editImageToVideoProvider, setEditImageToVideoProvider] = useState<string>("");
+  const [editCharacterId, setEditCharacterId] = useState<string>("");
+  const [editFrequency, setEditFrequency] = useState("daily");
+  const [editPostTimes, setEditPostTimes] = useState<string[]>(["09:00"]);
+  const [editTimezone, setEditTimezone] = useState("Asia/Kolkata");
+  const [showProviders, setShowProviders] = useState(false);
+
+  const effectiveTts = editTtsProvider
+    || providerData?.defaults.ttsProvider
+    || providerData?.platformDefaults.tts
+    || "GEMINI_TTS";
+  const voices = getVoicesForProvider(effectiveTts, editLanguage);
+
+  const activeNiche = editing ? editNiche : auto?.niche;
+  const activeLanguage = editing ? editLanguage : auto?.language ?? "en";
+  const activeTimezone = editing ? editTimezone : auto?.timezone ?? "America/New_York";
+  const suggestedSchedule = useMemo(() => {
+    if (!activeNiche) return null;
+    const schedule = getScheduleForNiche(activeNiche, activeLanguage);
+    return {
+      ...schedule,
+      localSlots: schedule.slots.map((s) => ({
+        ...s,
+        localTime: convertTime(s.time, schedule.viewerTimezone, activeTimezone),
+      })),
+    };
+  }, [activeNiche, activeLanguage, activeTimezone]);
+
+  const nicheScoreCard = useMemo(() => {
+    if (!auto || !activeNiche) return null;
+    const times = (editing ? editPostTimes : auto.postTime.split(",").map((t: string) => t.trim())).filter(Boolean);
+    const config: NicheScoreConfig = {
+      nicheId: activeNiche,
+      artStyleId: editing ? editArtStyle : auto.artStyle,
+      languageId: activeLanguage,
+      toneId: editing ? editTone : auto.tone,
+      times: times.length > 0 ? times : ["09:00"],
+    };
+    return getSuggestionsToImproveScore(config, activeTimezone);
+  }, [auto, activeNiche, activeLanguage, activeTimezone, editing, editArtStyle, editTone, editPostTimes]);
+
+  const bestForNiche = useMemo(() => {
+    if (!activeNiche) return null;
+    const activeTone = editing ? editTone : auto?.tone ?? "dramatic";
+    const nicheDef = NICHES.find((n) => n.id === activeNiche);
+    if (!nicheDef) return null;
+    const enhancer = getPromptEnhancer(activeNiche, activeTone);
+    const { modelName } = resolveStoryModel(activeNiche, activeTone, enhancer.moodKeywords);
+    const recommendedTime = suggestedSchedule?.localSlots[0]?.localTime ?? null;
+    return {
+      storyModel: modelName,
+      recommendedArt: nicheDef.defaultArtStyle.replace(/-/g, " "),
+      recommendedTone: nicheDef.defaultTone,
+      recommendedTime,
+    };
+  }, [activeNiche, editing, editTone, auto?.tone, suggestedSchedule]);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [autoRes, acctRes, provRes, charRes] = await Promise.all([
+        fetch(`/api/automations/${id}`, { cache: "no-store" }),
+        fetch("/api/social/accounts"),
+        fetch("/api/settings/providers"),
+        fetch("/api/characters"),
+      ]);
+      const autoJson = await autoRes.json();
+      const acctJson = await acctRes.json();
+      const provJson = await provRes.json();
+      const charJson = await charRes.json();
+      if (autoJson.data) setAuto(autoJson.data);
+      if (acctJson.data) setAccounts(acctJson.data);
+      if (provJson.data) setProviderData(provJson.data);
+      if (charJson.data) setCharacters(charJson.data);
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const currentVoices = getVoicesForProvider(effectiveTts, editLanguage);
+    const stillValid = editVoiceId && currentVoices.some((v) => v.id === editVoiceId);
+    if (!stillValid) setEditVoiceId(getDefaultVoiceId(effectiveTts, editLanguage));
+  }, [effectiveTts, editLanguage, editVoiceId, editing]);
+
+  function startEdit() {
+    if (!auto) return;
+    setEditName(auto.name);
+    setEditNiche(auto.niche);
+    setEditArtStyle(auto.artStyle);
+    setEditTone(auto.tone);
+    setEditDuration(auto.duration);
+    setEditLanguage(auto.language);
+    setEditVoiceId(auto.voiceId ?? "");
+    setEditLlmProvider(auto.llmProvider === "HF_STORY" ? "HF_STORY_QWEN_7B" : (auto.llmProvider ?? ""));
+    setEditTtsProvider(auto.ttsProvider ?? "");
+    setEditImageProvider(auto.imageProvider ?? "");
+    setEditImageToVideoProvider(auto.imageToVideoProvider ?? "");
+    setEditCharacterId(auto.characterId ?? "");
+    setEditFrequency(auto.frequency);
+    setEditPostTimes(auto.postTime.split(",").map((t: string) => t.trim()));
+    setEditTimezone(auto.timezone);
+    setShowProviders(!!(auto.llmProvider || auto.ttsProvider || auto.imageProvider || auto.imageToVideoProvider));
+    setEditing(true);
+    setSaveMsg("");
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      const res = await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editName,
+          niche: editNiche,
+          artStyle: editArtStyle,
+          tone: editTone,
+          duration: editDuration,
+          language: editLanguage,
+          voiceId: editVoiceId || null,
+          // Persist chosen providers; no fallbacks — use exactly what the user selected
+          llmProvider: editLlmProvider?.trim() ? editLlmProvider.trim() : null,
+          ttsProvider: editTtsProvider?.trim() ? editTtsProvider.trim() : null,
+          imageProvider: editImageProvider?.trim() ? editImageProvider.trim() : null,
+          imageToVideoProvider: editImageToVideoProvider || null,
+          characterId: editCharacterId || null,
+          frequency: editFrequency,
+          postTime: editPostTimes.join(","),
+          timezone: editTimezone,
+        }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const json = await res.json();
+      setAuto((prev) => prev ? { ...prev, ...json.data } : prev);
+      setEditing(false);
+      setSaveMsg("Saved");
+      setTimeout(() => setSaveMsg(""), 2000);
+    } catch {
+      setSaveMsg("Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleEnabled(enabled: boolean) {
+    if (!auto) return;
+    setAuto({ ...auto, enabled });
+    try {
+      await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+    } catch {
+      setAuto({ ...auto, enabled: !enabled });
+    }
+  }
+
+  async function toggleAiTags(checked: boolean) {
+    if (!auto) return;
+    setAuto({ ...auto, includeAiTags: checked });
+    try {
+      await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeAiTags: checked }),
+      });
+    } catch {
+      setAuto({ ...auto, includeAiTags: !checked });
+    }
+  }
+
+  async function togglePlatform(platform: string, checked: boolean) {
+    if (!auto) return;
+    const newPlatforms = checked
+      ? [...auto.targetPlatforms, platform]
+      : auto.targetPlatforms.filter((p) => p !== platform);
+    setAuto({ ...auto, targetPlatforms: newPlatforms });
+    try {
+      await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetPlatforms: newPlatforms }),
+      });
+    } catch {
+      setAuto({ ...auto });
+    }
+  }
+
+  async function handleDelete() {
+    try {
+      const res = await fetch(`/api/automations/${id}`, { method: "DELETE" });
+      if (res.ok) router.push("/dashboard/automations");
+    } catch { /* ignore */ }
+  }
+
+  const [triggerMsg, setTriggerMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function handleTrigger() {
+    setTriggering(true);
+    setTriggerMsg(null);
+    try {
+      const res = await fetch(`/api/automations/${id}/trigger`, { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTriggerMsg({ ok: false, text: json.error || `HTTP ${res.status}` });
+        setTimeout(() => setTriggerMsg(null), 8000);
+        return;
+      }
+      setTriggerMsg({ ok: true, text: "Video queued successfully" });
+      setTimeout(() => setTriggerMsg(null), 5000);
+      fetchData();
+      if (json.data?.videoId) router.push(`/dashboard/videos/${json.data.videoId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setTriggerMsg({ ok: false, text: msg });
+      setTimeout(() => setTriggerMsg(null), 8000);
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  async function handleRetryVideo(videoId: string) {
+    setRetryingVideoId(videoId);
+    setTriggerMsg(null);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        setTriggerMsg({ ok: false, text: json.error || `Retry failed (HTTP ${res.status})` });
+        setTimeout(() => setTriggerMsg(null), 8000);
+        return;
+      }
+      setTriggerMsg({ ok: true, text: "Retry queued" });
+      setTimeout(() => setTriggerMsg(null), 5000);
+      fetchData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setTriggerMsg({ ok: false, text: `Retry failed: ${msg}` });
+      setTimeout(() => setTriggerMsg(null), 8000);
+    } finally {
+      setRetryingVideoId(null);
+    }
+  }
+
+  async function handleResetProviders() {
+    setResettingProviders(true);
+    try {
+      const res = await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          llmProvider: null,
+          ttsProvider: null,
+          imageProvider: null,
+          imageToVideoProvider: null,
+        }),
+      });
+      if (res.ok) {
+        setAuto((prev) => prev ? {
+          ...prev,
+          llmProvider: null,
+          ttsProvider: null,
+          imageProvider: null,
+          imageToVideoProvider: null,
+        } : prev);
+      }
+    } catch { /* ignore */ }
+    setResettingProviders(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!auto) {
+    return (
+      <div className="text-center py-20">
+        <p className="text-muted-foreground">Automation not found.</p>
+        <Button variant="link" asChild className="mt-2">
+          <Link href="/dashboard/automations">Back to Automations</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  const videos = auto.series?.videos ?? [];
+  const currentVoice = auto.voiceId ? getVoiceById(auto.voiceId) : null;
+  const displayTts = auto.ttsProvider
+    || providerData?.defaults.ttsProvider
+    || providerData?.platformDefaults.tts
+    || "GEMINI_TTS";
+
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-2">
+        <Button variant="ghost" size="sm" asChild>
+          <Link href="/dashboard/automations">
+            <ArrowLeft className="h-4 w-4 mr-1" /> Automations
+          </Link>
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between mb-8 gap-4">
+        <div className="flex items-center gap-4 min-w-0 flex-1">
+          <h1 className="text-3xl font-bold truncate min-w-0">{auto.name}</h1>
+          <Switch checked={auto.enabled} onCheckedChange={toggleEnabled} />
+          <Badge variant={auto.enabled ? "default" : "secondary"}>
+            {auto.enabled ? "Active" : "Paused"}
+          </Badge>
+          {saveMsg && (
+            <span className={`text-sm ${saveMsg === "Saved" ? "text-green-600" : "text-destructive"}`}>
+              {saveMsg}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={handleTrigger}
+            disabled={triggering || editing}
+          >
+            {triggering ? (
+              <><Loader2 className="mr-1 h-4 w-4 animate-spin" /> Generating...</>
+            ) : (
+              <><Zap className="mr-1 h-4 w-4" /> Run Now</>
+            )}
+          </Button>
+          {!editing ? (
+            <Button variant="outline" size="sm" onClick={startEdit}>
+              <Pencil className="mr-1 h-4 w-4" /> Edit
+            </Button>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+                <X className="mr-1 h-4 w-4" /> Cancel
+              </Button>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}
+                Save
+              </Button>
+            </>
+          )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" size="sm" className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                <Trash2 className="mr-1 h-4 w-4" /> Delete
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete automation?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete &quot;{auto.name}&quot; and all its generated videos.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete} className="bg-destructive text-white hover:bg-destructive/90">
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </div>
+
+      {triggerMsg && (
+        <div className={`mb-4 rounded-lg border p-3 text-sm flex items-center gap-2 ${
+          triggerMsg.ok
+            ? "border-green-200 bg-green-50 text-green-800"
+            : "border-red-200 bg-red-50 text-red-800"
+        }`}>
+          {triggerMsg.ok
+            ? <CheckCircle2 className="h-4 w-4 shrink-0" />
+            : <AlertCircle className="h-4 w-4 shrink-0" />
+          }
+          <span className="truncate min-w-0" title={triggerMsg.text}>{triggerMsg.text}</span>
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 mb-8">
+        {/* Content Configuration */}
+        <Card>
+          <CardContent className="p-5 space-y-4">
+            <h3 className="font-semibold text-sm">Content Configuration</h3>
+            {editing ? (
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-xs mb-1 block">Name</Label>
+                  <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-8 text-sm" />
+                </div>
+
+                {/* Video Style toggle */}
+                <div>
+                  <Label className="text-xs mb-1.5 block">Video Style</Label>
+                  <div className="grid grid-cols-2 gap-2 max-w-xs">
+                    <button
+                      type="button"
+                      onClick={() => { setEditCharacterId(""); }}
+                      className={`flex items-center gap-1.5 rounded-lg border-2 p-2 transition-all text-xs ${
+                        !editCharacterId
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                          : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <EyeOff className={`h-3.5 w-3.5 ${!editCharacterId ? "text-primary" : "text-muted-foreground"}`} />
+                      <span className="font-medium">Faceless</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!editCharacterId && characters.length > 0) setEditCharacterId(characters[0].id);
+                      }}
+                      className={`flex items-center gap-1.5 rounded-lg border-2 p-2 transition-all text-xs ${
+                        editCharacterId
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                          : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${editCharacterId ? "text-primary" : "text-muted-foreground"}`} />
+                      <span className="font-medium">Star Mode</span>
+                    </button>
+                  </div>
+                  {editCharacterId && (
+                    <div className="mt-2 rounded-lg border bg-muted/20 p-2 max-w-xs space-y-1.5">
+                      {characters.length > 0 ? (
+                        characters.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setEditCharacterId(c.id)}
+                            className={`w-full flex items-center gap-2 rounded-md border p-1.5 text-left transition-all text-xs ${
+                              editCharacterId === c.id
+                                ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                                : "hover:border-primary/40"
+                            }`}
+                          >
+                            <div className="w-7 h-7 rounded overflow-hidden bg-muted/40 shrink-0 flex items-center justify-center">
+                              {c.previewUrl ? (
+                                <img src={c.previewUrl} alt={c.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <Star className="h-3 w-3 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="font-medium">{c.name}</span>
+                              <p className="text-[10px] text-muted-foreground truncate">{c.fullPrompt}</p>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">No characters yet.</p>
+                      )}
+                      <Button variant="outline" size="xs" asChild>
+                        <Link href="/dashboard/characters/new">
+                          <Plus className="mr-1 h-2.5 w-2.5" /> New Character
+                        </Link>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <Label className="text-xs mb-1 block">Niche</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {NICHES.map((n) => (
+                      <Button key={n.id} size="xs" variant={editNiche === n.id ? "default" : "outline"} onClick={() => setEditNiche(n.id)}>
+                        {n.icon} {n.name}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Art Style</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ART_STYLES.map((s) => (
+                      <Button key={s.id} size="xs" variant={editArtStyle === s.id ? "default" : "outline"} onClick={() => setEditArtStyle(s.id)}>
+                        {s.name}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs mb-1 block">Tone</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {["dramatic", "casual", "funny", "educational"].map((t) => (
+                        <Button key={t} size="xs" variant={editTone === t ? "default" : "outline"} onClick={() => setEditTone(t)} className="capitalize">{t}</Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Duration</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(() => {
+                        const { min, max } = getDurationRangeForNiche(editNiche || auto?.niche || "");
+                        const presets = max > 120 ? [30, 60, 90, 120, 180, 300, 600] : [15, 30, 45, 60, 90, 120];
+                        let options = presets.filter((d) => d >= min && d <= max);
+                        if (editDuration >= min && editDuration <= max && !options.includes(editDuration)) options = [...options, editDuration].sort((a, b) => a - b);
+                        if (options.length === 0) options.push(Math.max(min, 30));
+                        return options.map((d) => (
+                          <Button key={d} size="xs" variant={editDuration === d ? "default" : "outline"} onClick={() => setEditDuration(d)}>{d}s</Button>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Language</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {LANGUAGES.map((l) => (
+                        <Button key={l.id} size="xs" variant={editLanguage === l.id ? "default" : "outline"} onClick={() => setEditLanguage(l.id)}>
+                          {l.flag} {l.name}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Voice selection */}
+                <div>
+                  <Label className="text-xs mb-1.5 flex items-center gap-1">
+                    <Mic className="h-3 w-3" /> Voice
+                  </Label>
+                  <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto rounded-md border p-2">
+                    {voices.map((v) => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => setEditVoiceId(v.id)}
+                        className={`rounded-md border p-2 text-left transition-all text-xs ${
+                          editVoiceId === v.id
+                            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                            : "hover:border-primary/40"
+                        }`}
+                      >
+                        <span className="font-medium">{v.name}</span>
+                        <span className="text-[10px] text-muted-foreground ml-1">({v.gender})</span>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-1">{v.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Provider overrides */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProviders(!showProviders)}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <ChevronDown className={`h-3 w-3 transition-transform ${showProviders ? "rotate-180" : ""}`} />
+                    AI Provider Overrides
+                  </button>
+                  {showProviders && providerData && (() => {
+                    const resolvedLlm = editLlmProvider || providerData.defaults.llmProvider || providerData.platformDefaults.llm;
+                    const resolvedTts = editTtsProvider || providerData.defaults.ttsProvider || providerData.platformDefaults.tts;
+                    const resolvedImage = editImageProvider || providerData.defaults.imageProvider || providerData.platformDefaults.image;
+                    return (
+                      <div className="mt-2 space-y-2 rounded-md border p-3">
+                        <div>
+                          <Label className="text-[10px] mb-0.5 block text-muted-foreground">Script (LLM)</Label>
+                          <div className="flex flex-wrap gap-1">
+                            {providerData.available.llm.map((p) => (
+                              <Button key={p.id} size="xs" variant={resolvedLlm === p.id ? "default" : "outline"} onClick={() => setEditLlmProvider(resolvedLlm === p.id ? "" : p.id)}>
+                                {p.name}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] mb-0.5 block text-muted-foreground">Voice (TTS)</Label>
+                          <div className="flex flex-wrap gap-1">
+                            {providerData.available.tts.map((p) => (
+                              <Button key={p.id} size="xs" variant={resolvedTts === p.id ? "default" : "outline"} onClick={() => setEditTtsProvider(resolvedTts === p.id ? "" : p.id)}>
+                                {p.name}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] mb-0.5 block text-muted-foreground">Images</Label>
+                          <div className="flex flex-wrap gap-1">
+                            {providerData.available.image.map((p) => (
+                              <Button key={p.id} size="xs" variant={resolvedImage === p.id ? "default" : "outline"} onClick={() => setEditImageProvider(resolvedImage === p.id ? "" : p.id)}>
+                                {p.name}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                        {providerData.imageToVideo && (
+                          <div>
+                            <Label className="text-[10px] mb-0.5 block text-muted-foreground">Final video from</Label>
+                            <p className="text-[10px] text-muted-foreground mb-1">Static images only: stitch scene images into the final video (Ken Burns). Or use AI image-to-video: each scene becomes a short clip, then clips are stitched with voiceover.</p>
+                            <div className="flex flex-wrap gap-1">
+                              {providerData.imageToVideo.all.map((p) => {
+                                const available = p.id === "" || (providerData.imageToVideo?.availableIds ?? []).includes(p.id);
+                                const resolved = editImageToVideoProvider || (providerData.defaults.imageToVideoProvider ?? "");
+                                const selected = resolved === p.id;
+                                return (
+                                  <Button
+                                    key={p.id}
+                                    size="xs"
+                                    variant={selected ? "default" : "outline"}
+                                    disabled={!available}
+                                    onClick={() => setEditImageToVideoProvider(selected ? "" : p.id)}
+                                    title={p.description}
+                                  >
+                                    {p.name}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-muted-foreground text-xs">Niche</span>
+                  <p className="capitalize">{NICHES.find((n) => n.id === auto.niche)?.name ?? auto.niche}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Art Style</span>
+                  <p className="capitalize">{ART_STYLES.find((s) => s.id === auto.artStyle)?.name ?? auto.artStyle.replace(/-/g, " ")}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Tone</span>
+                  <p className="capitalize">{auto.tone}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Duration</span>
+                  <p>{auto.duration}s</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Language</span>
+                  <p>{LANGUAGES.find((l) => l.id === auto.language)?.name ?? auto.language.toUpperCase()}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Voice</span>
+                  <p className="flex items-center gap-1">
+                    <Mic className="h-3 w-3 text-muted-foreground" />
+                    {currentVoice ? (
+                      <>{currentVoice.name} <span className="text-muted-foreground text-xs">({currentVoice.gender})</span></>
+                    ) : (
+                      <span className="text-muted-foreground">Default</span>
+                    )}
+                  </p>
+                </div>
+                <div className="col-span-2">
+                  <Separator className="my-1" />
+                  <span className="text-muted-foreground text-xs">Video Style</span>
+                  {auto.characterId ? (() => {
+                    const char = characters.find((c) => c.id === auto.characterId);
+                    return (
+                      <div className="flex items-center gap-3 mt-1">
+                        {char?.previewUrl ? (
+                          <img src={char.previewUrl} alt={char.name} className="w-10 h-10 rounded-md object-cover shrink-0" />
+                        ) : (
+                          <Star className="h-3.5 w-3.5 text-primary shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium">Star Mode</span>
+                            {char && <Badge variant="secondary" className="text-[10px]">{char.name}</Badge>}
+                          </div>
+                          {char && <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{char.fullPrompt}</p>}
+                        </div>
+                      </div>
+                    );
+                  })() : (
+                    <div className="flex items-center gap-2 mt-1">
+                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium">Faceless</span>
+                    </div>
+                  )}
+                </div>
+                {(auto.llmProvider || auto.ttsProvider || auto.imageProvider || auto.imageToVideoProvider) && (
+                  <>
+                    <div className="col-span-2">
+                      <Separator className="my-1" />
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground text-xs">Provider Overrides</span>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-destructive"
+                          onClick={handleResetProviders}
+                          disabled={resettingProviders}
+                        >
+                          {resettingProviders ? <Loader2 className="h-3 w-3 animate-spin" /> : <><X className="mr-0.5 h-3 w-3" /> Reset</>}
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-1">
+                        {auto.llmProvider && (
+                          <Badge variant="secondary" className="text-[10px]">Script: {formatProvider(auto.llmProvider)}</Badge>
+                        )}
+                        {auto.ttsProvider && (
+                          <Badge variant="secondary" className="text-[10px]">TTS: {formatProvider(auto.ttsProvider)}</Badge>
+                        )}
+                        {auto.imageProvider && (
+                          <Badge variant="secondary" className="text-[10px]">Image: {formatProvider(auto.imageProvider)}</Badge>
+                        )}
+                        {auto.imageToVideoProvider && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Video: Image-to-Video ({formatProvider(auto.imageToVideoProvider)})
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Niche Score Card & suggestions */}
+        {nicheScoreCard && (
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Star className="h-4 w-4 text-amber-500" />
+                <h3 className="font-semibold text-sm">Niche Score</h3>
+              </div>
+              <div className="rounded-md border p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground">Current potential</p>
+                <p className="text-2xl font-bold">{Number.isFinite(nicheScoreCard.currentScore) ? `${nicheScoreCard.currentScore}%` : "—"}</p>
+              </div>
+
+              {bestForNiche && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Best for this niche</p>
+                  <ul className="space-y-1.5 text-sm">
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Story model</span>
+                      <span className="font-medium">{bestForNiche.storyModel}</span>
+                    </li>
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Recommended art</span>
+                      <span className="font-medium capitalize">{bestForNiche.recommendedArt}</span>
+                    </li>
+                    <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">Recommended tone</span>
+                      <span className="font-medium capitalize">{bestForNiche.recommendedTone}</span>
+                    </li>
+                    {bestForNiche.recommendedTime && (
+                      <li className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5">
+                        <span className="text-muted-foreground">Best post time</span>
+                        <span className="font-medium">{bestForNiche.recommendedTime}</span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Improve score</p>
+                {nicheScoreCard.suggestions.length === 0 ? (
+                  <p className="text-sm font-medium text-green-700 dark:text-green-400 py-2 px-3 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
+                    All Good
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {nicheScoreCard.suggestions.map((s, i) => (
+                      <li key={i} className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                        <span className="text-muted-foreground">{s.label}</span>
+                        <span className="font-semibold tabular-nums text-green-600 dark:text-green-400">
+                          {Number.isFinite(nicheScoreCard.currentScore) ? `${nicheScoreCard.currentScore}%` : "—"} → {Number.isFinite(s.newScore) ? `${s.newScore}%` : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Schedule & Channels */}
+        <Card>
+          <CardContent className="p-5 space-y-4">
+            <h3 className="font-semibold text-sm">Schedule</h3>
+            {editing ? (
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-xs mb-1 block">Frequency</Label>
+                  <div className="flex gap-1.5">
+                    {FREQUENCIES.map((f) => (
+                      <Button key={f.value} size="xs" variant={editFrequency === f.value ? "default" : "outline"} onClick={() => setEditFrequency(f.value)}>
+                        {f.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Timezone</Label>
+                  <select value={editTimezone} onChange={(e) => setEditTimezone(e.target.value)}
+                    className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm">
+                    {COMMON_TIMEZONES.map((tz) => (
+                      <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Post Times</Label>
+                  <div className="space-y-1.5">
+                    {editPostTimes.map((t, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <input
+                          type="time"
+                          value={t}
+                          onChange={(e) => {
+                            const next = [...editPostTimes];
+                            next[i] = e.target.value;
+                            setEditPostTimes(next);
+                          }}
+                          className="flex h-8 w-32 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        />
+                        {editPostTimes.length > 1 && (
+                          <Button size="icon-xs" variant="ghost" className="text-muted-foreground hover:text-red-600"
+                            onClick={() => setEditPostTimes(editPostTimes.filter((_, j) => j !== i))}>
+                            <XCircle className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    <Button type="button" size="xs" variant="outline" className="gap-1"
+                      onClick={() => setEditPostTimes([...editPostTimes, "12:00"])}>
+                      <Plus className="h-3 w-3" /> Add time
+                    </Button>
+                    {editPostTimes.length > 1 && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {editPostTimes.length} videos per {editFrequency === "daily" ? "day" : editFrequency === "every_other_day" ? "cycle" : "week"}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {suggestedSchedule && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Best times for {NICHES.find((n) => n.id === editNiche)?.name ?? "this niche"}
+                    </div>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {suggestedSchedule.reason}
+                    </p>
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Globe className="h-3 w-3" />
+                      Audience: {suggestedSchedule.viewerRegion}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestedSchedule.localSlots.map((slot, i) => {
+                        const isActive = editPostTimes.includes(slot.localTime);
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              if (isActive) {
+                                if (editPostTimes.length > 1) setEditPostTimes(editPostTimes.filter((t) => t !== slot.localTime));
+                              } else {
+                                setEditPostTimes([...editPostTimes, slot.localTime].sort());
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium transition-colors ${
+                              isActive
+                                ? "border-amber-500 bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200"
+                                : "border-amber-200 bg-white text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                            }`}
+                          >
+                            <Clock className="h-2.5 w-2.5" />
+                            {slot.localTime}
+                            <span className="text-amber-600 dark:text-amber-500">· {slot.label}</span>
+                            {i === 0 && <Badge variant="outline" className="ml-0.5 text-[9px] py-0 px-1 border-amber-400 text-amber-700 dark:text-amber-400">Best</Badge>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Click to add/remove.
+                      {editTimezone !== suggestedSchedule.viewerTimezone && (
+                        <> · Converted from {suggestedSchedule.viewerTimezone.replace(/_/g, " ")} to {editTimezone.replace(/_/g, " ")}</>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-sm space-y-2">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <span>
+                    {FREQ_LABEL[auto.frequency] ?? auto.frequency} at{" "}
+                    {auto.postTime.split(",").map((t: string) => t.trim()).sort().join(", ")}{" "}
+                    <span className="text-muted-foreground">({auto.timezone.replace(/_/g, " ")})</span>
+                    {auto.postTime.includes(",") && (
+                      <span className="text-xs text-muted-foreground ml-1">
+                        · {auto.postTime.split(",").length} videos/{auto.frequency === "daily" ? "day" : auto.frequency === "every_other_day" ? "cycle" : "week"}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {(() => {
+                  const missed = auto.enabled && isScheduleMissed(auto);
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="text-xs text-muted-foreground">
+                        Last run: {auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : "Never"}
+                      </div>
+                      {missed && (
+                        <div className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                          <span className="text-xs text-amber-700 flex-1">
+                            Scheduled run may have been missed
+                          </span>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="border-amber-300 text-amber-700 hover:bg-amber-100"
+                            disabled={triggering}
+                            onClick={handleTrigger}
+                          >
+                            {triggering ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Zap className="mr-1 h-3 w-3" /> Run Now</>}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {suggestedSchedule && (() => {
+                  const currentTimes = new Set(auto.postTime.split(",").map((t: string) => t.trim()));
+                  const missing = suggestedSchedule.localSlots.filter((s) => !currentTimes.has(s.localTime));
+                  if (missing.length === 0) return null;
+                  return (
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                      <Sparkles className="h-3 w-3 shrink-0" />
+                      <span>
+                        Suggested: <strong>{missing.map((s) => s.localTime).join(", ")}</strong>
+                        {auto.timezone !== suggestedSchedule.viewerTimezone && (
+                          <span className="text-muted-foreground"> — based on {suggestedSchedule.viewerRegion} viewers</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            <Separator />
+
+            <h3 className="font-semibold text-sm">Post To</h3>
+            {accounts.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
+                <p>No social accounts connected.</p>
+                <Button variant="link" size="sm" asChild className="mt-1 h-auto p-0">
+                  <Link href="/dashboard/channels">Connect Accounts</Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {(["INSTAGRAM", "YOUTUBE", "FACEBOOK", "SHARECHAT", "MOJ"] as const).map((platform) => {
+                  const cfg = PLATFORM_CONFIG[platform];
+                  const Icon = cfg.icon;
+                  const connected = accounts.filter((a) => a.platform === platform);
+                  if (connected.length === 0) return null;
+                  const isSelected = auto.targetPlatforms.includes(platform);
+                  return (
+                    <div key={platform} className="flex items-center justify-between rounded-lg border p-2.5">
+                      <div className="flex items-center gap-2">
+                        <Icon className={`h-4 w-4 ${cfg.color}`} />
+                        <div>
+                          <span className="text-xs font-medium">{cfg.label}</span>
+                          <p className="text-[10px] text-muted-foreground">
+                            {connected.map((a) => a.username ?? a.pageName).join(", ")}
+                          </p>
+                        </div>
+                      </div>
+                      <Switch checked={isSelected} onCheckedChange={(v) => togglePlatform(platform, v)} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <Separator />
+
+            <h3 className="font-semibold text-sm">Tags</h3>
+            <div className="flex items-center justify-between rounded-lg border p-2.5">
+              <div>
+                <span className="text-xs font-medium">Include AI Tags</span>
+                <p className="text-[10px] text-muted-foreground">
+                  &quot;ai generated&quot;, &quot;Made with AI | NarrateAI&quot; in tags &amp; description
+                </p>
+              </div>
+              <Switch checked={auto.includeAiTags} onCheckedChange={toggleAiTags} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Separator className="mb-6" />
+
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <Film className="h-5 w-5" /> Generated Videos ({videos.length})
+        </h2>
+      </div>
+
+      {videos.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center py-16 text-muted-foreground">
+            <Play className="h-12 w-12 mb-4" />
+            <p className="text-lg font-medium">No videos yet</p>
+            <p className="text-sm mt-1">Videos will appear here once the scheduler runs.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {videos.map((video) => {
+            const config = statusConfig[video.status] ?? statusConfig.QUEUED;
+            const Icon = config.icon;
+            return (
+              <Card key={video.id} className="transition-colors hover:border-primary/50">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-4">
+                    <Link href={`/dashboard/videos/${video.id}`} className="flex-1 min-w-0">
+                      <h3 className="font-medium">{video.title || "Untitled Video"}</h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(video.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                        {(video.status === "READY" || video.status === "POSTED") && (() => {
+                          const ms = new Date(video.updatedAt).getTime() - new Date(video.createdAt).getTime();
+                          if (ms <= 0) return null;
+                          const secs = Math.round(ms / 1000);
+                          const m = Math.floor(secs / 60);
+                          const s = secs % 60;
+                          return <span className="ml-1 text-muted-foreground/70">· built in {m > 0 ? `${m}m ${s}s` : `${s}s`}</span>;
+                        })()}
+                        {video.duration ? <span className="ml-1 text-muted-foreground/70">· {video.duration}s video</span> : ""}
+                      </p>
+                    </Link>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {(video.status === "READY" || video.status === "POSTED") && (() => {
+                        const raw = video.postedPlatforms ?? [];
+                        const plats = raw.map((p) => typeof p === "string" ? p : p.platform);
+                        if (!plats.length) return null;
+                        return (
+                          <div className="flex items-center gap-1">
+                            {plats.includes("YOUTUBE") && <Youtube className="h-3.5 w-3.5 text-red-600" />}
+                            {plats.includes("INSTAGRAM") && <Instagram className="h-3.5 w-3.5 text-pink-600" />}
+                            {plats.includes("FACEBOOK") && <Facebook className="h-3.5 w-3.5 text-blue-600" />}
+                            {plats.includes("SHARECHAT") && <Share2 className="h-3.5 w-3.5 text-orange-600" />}
+                            {plats.includes("MOJ") && <Smartphone className="h-3.5 w-3.5 text-amber-600" />}
+                          </div>
+                        );
+                      })()}
+                      <div className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${config.className}`}>
+                        <Icon key={video.status} className={`h-3 w-3 ${video.status === "GENERATING" ? "animate-spin" : ""}`} />
+                        {config.label}
+                        {video.status === "GENERATING" && video.generationStage && (
+                          <span className="lowercase">({video.generationStage})</span>
+                        )}
+                      </div>
+                      {video.status === "FAILED" && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className="border-red-300 text-red-600 hover:bg-red-50"
+                          disabled={retryingVideoId === video.id}
+                          onClick={(e) => { e.preventDefault(); handleRetryVideo(video.id); }}
+                        >
+                          {retryingVideoId === video.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <><Zap className="mr-1 h-3 w-3" /> Retry</>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {(video.status === "READY" || video.status === "POSTED") && (() => {
+                    const insights = video.insights && typeof video.insights === "object" ? video.insights : null;
+                    const platformKeys = ["YOUTUBE", "INSTAGRAM", "FACEBOOK"];
+                    let views = 0, interactions = 0;
+                    if (insights) {
+                      for (const key of platformKeys) {
+                        const p = (insights as Record<string, unknown>)[key];
+                        if (p && typeof p === "object" && !Array.isArray(p)) {
+                          const o = p as { views?: number; likes?: number; comments?: number; reactions?: number };
+                          views += Number(o.views) || 0;
+                          interactions += (Number(o.likes) || 0) + (Number(o.comments) || 0) + (Number(o.reactions) || 0);
+                        }
+                      }
+                    }
+                    const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n));
+                    return (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground pt-1 border-t border-border/60">
+                        <BarChart2 className="h-3 w-3 shrink-0" />
+                        <span className="flex items-center gap-1"><Eye className="h-3 w-3" /> {fmt(views)} views</span>
+                        <span className="flex items-center gap-1"><Heart className="h-3 w-3" /> {fmt(interactions)} interactions</span>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

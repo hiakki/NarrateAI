@@ -1,0 +1,60 @@
+// npm i @google/genai
+// Set env: export GOOGLE_API_KEY="your_api_key"
+
+import { GoogleGenAI } from "@google/genai";
+import fs from "node:fs";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+
+async function generateImage() {
+  const prompt = "A tiny astronaut riding a banana in space, cinematic lighting";
+  const modelCandidates = [
+    "gemini-2.0-flash-exp-image-generation"
+  ];
+
+  let res = null;
+  let lastErr = null;
+
+  for (const model of modelCandidates) {
+    try {
+      res = await ai.models.generateContent({
+        model,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: ["TEXT", "IMAGE"],
+        },
+      });
+      console.log(`Used model: ${model}`);
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (err?.status !== 404) throw err;
+    }
+  }
+
+  if (!res) {
+    throw new Error(
+      `No supported image model found for this API key/project. Last error: ${lastErr?.message ?? "unknown error"}`
+    );
+  }
+
+  let saved = false;
+
+  for (const part of res.candidates?.[0]?.content?.parts ?? []) {
+    if (part.inlineData?.data && part.inlineData?.mimeType?.startsWith("image/")) {
+      const buffer = Buffer.from(part.inlineData.data, "base64");
+      fs.writeFileSync("generated.png", buffer);
+      saved = true;
+      console.log("Image saved as generated.png");
+    }
+    if (part.text) {
+      console.log("Model text:", part.text);
+    }
+  }
+
+  if (!saved) {
+    console.log("No image returned. Try a more visual prompt or check model access.");
+  }
+}
+
+generateImage().catch(console.error);
