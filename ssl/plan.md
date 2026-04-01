@@ -16,11 +16,10 @@ Use the helper script to obtain publicly trusted certs once your DNS points to t
 
 ```bash
 cd contrib/NarrateAI/ssl
-sudo ./scripts/issue-letsencrypt.sh --email you@example.com
+sudo ./scripts/setup-local.sh --production --email you@example.com
 ```
 
-The script installs certbot (if missing), safely stops anything bound to port 80 (nginx, other proxies) so the HTTP challenge can run, requests a certificate for
-`app.narrateai.online`, `chat.narrateai.online`, `narrateai.online`, and `www.narrateai.online`, and reports where the files are stored (`/etc/letsencrypt/live/<name>/`). Update `nginx.conf` to reference those paths and reload nginx. Run `sudo certbot renew --dry-run` to verify renewal. A cron/systemd timer is usually installed with certbot to automate renewal.
+This wrapper runs `issue-letsencrypt.sh`, copies the resulting `/etc/letsencrypt/live/<name>/` files into `certs/`, refreshes `nginx.conf`, and restarts nginx on ports 80/443. Run `sudo certbot renew --dry-run` periodically to verify renewal (the systemd timer installed with certbot usually handles automatic renewals).
 
 ---
 

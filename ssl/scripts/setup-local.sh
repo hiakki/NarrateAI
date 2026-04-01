@@ -6,8 +6,38 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 HOSTS_LINE="127.0.0.1 app.narrateai.online chat.narrateai.online"
+USE_PRODUCTION=false
+LE_EMAIL=""
+LE_CERT_NAME="narrateai-online"
+LE_HELPER_SCRIPT="$ROOT/scripts/issue-letsencrypt.sh"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --production)
+        USE_PRODUCTION=true; shift ;;
+      --email)
+        LE_EMAIL="${2:-}"; shift 2 ;;
+      --help|-h)
+        cat <<'USAGE'
+Usage: ./scripts/setup-local.sh [--production] [--email you@example.com]
+
+Options:
+  --production           Obtain Let's Encrypt certificates (requires DNS + public access)
+  --email <address>      Email used for Let's Encrypt registration (required with --production)
+  --help                 Show this message
+
+Without --production, mkcert/self-signed certificates are generated for local development.
+USAGE
+        exit 0 ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1 ;;
+    esac
+  done
+}
 
 install_nginx() {
   if have nginx; then
@@ -70,6 +100,45 @@ ensure_mkcert_ca() {
   fi
 }
 
+obtain_production_certs() {
+  if [[ ! -x "$LE_HELPER_SCRIPT" ]]; then
+    echo "Let's Encrypt helper not found: $LE_HELPER_SCRIPT" >&2
+    exit 1
+  fi
+
+  if [[ -z "$LE_EMAIL" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Enter email for Let's Encrypt notifications: " LE_EMAIL || true
+    fi
+  fi
+
+  if [[ -z "$LE_EMAIL" ]]; then
+    echo "Email is required when using --production" >&2
+    exit 1
+  fi
+
+  echo "==> Let's Encrypt (production certificates)"
+  sudo "$LE_HELPER_SCRIPT" --email "$LE_EMAIL"
+
+  # Helper restarts nginx; stop it again so we can launch with this config
+  stop_existing_nginx
+
+  local live_dir="/etc/letsencrypt/live/$LE_CERT_NAME"
+  local fullchain="$live_dir/fullchain.pem"
+  local privkey="$live_dir/privkey.pem"
+
+  if [[ ! -f "$fullchain" || ! -f "$privkey" ]]; then
+    echo "Expected cert files not found in $live_dir" >&2
+    exit 1
+  fi
+
+  sudo cp "$fullchain" "$CERT_DIR/narrateai.pem"
+  sudo cp "$privkey" "$CERT_DIR/narrateai-key.pem"
+  sudo chmod 644 "$CERT_DIR/narrateai.pem"
+  sudo chmod 600 "$CERT_DIR/narrateai-key.pem"
+  echo "Copied Let's Encrypt certs into $CERT_DIR"
+}
+
 ensure_nginx_prefix_dirs() {
   # Writable dirs under -p prefix for proxy/body buffers
   mkdir -p \
@@ -98,6 +167,9 @@ stop_existing_nginx() {
 }
 
 maybe_add_hosts() {
+  if $USE_PRODUCTION; then
+    return 0
+  fi
   if grep -q 'app\.narrateai\.online' /etc/hosts 2>/dev/null; then
     echo "/etc/hosts already maps app.narrateai.online"
     return 0
@@ -123,18 +195,33 @@ maybe_add_hosts() {
 }
 
 main() {
+  parse_args "$@"
   echo "==> contrib/nginx setup (root: $ROOT)"
+  if $USE_PRODUCTION; then
+    echo "Mode: production (Let's Encrypt)"
+  else
+    echo "Mode: local development (mkcert/self-signed)"
+  fi
+
   stop_existing_nginx
   install_nginx
-  install_mkcert_optional
-  ensure_mkcert_ca
   ensure_nginx_prefix_dirs
-  echo "==> TLS certificates"
-  "$ROOT/scripts/gen-local-ssl.sh"
+
+  if $USE_PRODUCTION; then
+    obtain_production_certs
+  else
+    install_mkcert_optional
+    ensure_mkcert_ca
+    echo "==> TLS certificates (local)"
+    "$ROOT/scripts/gen-local-ssl.sh"
+  fi
+
   echo "==> /etc/hosts"
   maybe_add_hosts
+
   echo "==> nginx config test"
   nginx -t -p "$ROOT" -c "$ROOT/nginx.conf"
+
   echo "==> restarting nginx with local config"
   if sudo nginx -p "$ROOT" -c "$ROOT/nginx.conf" -s quit 2>/dev/null; then
     sleep 1
@@ -143,8 +230,15 @@ main() {
     echo "Failed to start nginx. Check if ports 80/443 are in use." >&2
     exit 1
   }
+
   echo ""
   echo "Setup complete. nginx now runs in the background (daemon mode) on ports 80/443."
+  if $USE_PRODUCTION; then
+    echo "Certificates sourced from Let's Encrypt (copied into $CERT_DIR)."
+    echo "Remember: renewals must copy updated certs or rerun this script after certbot renews."
+  else
+    echo "Certificates sourced from mkcert/self-signed under $CERT_DIR."
+  fi
   echo "Stop:    sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -s quit"
   echo "Debug:   sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -g 'daemon off;'"
   echo "Ensure backends are running: app :3000, chat :5173"
