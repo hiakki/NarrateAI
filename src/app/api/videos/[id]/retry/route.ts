@@ -6,7 +6,7 @@ import { getArtStyleById } from "@/config/art-styles";
 import { getNicheById } from "@/config/niches";
 import { getDefaultVoiceId } from "@/config/voices";
 import { generateScript } from "@/services/script-generator";
-import { enqueueVideoGeneration } from "@/services/queue";
+import { enqueueClipRepurpose, enqueueVideoGeneration } from "@/services/queue";
 import { resolveProviders } from "@/services/providers/resolve";
 import { createLogger, runWithVideoIdAsync } from "@/lib/logger";
 
@@ -31,7 +31,7 @@ export async function POST(
             user: {
               select: { defaultLlmProvider: true, defaultTtsProvider: true, defaultImageProvider: true, defaultImageToVideoProvider: true },
             },
-            automation: { select: { id: true, name: true, characterId: true } },
+            automation: { select: { id: true, name: true, characterId: true, automationType: true, clipConfig: true, targetPlatforms: true, enableBgm: true, enableHflip: true } },
             character: { select: { fullPrompt: true } },
           },
         },
@@ -53,6 +53,42 @@ export async function POST(
     const artStyle = getArtStyleById(video.series.artStyle);
     const niche = getNicheById(video.series.niche);
     const resolved = resolveProviders(video.series, video.series.user);
+    const isClipRepurpose = video.series.automation?.automationType === "clip-repurpose" || !!video.sourceUrl;
+
+    if (isClipRepurpose) {
+      // Keep clip-repurpose videos in the clip pipeline on retry.
+      await db.video.update({
+        where: { id },
+        data: {
+          status: "QUEUED",
+          generationStage: null,
+          errorMessage: null,
+        },
+      });
+
+      await enqueueClipRepurpose({
+        videoId: video.id,
+        seriesId: video.seriesId,
+        userId: session.user.id,
+        userName: session.user.name ?? session.user.email?.split("@")[0] ?? "user",
+        automationId: video.series.automation?.id,
+        automationName: video.series.automation?.name,
+        niche: video.series.niche,
+        language: video.series.language ?? "en",
+        tone: video.series.tone ?? "dramatic",
+        clipConfig: {
+          clipNiche: (video.series.automation?.clipConfig as { clipNiche?: string } | null)?.clipNiche ?? "auto",
+          clipDurationSec: (video.series.automation?.clipConfig as { clipDurationSec?: number } | null)?.clipDurationSec ?? video.targetDuration ?? video.duration ?? 45,
+          cropMode: (video.series.automation?.clipConfig as { cropMode?: "blur-bg" | "center-crop" } | null)?.cropMode ?? "blur-bg",
+          creditOriginal: (video.series.automation?.clipConfig as { creditOriginal?: boolean } | null)?.creditOriginal ?? true,
+          enableBgm: video.series.automation?.enableBgm ?? true,
+          enableHflip: video.series.automation?.enableHflip ?? false,
+        },
+        targetPlatforms: (video.series.automation?.targetPlatforms as string[] | null) ?? (video.scheduledPlatforms as string[] | null) ?? [],
+      });
+
+      return NextResponse.json({ data: { videoId: video.id, status: "QUEUED", pipeline: "clip-repurpose" } });
+    }
 
     let scriptText = video.scriptText ?? "";
     let title = video.title ?? "Untitled";
