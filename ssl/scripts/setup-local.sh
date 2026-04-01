@@ -10,6 +10,7 @@ USE_PRODUCTION=false
 LE_EMAIL=""
 LE_CERT_NAME="narrateai-online"
 LE_HELPER_SCRIPT="$ROOT/scripts/issue-letsencrypt.sh"
+CERT_RENEW_THRESHOLD_SECONDS=${CERT_RENEW_THRESHOLD_SECONDS:-2592000}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -122,21 +123,109 @@ obtain_production_certs() {
 
   # Helper restarts nginx; stop it again so we can launch with this config
   stop_existing_nginx
+}
 
+cert_needs_renewal() {
+  local cert="/etc/letsencrypt/live/$LE_CERT_NAME/fullchain.pem"
+  local threshold_seconds=${CERT_RENEW_THRESHOLD_SECONDS:-2592000} # 30 days
+
+  if [[ ! -f "$cert" ]]; then
+    return 0
+  fi
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "openssl not found; assuming certificate renewal is required." >&2
+    return 0
+  fi
+
+  if openssl x509 -checkend "$threshold_seconds" -noout -in "$cert" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+copy_if_changed() {
+  local src="$1"
+  local dest="$2"
+  local perms="$3"
+
+  if [[ ! -f "$src" ]]; then
+    echo "Source certificate file missing: $src" >&2
+    return 1
+  fi
+
+  if [[ -f "$dest" ]] && sudo cmp -s "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+
+  sudo cp "$src" "$dest"
+  sudo chmod "$perms" "$dest"
+  echo "Updated $dest"
+}
+
+copy_production_certs() {
   local live_dir="/etc/letsencrypt/live/$LE_CERT_NAME"
   local fullchain="$live_dir/fullchain.pem"
   local privkey="$live_dir/privkey.pem"
 
   if [[ ! -f "$fullchain" || ! -f "$privkey" ]]; then
-    echo "Expected cert files not found in $live_dir" >&2
+    echo "Let's Encrypt certificates not found in $live_dir" >&2
     exit 1
   fi
 
-  sudo cp "$fullchain" "$CERT_DIR/narrateai.pem"
-  sudo cp "$privkey" "$CERT_DIR/narrateai-key.pem"
-  sudo chmod 644 "$CERT_DIR/narrateai.pem"
-  sudo chmod 600 "$CERT_DIR/narrateai-key.pem"
-  echo "Copied Let's Encrypt certs into $CERT_DIR"
+  copy_if_changed "$fullchain" "$CERT_DIR/narrateai.pem" 644
+  copy_if_changed "$privkey" "$CERT_DIR/narrateai-key.pem" 600
+}
+
+check_port_open() {
+  local port="$1"
+
+  if command -v ss >/dev/null 2>&1; then
+    if ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\.)$port$"; then
+      return 0
+    fi
+  fi
+
+  if command -v netstat >/dev/null 2>&1; then
+    if netstat -tln 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\.)$port$"; then
+      return 0
+    fi
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    if fuser -n tcp "$port" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # Fallback: attempt TCP connect
+  if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+verify_nginx_ports() {
+  local missing=()
+  for port in 80 443; do
+    if check_port_open "$port"; then
+      echo "Port $port is listening."
+    else
+      missing+=("$port")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "nginx is not listening on port(s): ${missing[*]}" >&2
+    exit 1
+  fi
 }
 
 ensure_nginx_prefix_dirs() {
@@ -147,7 +236,8 @@ ensure_nginx_prefix_dirs() {
     "$ROOT/proxy_temp" \
     "$ROOT/fastcgi_temp" \
     "$ROOT/uwsgi_temp" \
-    "$ROOT/scgi_temp"
+    "$ROOT/scgi_temp" \
+    "$CERT_DIR"
 }
 
 stop_existing_nginx() {
@@ -208,7 +298,13 @@ main() {
   ensure_nginx_prefix_dirs
 
   if $USE_PRODUCTION; then
-    obtain_production_certs
+    if cert_needs_renewal; then
+      echo "Existing Let's Encrypt certificate missing or expiring soon — requesting new issuance."
+      obtain_production_certs
+    else
+      echo "Existing Let's Encrypt certificate is valid for at least $(($CERT_RENEW_THRESHOLD_SECONDS/86400)) days; skipping issuance."
+    fi
+    copy_production_certs
   else
     install_mkcert_optional
     ensure_mkcert_ca
@@ -230,6 +326,8 @@ main() {
     echo "Failed to start nginx. Check if ports 80/443 are in use." >&2
     exit 1
   }
+
+  verify_nginx_ports
 
   echo ""
   echo "Setup complete. nginx now runs in the background (daemon mode) on ports 80/443."
