@@ -199,7 +199,34 @@ install_ffmpeg() {
 }
 
 # ── Prerequisite: yt-dlp (for clip-repurpose pipeline) ─────────────────────
+resolve_ytdlp_path() {
+  if [[ -n "${YTDLP_PATH:-}" ]]; then
+    echo "$YTDLP_PATH"
+    return
+  fi
+  if [[ -x "/usr/local/bin/yt-dlp" ]]; then
+    echo "/usr/local/bin/yt-dlp"
+    return
+  fi
+  if command -v yt-dlp &>/dev/null; then
+    command -v yt-dlp
+    return
+  fi
+  echo "yt-dlp"
+}
+
 install_ytdlp() {
+  if [[ "$(uname)" == "Linux" ]]; then
+    local target="/usr/local/bin/yt-dlp"
+    info "Installing latest yt-dlp binary to ${target}..."
+    if sudo curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "$target" \
+      && sudo chmod a+rx "$target"; then
+      ok "yt-dlp installed ($(\"$target\" --version 2>/dev/null))"
+      return
+    fi
+    warn "Binary install failed; falling back to package manager install."
+  fi
+
   if command -v yt-dlp &>/dev/null; then
     ok "yt-dlp already installed ($(yt-dlp --version 2>/dev/null))"
     return
@@ -212,7 +239,7 @@ install_ytdlp() {
     dnf)  sudo dnf install -y yt-dlp 2>/dev/null || pip3 install yt-dlp ;;
     *)    pip3 install yt-dlp ;;
   esac
-  ok "yt-dlp installed"
+  ok "yt-dlp installed ($(yt-dlp --version 2>/dev/null || echo unknown))"
 }
 
 # ── Prerequisite: PM2 ───────────────────────────────────────────────────────
@@ -544,6 +571,8 @@ prepare_project() {
 
 # ── Generate PM2 ecosystem config ────────────────────────────────────────────
 generate_pm2_config() {
+  local ytdlp_bin
+  ytdlp_bin="$(resolve_ytdlp_path)"
   cat > "$PM2_ECOSYSTEM" <<PMEOF
 module.exports = {
   apps: [
@@ -551,7 +580,7 @@ module.exports = {
       name: "narrateai-web",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm start'",
-      env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1", TZ: "${SYSTEM_TZ}" },
+      env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1", TZ: "${SYSTEM_TZ}", YTDLP_PATH: "${ytdlp_bin}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "512M",
     },
@@ -559,7 +588,7 @@ module.exports = {
       name: "narrateai-worker",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker'",
-      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}", YTDLP_PATH: "${ytdlp_bin}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
@@ -567,7 +596,7 @@ module.exports = {
       name: "narrateai-clip-worker",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker:clip'",
-      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}", YTDLP_PATH: "${ytdlp_bin}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
@@ -575,7 +604,7 @@ module.exports = {
       name: "narrateai-scheduler",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm scheduler'",
-      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}", YTDLP_PATH: "${ytdlp_bin}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "256M",
     },

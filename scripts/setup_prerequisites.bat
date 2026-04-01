@@ -193,7 +193,8 @@ goto :eof
 :install_ytdlp
 where yt-dlp >nul 2>nul
 if not errorlevel 1 (
-    echo [ OK ]  yt-dlp already installed
+    for /f "tokens=*" %%v in ('yt-dlp --version 2^>nul') do set "YTDLP_VER=%%v"
+    echo [ OK ]  yt-dlp already installed (!YTDLP_VER!)
     goto :eof
 )
 echo [INFO]  Installing yt-dlp...
@@ -216,7 +217,11 @@ if errorlevel 1 (
     echo [WARN]  yt-dlp installed but not in PATH yet. Restart your terminal after setup.
     goto :eof
 )
-echo [ OK ]  yt-dlp installed
+for /f "tokens=*" %%v in ('yt-dlp --version 2^>nul') do set "YTDLP_VER=%%v"
+echo [ OK ]  yt-dlp installed (!YTDLP_VER!)
+for /f "tokens=*" %%p in ('where yt-dlp 2^>nul') do (
+    if not defined YTDLP_BIN set "YTDLP_BIN=%%p"
+)
 goto :eof
 
 :: ─────────────────────────────────────────────────────────────────────────────
@@ -421,12 +426,18 @@ goto :eof
 :: ─────────────────────────────────────────────────────────────────────────────
 :gen_pm2_config
 set "_CWD=%PROJECT_DIR:\=/%"
+if not defined YTDLP_BIN (
+    for /f "tokens=*" %%p in ('where yt-dlp 2^>nul') do (
+        if not defined YTDLP_BIN set "YTDLP_BIN=%%p"
+    )
+)
+if not defined YTDLP_BIN set "YTDLP_BIN=yt-dlp"
 > "%PM2_ECO%" (
     echo module.exports = {
     echo   apps: [
-    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT% -H 127.0.0.1", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%", TZ: "%TZ%" }, max_memory_restart: "512M" },
-    echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%" }, max_memory_restart: "1G" },
-    echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%" }, max_memory_restart: "256M" },
+    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT% -H 127.0.0.1", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%", TZ: "%TZ%", YTDLP_PATH: "%YTDLP_BIN%" }, max_memory_restart: "512M" },
+    echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%", YTDLP_PATH: "%YTDLP_BIN%" }, max_memory_restart: "1G" },
+    echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%", YTDLP_PATH: "%YTDLP_BIN%" }, max_memory_restart: "256M" },
     echo   ],
     echo };
 )
