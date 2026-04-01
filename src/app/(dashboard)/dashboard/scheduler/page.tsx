@@ -61,6 +61,20 @@ interface SchedulerAutomation {
   nextPostAt: string | null;
 }
 
+interface SchedulerMeta {
+  buildAllTime: string;
+  buildAllTimezone: string;
+  currentTimeInBuildTimezone: string;
+  currentTimeIso: string;
+  lastScheduledWindowStart: string;
+  lastScheduledWindowEnd: string;
+  ranInLastScheduledWindow: boolean;
+  successfulInLastScheduledWindow: boolean;
+  lastSchedulerLogAt: string | null;
+  lastSchedulerOutcome: string | null;
+  lastSchedulerMessage: string | null;
+}
+
 /* ──────────────────────── Helpers ──────────────────────── */
 
 function autoLink(auto: SchedulerAutomation) {
@@ -146,6 +160,7 @@ function useCountdown(targetDate: string | null): string {
 
 export default function SchedulerPage() {
   const [data, setData] = useState<SchedulerAutomation[]>([]);
+  const [meta, setMeta] = useState<SchedulerMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,6 +171,7 @@ export default function SchedulerPage() {
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
       setData(json.data ?? []);
+      setMeta((json.meta ?? null) as SchedulerMeta | null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -190,6 +206,31 @@ export default function SchedulerPage() {
           Refresh
         </Button>
       </div>
+
+      {meta && (
+        <div className="rounded-lg border p-3 bg-card">
+          <div className="text-sm font-medium">Build Window Status</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Scheduled build time: <span className="font-mono">{meta.buildAllTime}</span> ({meta.buildAllTimezone.replace(/^.*\//, "")})
+            {" "}· Current time: <span className="font-mono">{meta.currentTimeInBuildTimezone}</span>
+          </div>
+          <div className="text-xs mt-2">
+            Last scheduled window ({formatAbsolute(meta.lastScheduledWindowStart, meta.buildAllTimezone)} → {formatAbsolute(meta.lastScheduledWindowEnd, meta.buildAllTimezone)}):{" "}
+            {meta.ranInLastScheduledWindow ? (
+              meta.successfulInLastScheduledWindow
+                ? <span className="text-green-600 font-semibold">Ran successfully</span>
+                : <span className="text-amber-600 font-semibold">Ran, but no success outcome</span>
+            ) : (
+              <span className="text-red-600 font-semibold">No scheduler activity detected</span>
+            )}
+          </div>
+          {meta.lastSchedulerLogAt && (
+            <div className="text-xs text-muted-foreground mt-1">
+              Latest scheduler log: {formatAbsolute(meta.lastSchedulerLogAt, meta.buildAllTimezone)} ({meta.lastSchedulerOutcome})
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

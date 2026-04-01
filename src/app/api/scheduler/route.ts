@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { computeNextRunAt, computeNextPostAt } from "@/lib/scheduler-utils";
+import {
+  BUILD_ALL_TIME,
+  BUILD_ALL_TIMEZONE,
+  BUILD_WINDOW_MINUTES,
+  computeNextRunAt,
+  computeNextPostAt,
+  localTimeToUTC,
+} from "@/lib/scheduler-utils";
 
 export async function GET() {
   try {
@@ -122,7 +129,59 @@ export async function GET() {
       return ta - tb;
     });
 
-    return NextResponse.json({ data });
+    const now = new Date();
+    const currentInBuildTz = new Intl.DateTimeFormat("en-IN", {
+      timeZone: BUILD_ALL_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(now);
+
+    // Check the most recent scheduled build window (today at BUILD_ALL_TIME, or yesterday if not reached yet).
+    let slotStart = localTimeToUTC(BUILD_ALL_TIME, BUILD_ALL_TIMEZONE);
+    if (now.getTime() < slotStart.getTime()) {
+      slotStart = new Date(slotStart.getTime() - 24 * 60 * 60 * 1000);
+    }
+    const slotEnd = new Date(slotStart.getTime() + BUILD_WINDOW_MINUTES * 60 * 1000);
+
+    const [lastLog, windowLogs, windowSuccesses] = await Promise.all([
+      db.schedulerLog.findFirst({
+        where: { automation: { userId: session.user.id } },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, outcome: true, message: true },
+      }),
+      db.schedulerLog.count({
+        where: {
+          automation: { userId: session.user.id },
+          createdAt: { gte: slotStart, lt: slotEnd },
+        },
+      }),
+      db.schedulerLog.count({
+        where: {
+          automation: { userId: session.user.id },
+          createdAt: { gte: slotStart, lt: slotEnd },
+          outcome: { in: ["enqueued", "posted", "skipped"] },
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      data,
+      meta: {
+        buildAllTime: BUILD_ALL_TIME,
+        buildAllTimezone: BUILD_ALL_TIMEZONE,
+        currentTimeInBuildTimezone: currentInBuildTz,
+        currentTimeIso: now.toISOString(),
+        lastScheduledWindowStart: slotStart.toISOString(),
+        lastScheduledWindowEnd: slotEnd.toISOString(),
+        ranInLastScheduledWindow: windowLogs > 0,
+        successfulInLastScheduledWindow: windowSuccesses > 0,
+        lastSchedulerLogAt: lastLog?.createdAt?.toISOString() ?? null,
+        lastSchedulerOutcome: lastLog?.outcome ?? null,
+        lastSchedulerMessage: lastLog?.message ?? null,
+      },
+    });
   } catch (error) {
     console.error("Scheduler API error:", error);
     return NextResponse.json({ error: "Failed to load scheduler data" }, { status: 500 });
