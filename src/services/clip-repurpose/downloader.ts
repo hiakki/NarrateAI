@@ -51,12 +51,8 @@ export async function downloadVideo(
   const maxHeight = options?.maxHeight ?? 1080;
   const subsLang = options?.subsLang ?? "en";
 
-  const args = [
+  const commonArgs = [
     "--write-info-json",
-    "--write-auto-subs",
-    "--sub-lang", subsLang,
-    "--sub-format", "vtt",
-    "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/bestvideo+bestaudio/best`,
     "--merge-output-format", "mp4",
     "--no-playlist",
     "--no-warnings",
@@ -66,25 +62,71 @@ export async function downloadVideo(
   const { getCookieFilePath } = await import("@/lib/cookie-path");
   const cookieFile = getCookieFilePath();
   if (cookieFile) {
-    args.push("--cookies", cookieFile);
+    commonArgs.push("--cookies", cookieFile);
   }
-
-  args.push(videoUrl);
 
   log.log(`Downloading: ${videoUrl}`);
   const ytdlp = findYtDlp();
 
-  try {
-    const { stdout, stderr } = await execFileAsync(ytdlp, args, {
-      timeout: 300_000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    if (stderr) log.debug(`yt-dlp stderr: ${stderr.slice(0, 300)}`);
-    log.debug(`yt-dlp stdout: ${stdout.slice(0, 200)}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  const attempts: Array<{ name: string; args: string[] }> = [
+    {
+      name: "default+subs",
+      args: [
+        ...commonArgs,
+        "--write-auto-subs",
+        "--sub-lang", subsLang,
+        "--sub-format", "vtt",
+        "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/bestvideo+bestaudio/best`,
+        videoUrl,
+      ],
+    },
+    {
+      name: "youtube-client-fallback",
+      args: [
+        ...commonArgs,
+        "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/bestvideo+bestaudio/best`,
+        "--extractor-args", "youtube:player_client=android,web",
+        "--force-ipv4",
+        videoUrl,
+      ],
+    },
+    {
+      name: "single-stream-fallback",
+      args: [
+        ...commonArgs,
+        "-f", `best[height<=${maxHeight}]/best`,
+        "--extractor-args", "youtube:player_client=android,web",
+        "--force-ipv4",
+        videoUrl,
+      ],
+    },
+  ];
+
+  const errors: string[] = [];
+  let ok = false;
+  for (const attempt of attempts) {
+    try {
+      const { stdout, stderr } = await execFileAsync(ytdlp, attempt.args, {
+        timeout: 300_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      if (stderr) log.debug(`yt-dlp [${attempt.name}] stderr: ${stderr.slice(0, 300)}`);
+      log.debug(`yt-dlp [${attempt.name}] stdout: ${stdout.slice(0, 200)}`);
+      ok = true;
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`[${attempt.name}] ${msg.slice(0, 260)}`);
+      log.warn(`yt-dlp attempt failed (${attempt.name}): ${msg.slice(0, 200)}`);
+    }
+  }
+
+  if (!ok) {
+    const hint = !cookieFile
+      ? " No cookies file found. Upload cookies in Settings or set YTDLP_COOKIES_FILE."
+      : "";
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`yt-dlp failed: ${msg.slice(0, 500)}`);
+    throw new Error(`yt-dlp failed after ${attempts.length} attempts.${hint} ${errors.join(" | ").slice(0, 1200)}`);
   }
 
   const files = await fs.readdir(tmpDir);

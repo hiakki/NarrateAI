@@ -20,6 +20,7 @@ popd
 
 set "PM2_ECO=%PROJECT_DIR%\ecosystem.config.cjs"
 if not defined PORT set "PORT=3000"
+if not defined TZ set "TZ=%TIMEZONE%"
 :: Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
 set "NODE_MAJOR=22"
 set "SKIP_PREREQS=0"
@@ -423,9 +424,9 @@ set "_CWD=%PROJECT_DIR:\=/%"
 > "%PM2_ECO%" (
     echo module.exports = {
     echo   apps: [
-    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT% -H 127.0.0.1", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%" }, max_memory_restart: "512M" },
-    echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "1G" },
-    echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production" }, max_memory_restart: "256M" },
+    echo     { name: "narrateai-web", script: "node_modules/.bin/next", args: "start -p %PORT% -H 127.0.0.1", cwd: "%_CWD%", env: { NODE_ENV: "production", PORT: "%PORT%", TZ: "%TZ%" }, max_memory_restart: "512M" },
+    echo     { name: "narrateai-worker", script: "node_modules/.bin/tsx", args: "workers/video-generation.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%" }, max_memory_restart: "1G" },
+    echo     { name: "narrateai-scheduler", script: "node_modules/.bin/tsx", args: "workers/scheduler.ts", cwd: "%_CWD%", env: { NODE_ENV: "production", TZ: "%TZ%" }, max_memory_restart: "256M" },
     echo   ],
     echo };
 )

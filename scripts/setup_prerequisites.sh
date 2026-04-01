@@ -26,9 +26,36 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_FILE="$PROJECT_DIR/deploy.log"
 PM2_ECOSYSTEM="$PROJECT_DIR/ecosystem.config.cjs"
 PORT="${PORT:-3000}"
+REQUIRED_TZ="Asia/Kolkata"
 # Node 22 LTS required (Node 24+ triggers DEP0169 url.parse() deprecation warnings)
 NODE_MAJOR=22
 prisma_accept_data_loss=false
+
+detect_system_tz() {
+  if [[ -n "${TZ:-}" ]]; then
+    echo "$TZ"
+    return
+  fi
+  if command -v timedatectl >/dev/null 2>&1; then
+    local tz
+    tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    if [[ -n "$tz" ]]; then
+      echo "$tz"
+      return
+    fi
+  fi
+  if [[ -f /etc/timezone ]]; then
+    local tz
+    tz="$(tr -d '[:space:]' < /etc/timezone 2>/dev/null || true)"
+    if [[ -n "$tz" ]]; then
+      echo "$tz"
+      return
+    fi
+  fi
+  # Final fallback: keep PM2 local default behavior.
+  echo "UTC"
+}
+SYSTEM_TZ="${REQUIRED_TZ}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -313,50 +340,37 @@ install_xvfb() {
 
 # ── Install all prerequisites ────────────────────────────────────────────────
 configure_timezone() {
-  if [[ "${SKIP_TZ_PROMPT:-false}" == "true" ]]; then
-    return
-  fi
-
   if [[ "$(uname)" != "Linux" ]]; then
     return
   fi
 
   local current_tz
-  current_tz=$(readlink /etc/localtime 2>/dev/null || true)
-  if [[ "$current_tz" == *"Asia/Kolkata"* ]]; then
-    ok "System timezone already set to IST (Asia/Kolkata)"
+  current_tz="$(detect_system_tz)"
+  if [[ "$current_tz" == "$REQUIRED_TZ" ]]; then
+    ok "System timezone already set to ${REQUIRED_TZ}"
+    SYSTEM_TZ="$REQUIRED_TZ"
     return
   fi
 
-  echo ""
-  info "System timezone"
-  echo "  Current: ${current_tz:-Unknown}"
-  read -rp "  Switch system timezone to IST (Asia/Kolkata)? [y/N] " tz_answer
-  if [[ "${tz_answer,,}" != "y" ]]; then
-    info "Keeping existing timezone. Export TZ=Asia/Kolkata in your shell if you need IST timestamps per process."
-    return
-  fi
-
+  info "Setting system timezone to ${REQUIRED_TZ} (non-interactive)"
   if command -v timedatectl >/dev/null 2>&1; then
-    if sudo timedatectl set-timezone Asia/Kolkata; then
-      ok "System timezone set to IST (Asia/Kolkata)"
-    else
-      warn "timedatectl failed. Attempting to link /etc/localtime manually."
-    fi
-  fi
-
-  if [[ -L /etc/localtime ]]; then
-    local tz_link
-    tz_link=$(readlink /etc/localtime 2>/dev/null || true)
-    if [[ "$tz_link" == *"Asia/Kolkata"* ]]; then
+    if sudo timedatectl set-timezone "$REQUIRED_TZ"; then
+      ok "System timezone set to ${REQUIRED_TZ}"
+      SYSTEM_TZ="$REQUIRED_TZ"
       return
     fi
+    warn "timedatectl failed; trying /etc/localtime symlink fallback."
   fi
 
-  if sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime; then
-    ok "System timezone set to IST (Asia/Kolkata) via /etc/localtime"
+  if sudo ln -sf "/usr/share/zoneinfo/${REQUIRED_TZ}" /etc/localtime; then
+    if [[ -w /etc/timezone ]] || sudo test -w /etc/timezone 2>/dev/null; then
+      echo "$REQUIRED_TZ" | sudo tee /etc/timezone >/dev/null || true
+    fi
+    ok "System timezone set to ${REQUIRED_TZ} via /etc/localtime"
+    SYSTEM_TZ="$REQUIRED_TZ"
   else
-    warn "Could not set timezone automatically. Set it manually or export TZ=Asia/Kolkata when running PM2."
+    warn "Could not set timezone automatically; PM2 apps will still use TZ=${REQUIRED_TZ}."
+    SYSTEM_TZ="$REQUIRED_TZ"
   fi
 }
 
@@ -537,7 +551,7 @@ module.exports = {
       name: "narrateai-web",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm start'",
-      env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1" },
+      env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1", TZ: "${SYSTEM_TZ}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "512M",
     },
@@ -545,7 +559,7 @@ module.exports = {
       name: "narrateai-worker",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker'",
-      env: { NODE_ENV: "production" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
@@ -553,7 +567,7 @@ module.exports = {
       name: "narrateai-clip-worker",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker:clip'",
-      env: { NODE_ENV: "production" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
@@ -561,7 +575,7 @@ module.exports = {
       name: "narrateai-scheduler",
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm scheduler'",
-      env: { NODE_ENV: "production" },
+      env: { NODE_ENV: "production", TZ: "${SYSTEM_TZ}" },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "256M",
     },
