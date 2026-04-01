@@ -240,42 +240,64 @@ export async function extractAndCrop(
     ].join(";");
   }
 
-  const args: string[] = [];
+  const buildArgs = (fc: string): string[] => {
+    const args: string[] = [];
 
-  if (!needsPreDecode) {
-    const useFastSeek = effectiveStart > 30;
-    if (useFastSeek) {
-      const fastSeekPoint = Math.max(0, effectiveStart - 10);
-      args.push("-ss", String(fastSeekPoint));
-      args.push("-i", inputPath);
-      args.push("-ss", String(effectiveStart - fastSeekPoint));
+    if (!needsPreDecode) {
+      const useFastSeek = effectiveStart > 30;
+      if (useFastSeek) {
+        const fastSeekPoint = Math.max(0, effectiveStart - 10);
+        args.push("-ss", String(fastSeekPoint));
+        args.push("-i", inputPath);
+        args.push("-ss", String(effectiveStart - fastSeekPoint));
+      } else {
+        args.push("-i", inputPath);
+        args.push("-ss", String(effectiveStart));
+      }
+      args.push("-t", String(duration));
     } else {
       args.push("-i", inputPath);
-      args.push("-ss", String(effectiveStart));
     }
-    args.push("-t", String(duration));
-  } else {
-    args.push("-i", inputPath);
-  }
 
-  args.push(
-    "-filter_complex", filterComplex,
-    "-map", "[vout]",
-    "-map", "[aout]",
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "20",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-ar", "44100",
-    "-pix_fmt", "yuv420p",
-    "-movflags", "+faststart",
-    "-y",
-    outputPath,
-  );
+    args.push(
+      "-filter_complex", fc,
+      "-map", "[vout]",
+      "-map", "[aout]",
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "20",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-ar", "44100",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      "-y",
+      outputPath,
+    );
+    return args;
+  };
 
   log.log(`Extracting ${segment.startSec}-${segment.endSec}s, mode=${cropMode}, anti-fp=on (speed=${SPEED_FACTOR}x, hflip=${hflip}, hue=${HUE_SHIFT}°)`);
-  await execFileAsync("ffmpeg", args, { timeout: 300_000 });
+  const primaryTimeoutMs = needsPreDecode ? 900_000 : 480_000;
+  try {
+    await execFileAsync("ffmpeg", buildArgs(filterComplex), { timeout: primaryTimeoutMs, maxBuffer: 20 * 1024 * 1024 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Heavy AV1/VP9 + full blur pipeline can exceed timeout/CPU budget on small servers.
+    // Retry with a lighter blur pass before failing the whole clip.
+    if (cropMode === "blur-bg") {
+      log.warn(`Primary clip extraction failed; retrying with lighter blur pipeline: ${msg.slice(0, 220)}`);
+      const lighterFilter = [
+        `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},boxblur=10:10,${antiFpVideo}[bg]`,
+        `[0:v]scale=${OUT_W}:-2:force_original_aspect_ratio=decrease,${antiFpVideo}[fg]`,
+        `[bg][fg]overlay=(W-w)/2:(H-h)/2[vout]`,
+        `[0:a]${ANTI_FP_AUDIO}[aout]`,
+      ].join(";");
+      await execFileAsync("ffmpeg", buildArgs(lighterFilter), { timeout: 900_000, maxBuffer: 20 * 1024 * 1024 });
+    } else {
+      throw err;
+    }
+  }
 
   if (needsPreDecode) {
     fs.unlink(inputPath).catch(() => {});
