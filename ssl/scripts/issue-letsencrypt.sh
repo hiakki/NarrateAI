@@ -76,12 +76,23 @@ collect_port80_pids() {
     fi
   fi
 
+  if [[ ${#pids[@]} -eq 0 ]] && command -v netstat >/dev/null 2>&1; then
+    local netstat_output
+    netstat_output="$(netstat -tlnp 2>/dev/null || true)"
+    if [[ -n "$netstat_output" ]]; then
+      while IFS= read -r pid; do
+        [[ -n "$pid" ]] && pids+=("$pid")
+      done < <(printf '%s\n' "$netstat_output" | awk '/:80\s/ {print $7}' | sed 's#/.*##' | sed 's/-//' | grep -E '^[0-9]+$' | sort -u; true)
+    fi
+  fi
+
   PORT80_PIDS=("${pids[@]}")
 }
 
 print_port80_processes() {
   collect_port80_pids
   if [[ ${#PORT80_PIDS[@]} -eq 0 ]]; then
+    echo "No processes detected on port 80."
     return
   fi
 
