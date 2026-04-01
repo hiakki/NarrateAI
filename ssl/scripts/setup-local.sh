@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 HOSTS_LINE="127.0.0.1 app.narrateai.online chat.narrateai.online"
+CERT_DIR="$ROOT/certs"
 USE_PRODUCTION=false
 LE_EMAIL=""
 LE_CERT_NAME="narrateai-online"
