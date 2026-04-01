@@ -54,39 +54,61 @@ ensure_certbot() {
 
 collect_port80_pids() {
   PORT80_PIDS=()
-  local pids=()
+  declare -A seen=()
 
-  if command -v ss >/dev/null 2>&1; then
-    local ss_output
-    ss_output="$(ss -tlnp 'sport = :80' 2>/dev/null || true)"
-    if [[ -n "$ss_output" ]]; then
-      while IFS= read -r pid; do
-        [[ -n "$pid" ]] && pids+=("$pid")
-      done < <(printf '%s\n' "$ss_output" | grep -o 'pid=[0-9]*' | sed 's/pid=//' | sort -u; true)
+  collect_from_pipe() {
+    while IFS= read -r pid; do
+      [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || continue
+      seen["$pid"]=1
+    done
+  }
+
+  run_detectors() {
+    if command -v ss >/dev/null 2>&1; then
+      ss -tlnp 'sport = :80' 2>/dev/null \
+        | grep -o 'pid=[0-9]*' \
+        | sed 's/pid=//' \
+        | sort -u \
+        | collect_from_pipe
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+      lsof -nP -iTCP:80 -sTCP:LISTEN 2>/dev/null \
+        | awk 'NR>1 {print $2}' \
+        | sort -u \
+        | collect_from_pipe
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+      netstat -tlnp 2>/dev/null \
+        | awk '/:80[[:space:]]/ {print $7}' \
+        | awk -F/ '{print $1}' \
+        | grep -E '^[0-9]+$' \
+        | sort -u \
+        | collect_from_pipe
+    fi
+
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -n tcp 80 2>/dev/null \
+        | tr ' ' '\n' \
+        | collect_from_pipe
+    fi
+  }
+
+  run_detectors
+
+  if (( ${#seen[@]} == 0 )) && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx; then
+    echo "No processes detected on port 80; stopping nginx service preemptively..."
+    if systemctl stop nginx; then
+      STOPPED_SERVICES+=("systemctl start nginx")
+      sleep 1
+      run_detectors
+    else
+      echo "Warning: systemctl stop nginx failed." >&2
     fi
   fi
 
-  if [[ ${#pids[@]} -eq 0 ]] && command -v lsof >/dev/null 2>&1; then
-    local lsof_output
-    lsof_output="$(lsof -nP -iTCP:80 -sTCP:LISTEN 2>/dev/null || true)"
-    if [[ -n "$lsof_output" ]]; then
-      while IFS= read -r pid; do
-        [[ -n "$pid" && "$pid" != "PID" ]] && pids+=("$pid")
-      done < <(printf '%s\n' "$lsof_output" | awk 'NR>1 {print $2}' | sort -u; true)
-    fi
-  fi
-
-  if [[ ${#pids[@]} -eq 0 ]] && command -v netstat >/dev/null 2>&1; then
-    local netstat_output
-    netstat_output="$(netstat -tlnp 2>/dev/null || true)"
-    if [[ -n "$netstat_output" ]]; then
-      while IFS= read -r pid; do
-        [[ -n "$pid" ]] && pids+=("$pid")
-      done < <(printf '%s\n' "$netstat_output" | awk '/:80\s/ {print $7}' | sed 's#/.*##' | sed 's/-//' | grep -E '^[0-9]+$' | sort -u; true)
-    fi
-  fi
-
-  PORT80_PIDS=("${pids[@]}")
+  PORT80_PIDS=( "${!seen[@]}" )
 }
 
 print_port80_processes() {
