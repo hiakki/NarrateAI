@@ -14,6 +14,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_DOMAINS=("app.narrateai.online" "chat.narrateai.online" "narrateai.online" "www.narrateai.online")
 DEFAULT_CERT_NAME="narrateai-online"
 
+declare -a PORT80_PIDS=()
+declare -a STOPPED_SERVICES=()
+declare -a KILLED_PROCS=()
+
 print_banner() {
   cat <<'BANNER'
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -43,6 +47,128 @@ ensure_certbot() {
   else
     echo "Unsupported OS for automatic install. Install certbot manually first." >&2
     exit 1
+  fi
+}
+
+collect_port80_pids() {
+  PORT80_PIDS=()
+  local pids=()
+
+  if command -v ss >/dev/null 2>&1; then
+    local ss_output
+    ss_output="$(ss -tlnp 'sport = :80' 2>/dev/null || true)"
+    if [[ -n "$ss_output" ]]; then
+      while IFS= read -r pid; do
+        [[ -n "$pid" ]] && pids+=("$pid")
+      done < <(printf '%s\n' "$ss_output" | grep -o 'pid=[0-9]*' | sed 's/pid=//' | sort -u; true)
+    fi
+  fi
+
+  if [[ ${#pids[@]} -eq 0 ]] && command -v lsof >/dev/null 2>&1; then
+    local lsof_output
+    lsof_output="$(lsof -nP -iTCP:80 -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$lsof_output" ]]; then
+      while IFS= read -r pid; do
+        [[ -n "$pid" && "$pid" != "PID" ]] && pids+=("$pid")
+      done < <(printf '%s\n' "$lsof_output" | awk 'NR>1 {print $2}' | sort -u; true)
+    fi
+  fi
+
+  PORT80_PIDS=("${pids[@]}")
+}
+
+print_port80_processes() {
+  collect_port80_pids
+  if [[ ${#PORT80_PIDS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  echo "Processes currently listening on port 80:"
+  printf "  %-7s %s\n" "PID" "COMMAND"
+  for pid in "${PORT80_PIDS[@]}"; do
+    local cmd
+    cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<exited>")
+    printf "  %-7s %s\n" "$pid" "$cmd"
+  done
+}
+
+attempt_stop_port80_processes() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx; then
+    echo "Stopping nginx service via systemctl to free port 80..."
+    if systemctl stop nginx; then
+      STOPPED_SERVICES+=("systemctl start nginx")
+    else
+      echo "Warning: systemctl stop nginx failed." >&2
+    fi
+  fi
+
+  collect_port80_pids
+  local pids_to_kill=("${PORT80_PIDS[@]}")
+  if [[ ${#pids_to_kill[@]} -eq 0 ]]; then
+    return
+  fi
+
+  echo "Sending SIGTERM to remaining processes on port 80..."
+  for pid in "${pids_to_kill[@]}"; do
+    local cmd
+    cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<unknown>")
+    KILLED_PROCS+=("$pid $cmd (SIGTERM)")
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 2
+
+  collect_port80_pids
+  if [[ ${#PORT80_PIDS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  local stubborn=("${PORT80_PIDS[@]}")
+  echo "Sending SIGKILL to stubborn processes on port 80..."
+  for pid in "${stubborn[@]}"; do
+    local cmd
+    cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<unknown>")
+    KILLED_PROCS+=("$pid $cmd (SIGKILL)")
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  sleep 1
+}
+
+ensure_port80_clear() {
+  collect_port80_pids
+  if [[ ${#PORT80_PIDS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  print_port80_processes
+  echo ""
+  echo "Port 80 is in use. Attempting to free it automatically..."
+
+  attempt_stop_port80_processes
+  collect_port80_pids
+  if [[ ${#PORT80_PIDS[@]} -gt 0 ]]; then
+    print_port80_processes
+    echo "Port 80 is still busy. Stop the remaining process(es) manually and rerun." >&2
+    exit 1
+  fi
+
+  echo "Port 80 is now free."
+}
+
+print_restart_reminders() {
+  if [[ ${#STOPPED_SERVICES[@]} -gt 0 ]]; then
+    echo ""
+    echo "Restart services that were stopped to free port 80:"
+    for cmd in "${STOPPED_SERVICES[@]}"; do
+      echo "  sudo $cmd"
+    done
+  fi
+
+  if [[ ${#KILLED_PROCS[@]} -gt 0 ]]; then
+    echo ""
+    echo "Processes terminated while freeing port 80 (restart manually if needed):"
+    for entry in "${KILLED_PROCS[@]}"; do
+      echo "  $entry"
+    done
   fi
 }
 
@@ -126,6 +252,8 @@ USAGE
     exit 1
   fi
 
+  ensure_port80_clear
+
   local certbot_args=(
     certbot certonly --non-interactive --agree-tos --no-eff-email
     --email "$email"
@@ -146,17 +274,20 @@ USAGE
 
   if ! "${certbot_args[@]}"; then
     echo "certbot failed. Review the output above." >&2
+    print_restart_reminders
     exit 1
   fi
 
   if [[ ${DRY_RUN:-false} == true ]]; then
     echo "Dry-run complete (no certificates saved)."
+    print_restart_reminders
     exit 0
   fi
 
   local live_path="/etc/letsencrypt/live/${cert_name}"
   if [[ ! -d "$live_path" ]]; then
     echo "Unexpected: certbot ran but $live_path not found." >&2
+    print_restart_reminders
     exit 1
   fi
 
@@ -176,6 +307,8 @@ NGINX
   echo "  sudo certbot renew --dry-run"
   echo ""
   echo "Remember to set up a cron/systemd timer for certbot renew (if not already provided by the package)."
+
+  print_restart_reminders
 }
 
 main "$@"

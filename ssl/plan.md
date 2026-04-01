@@ -19,7 +19,7 @@ cd contrib/NarrateAI/ssl
 sudo ./scripts/issue-letsencrypt.sh --email you@example.com
 ```
 
-The script installs certbot (if missing), requests a certificate for
+The script installs certbot (if missing), safely stops anything bound to port 80 (nginx, other proxies) so the HTTP challenge can run, requests a certificate for
 `app.narrateai.online`, `chat.narrateai.online`, `narrateai.online`, and `www.narrateai.online`, and reports where the files are stored (`/etc/letsencrypt/live/<name>/`). Update `nginx.conf` to reference those paths and reload nginx. Run `sudo certbot renew --dry-run` to verify renewal. A cron/systemd timer is usually installed with certbot to automate renewal.
 
 ---
