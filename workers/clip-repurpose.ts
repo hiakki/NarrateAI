@@ -190,22 +190,56 @@ const worker = new Worker<ClipRepurposeJobData>(
         throw new Error("No suitable video found from any configured source");
       }
 
-      const { selected: discovered, candidates, totalConsidered, platformBreakdown, rejectedSample } = discoveryResult;
+      const { selected: discovered, rankedCandidates, candidates, totalConsidered, platformBreakdown, rejectedSample } = discoveryResult;
       log.log(`[DISCOVER]`, `Selected: "${discovered.title}" (${discovered.viewCount.toLocaleString()} views) [${discovered.platform}] from ${totalConsidered} candidates`);
       fl?.worker(`DISCOVER: ${totalConsidered} candidates → selected "${discovered.title}" (${discovered.viewCount.toLocaleString()} views) [${discovered.platform}] from ${discovered.source}`);
+
+      const downloadQueue = [discovered, ...(rankedCandidates ?? []).filter((c) => c.url !== discovered.url)].slice(0, 8);
+      let downloadTarget = downloadQueue[0];
+      let sourcePath = "";
+      let infoJsonPath = "";
+      let subsPath: string | null = null;
+      let tmpDir = "";
+      let downloadErr = "";
+      for (const candidate of downloadQueue) {
+        try {
+          log.log(`[DOWNLOAD]`, `Downloading ${candidate.url} [${candidate.platform}]...`);
+          const dl = await downloadVideoAuto(candidate.url, { subsLang: language ?? "en" });
+          sourcePath = dl.videoPath;
+          infoJsonPath = dl.infoJsonPath;
+          subsPath = dl.subsPath;
+          tmpDir = dl.tmpDir;
+          downloadTarget = candidate;
+          if (candidate.url !== discovered.url) {
+            log.log(`[DOWNLOAD]`, `Primary source failed earlier; switched to fallback candidate "${candidate.title}" [${candidate.platform}]`);
+            fl?.worker(`DOWNLOAD FALLBACK: switched to "${candidate.title}" [${candidate.platform}]`);
+          }
+          downloadErr = "";
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          downloadErr = msg;
+          log.warn(`[DOWNLOAD]`, `Failed ${candidate.platform} candidate ${candidate.url}: ${msg.slice(0, 180)}`);
+          fl?.worker(`DOWNLOAD FAIL [${candidate.platform}]: ${msg.slice(0, 180)}`);
+        }
+      }
+
+      if (!sourcePath || !infoJsonPath || !tmpDir) {
+        throw new Error(`All candidate downloads failed. Last error: ${downloadErr.slice(0, 300)}`);
+      }
 
       await db.video.update({
         where: { id: videoId },
         data: {
-          sourceUrl: discovered.url,
+          sourceUrl: downloadTarget.url,
           sourceMetadata: {
             niche: nicheKey,
-            platform: discovered.platform,
-            channelName: discovered.channelName,
-            channelId: discovered.channelId,
-            originalTitle: discovered.title,
-            viewCount: discovered.viewCount,
-            source: discovered.source,
+            platform: downloadTarget.platform,
+            channelName: downloadTarget.channelName,
+            channelId: downloadTarget.channelId,
+            originalTitle: downloadTarget.title,
+            viewCount: downloadTarget.viewCount,
+            source: downloadTarget.source,
             discovery: { candidates, totalConsidered, platformBreakdown, rejectedSample },
           } as never,
         },
@@ -215,17 +249,9 @@ const worker = new Worker<ClipRepurposeJobData>(
         log.warn(`[TRENDING] upsert failed: ${e instanceof Error ? e.message : e}`),
       );
 
-      // ── Stage 2: DOWNLOAD (part of discovery) ──
-      log.log(`[DOWNLOAD]`, `Downloading ${discovered.url}...`);
-
-      const { videoPath: sourcePath, infoJsonPath, subsPath, tmpDir } = await downloadVideoAuto(
-        discovered.url,
-        { subsLang: language ?? "en" },
-      );
-
       const videoInfo = await parseVideoInfo(infoJsonPath);
       log.log(`[DOWNLOAD]`, `Got: ${videoInfo.duration}s, heatmap: ${videoInfo.heatmap ? `${videoInfo.heatmap.length} points` : "none"}`);
-      fl?.worker(`DOWNLOAD: ${discovered.url} → ${videoInfo.duration}s, heatmap=${videoInfo.heatmap ? videoInfo.heatmap.length + " pts" : "none"}`);
+      fl?.worker(`DOWNLOAD: ${downloadTarget.url} → ${videoInfo.duration}s, heatmap=${videoInfo.heatmap ? videoInfo.heatmap.length + " pts" : "none"}`);
 
       // ── Stage 3: HEATMAP analysis ──
       await updateStage(videoId, "HEATMAP");
@@ -345,16 +371,16 @@ const worker = new Worker<ClipRepurposeJobData>(
       log.log(`[METADATA]`, `Generating title and description...`);
 
       const existingClips = await db.video.count({
-        where: { sourceUrl: discovered.url, status: { in: ["READY", "POSTED", "GENERATING"] } },
+        where: { sourceUrl: downloadTarget.url, status: { in: ["READY", "POSTED", "GENERATING"] } },
       });
       const partNumber = existingClips + 1;
 
       const segmentDesc = `${peak.startSec}-${peak.endSec}s of a ${videoInfo.duration}s video with ${discovered.viewCount.toLocaleString()} views`;
       const { title, description } = await generateClipMetadata(
-        discovered.title,
-        discovered.channelName,
+        downloadTarget.title,
+        downloadTarget.channelName,
         segmentDesc,
-        discovered.url,
+        downloadTarget.url,
         coreStart,
         coreEnd,
         partNumber,
@@ -386,12 +412,12 @@ const worker = new Worker<ClipRepurposeJobData>(
           duration: clipDuration,
           sourceMetadata: {
             niche: nicheKey,
-            platform: discovered.platform,
-            channelName: discovered.channelName,
-            channelId: discovered.channelId,
-            originalTitle: discovered.title,
-            viewCount: discovered.viewCount,
-            source: discovered.source,
+            platform: downloadTarget.platform,
+            channelName: downloadTarget.channelName,
+            channelId: downloadTarget.channelId,
+            originalTitle: downloadTarget.title,
+            viewCount: downloadTarget.viewCount,
+            source: downloadTarget.source,
             peakSegment: peak,
             timingBreakdown,
             bgmTrack,

@@ -27,6 +27,7 @@ export interface DiscoveredVideo {
 
 export interface DiscoveryResult {
   selected: DiscoveredVideo;
+  rankedCandidates: DiscoveredVideo[];
   candidates: Array<{ title: string; url: string; viewCount: number; platform: string; channelName: string; score?: number }>;
   totalConsidered: number;
   platformBreakdown: Record<string, { found: number; qualified: number; rejected: number }>;
@@ -644,6 +645,7 @@ export async function discoverVideo(config: {
   preferPlatform?: "youtube" | "facebook" | "instagram";
 }): Promise<DiscoveryResult | null> {
   const ytApiKey = getYouTubeApiKey();
+  const hasCookieFile = !!getCookieFilePath();
   const minViews = config.minViewCount ?? 500_000;
   const fbMinViews = 100_000;
   const igMinViews = 50_000;
@@ -676,59 +678,24 @@ export async function discoverVideo(config: {
   }
   log.log(`[SEARCH-YT] Got ${ytSearchCount} candidates`);
 
-  // ── 2. Facebook discovery (search + page scraping) ──
-  const fbQuery = queries[0];
-  const fbPages = NICHE_FB_PAGES[config.niche] ?? NICHE_FB_PAGES["auto"];
-
-  // 2a. Try search first
-  log.log(`[SEARCH-FB] Searching Facebook for "${fbQuery}"...`);
+  // ── 2/3. Facebook + Instagram discovery ──
   let fbSearchCount = 0;
-  try {
-    const fbSearchResults = await searchFbVideos(fbQuery, 10);
-    for (const v of fbSearchResults) {
-      if (v.videoId) {
-        fbSearchCount++;
-        allCandidates.push({
-          videoId: v.videoId, url: v.url, title: v.title,
-          channelId: "", channelName: v.channelName,
-          viewCount: v.viewCount, publishedAt: "",
-          durationSec: v.durationSec, platform: "facebook", source: "search",
-        });
-      }
-    }
-    log.log(`[SEARCH-FB] Search returned ${fbSearchCount} videos`);
-  } catch (err) {
-    log.warn(`[SEARCH-FB] Search failed: ${err instanceof Error ? err.message : err}`);
-  }
-
-  // 2b. Scrape niche pages only as fallback (skip when search found enough)
   let fbPageCount = 0;
-  const FB_SEARCH_SUFFICIENT = 5;
-  if (fbSearchCount < FB_SEARCH_SUFFICIENT) {
-    const fbScrapeTargets: string[] = [];
-    for (const pageUrl of fbPages) {
-      fbScrapeTargets.push(pageUrl);
-      const reelsUrl = pageUrl.replace(/\/videos\/?$/, "/reels/");
-      if (reelsUrl !== pageUrl) fbScrapeTargets.push(reelsUrl);
-    }
+  let igSearchCount = 0;
+  let igProfileCount = 0;
+  if (!hasCookieFile) {
+    log.log("[DISCOVER] No cookies file detected; skipping Facebook/Instagram discovery and prioritizing reachable platforms (YouTube).");
+  } else {
+    const fbQuery = queries[0];
+    const fbPages = NICHE_FB_PAGES[config.niche] ?? NICHE_FB_PAGES["auto"];
 
-    log.log(`[SCRAPE-FB] Search found only ${fbSearchCount} (< ${FB_SEARCH_SUFFICIENT}), scraping ${fbScrapeTargets.length} page URLs as fallback...`);
-    const fbScrapeResults = await Promise.allSettled(
-      fbScrapeTargets.map(async (url) => {
-        log.log(`[SCRAPE-FB] Scraping ${url}...`);
-        const videos = await discoverFbPageVideos(url, 15);
-        log.log(`[SCRAPE-FB] Got ${videos.length} videos from ${url}`);
-        return { url, videos };
-      }),
-    );
-    for (const result of fbScrapeResults) {
-      if (result.status === "rejected") {
-        log.warn(`[SCRAPE-FB] Failed: ${result.reason}`);
-        continue;
-      }
-      for (const v of result.value.videos) {
+    // 2a. Try search first
+    log.log(`[SEARCH-FB] Searching Facebook for "${fbQuery}"...`);
+    try {
+      const fbSearchResults = await searchFbVideos(fbQuery, 10);
+      for (const v of fbSearchResults) {
         if (v.videoId) {
-          fbPageCount++;
+          fbSearchCount++;
           allCandidates.push({
             videoId: v.videoId, url: v.url, title: v.title,
             channelId: "", channelName: v.channelName,
@@ -737,71 +704,110 @@ export async function discoverVideo(config: {
           });
         }
       }
-    }
-  } else {
-    log.log(`[SCRAPE-FB] Skipping page scraping — search already found ${fbSearchCount} candidates (>= ${FB_SEARCH_SUFFICIENT})`);
-  }
-  log.log(`[FB-TOTAL] ${fbSearchCount + fbPageCount} raw (${fbSearchCount} search + ${fbPageCount} pages)`);
-
-  // ── 3. Instagram discovery (search-first, profile scraping as fallback) ──
-  const igSearchQueries = queries.map((q) => q.split(/\s+/)[0]).slice(0, 2);
-  log.log(`[SEARCH-IG] Searching Instagram tags for "${config.niche}": ${igSearchQueries.join(", ")}...`);
-  let igSearchCount = 0;
-  for (const igQuery of igSearchQueries) {
-    try {
-      const igSearchResults = await searchIgReels(igQuery, 10);
-      for (const v of igSearchResults) {
-        if (v.videoId) {
-          igSearchCount++;
-          allCandidates.push({
-            videoId: v.videoId, url: v.url, title: v.title,
-            channelId: "", channelName: v.channelName,
-            viewCount: v.viewCount, publishedAt: "",
-            durationSec: v.durationSec, platform: "instagram", source: "search",
-          });
-        }
-      }
-      log.log(`[SEARCH-IG] Tag #${igQuery} returned ${igSearchResults.length} reels`);
+      log.log(`[SEARCH-FB] Search returned ${fbSearchCount} videos`);
     } catch (err) {
-      log.warn(`[SEARCH-IG] Tag search failed for #${igQuery}: ${err instanceof Error ? err.message : err}`);
+      log.warn(`[SEARCH-FB] Search failed: ${err instanceof Error ? err.message : err}`);
     }
-  }
 
-  // 3b. Profile scraping only as fallback (skip when search found enough)
-  let igProfileCount = 0;
-  const IG_SEARCH_SUFFICIENT = 5;
-  const igProfiles = NICHE_IG_PROFILES[config.niche] ?? NICHE_IG_PROFILES["auto"];
-  if (igSearchCount < IG_SEARCH_SUFFICIENT) {
-    log.log(`[SCRAPE-IG] Search found only ${igSearchCount} (< ${IG_SEARCH_SUFFICIENT}), scraping ${igProfiles.length} profiles as fallback...`);
-    const igScrapeResults = await Promise.allSettled(
-      igProfiles.map(async (profileUrl) => {
-        log.log(`[SCRAPE-IG] Scraping ${profileUrl}...`);
-        const reels = await discoverIgReels(profileUrl, 15);
-        log.log(`[SCRAPE-IG] Got ${reels.length} reels from ${profileUrl}`);
-        return { profileUrl, reels };
-      }),
-    );
-    for (const result of igScrapeResults) {
-      if (result.status === "rejected") {
-        log.warn(`[SCRAPE-IG] Failed: ${result.reason}`);
-        continue;
+    // 2b. Scrape niche pages only as fallback (skip when search found enough)
+    const FB_SEARCH_SUFFICIENT = 5;
+    if (fbSearchCount < FB_SEARCH_SUFFICIENT) {
+      const fbScrapeTargets: string[] = [];
+      for (const pageUrl of fbPages) {
+        fbScrapeTargets.push(pageUrl);
+        const reelsUrl = pageUrl.replace(/\/videos\/?$/, "/reels/");
+        if (reelsUrl !== pageUrl) fbScrapeTargets.push(reelsUrl);
       }
-      for (const v of result.value.reels) {
-        if (v.videoId) {
-          igProfileCount++;
-          allCandidates.push({
-            videoId: v.videoId, url: v.url, title: v.title,
-            channelId: "", channelName: v.channelName,
-            viewCount: v.viewCount, publishedAt: "",
-            durationSec: v.durationSec, platform: "instagram", source: "search",
-          });
+
+      log.log(`[SCRAPE-FB] Search found only ${fbSearchCount} (< ${FB_SEARCH_SUFFICIENT}), scraping ${fbScrapeTargets.length} page URLs as fallback...`);
+      const fbScrapeResults = await Promise.allSettled(
+        fbScrapeTargets.map(async (url) => {
+          log.log(`[SCRAPE-FB] Scraping ${url}...`);
+          const videos = await discoverFbPageVideos(url, 15);
+          log.log(`[SCRAPE-FB] Got ${videos.length} videos from ${url}`);
+          return { url, videos };
+        }),
+      );
+      for (const result of fbScrapeResults) {
+        if (result.status === "rejected") {
+          log.warn(`[SCRAPE-FB] Failed: ${result.reason}`);
+          continue;
+        }
+        for (const v of result.value.videos) {
+          if (v.videoId) {
+            fbPageCount++;
+            allCandidates.push({
+              videoId: v.videoId, url: v.url, title: v.title,
+              channelId: "", channelName: v.channelName,
+              viewCount: v.viewCount, publishedAt: "",
+              durationSec: v.durationSec, platform: "facebook", source: "search",
+            });
+          }
         }
       }
+    } else {
+      log.log(`[SCRAPE-FB] Skipping page scraping — search already found ${fbSearchCount} candidates (>= ${FB_SEARCH_SUFFICIENT})`);
     }
-  } else {
-    log.log(`[SCRAPE-IG] Skipping profile scraping — search already found ${igSearchCount} candidates (>= ${IG_SEARCH_SUFFICIENT})`);
+    log.log(`[FB-TOTAL] ${fbSearchCount + fbPageCount} raw (${fbSearchCount} search + ${fbPageCount} pages)`);
+
+    // ── 3. Instagram discovery (search-first, profile scraping as fallback) ──
+    const igSearchQueries = queries.map((q) => q.split(/\s+/)[0]).slice(0, 2);
+    log.log(`[SEARCH-IG] Searching Instagram tags for "${config.niche}": ${igSearchQueries.join(", ")}...`);
+    for (const igQuery of igSearchQueries) {
+      try {
+        const igSearchResults = await searchIgReels(igQuery, 10);
+        for (const v of igSearchResults) {
+          if (v.videoId) {
+            igSearchCount++;
+            allCandidates.push({
+              videoId: v.videoId, url: v.url, title: v.title,
+              channelId: "", channelName: v.channelName,
+              viewCount: v.viewCount, publishedAt: "",
+              durationSec: v.durationSec, platform: "instagram", source: "search",
+            });
+          }
+        }
+        log.log(`[SEARCH-IG] Tag #${igQuery} returned ${igSearchResults.length} reels`);
+      } catch (err) {
+        log.warn(`[SEARCH-IG] Tag search failed for #${igQuery}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // 3b. Profile scraping only as fallback (skip when search found enough)
+    const IG_SEARCH_SUFFICIENT = 5;
+    const igProfiles = NICHE_IG_PROFILES[config.niche] ?? NICHE_IG_PROFILES["auto"];
+    if (igSearchCount < IG_SEARCH_SUFFICIENT) {
+      log.log(`[SCRAPE-IG] Search found only ${igSearchCount} (< ${IG_SEARCH_SUFFICIENT}), scraping ${igProfiles.length} profiles as fallback...`);
+      const igScrapeResults = await Promise.allSettled(
+        igProfiles.map(async (profileUrl) => {
+          log.log(`[SCRAPE-IG] Scraping ${profileUrl}...`);
+          const reels = await discoverIgReels(profileUrl, 15);
+          log.log(`[SCRAPE-IG] Got ${reels.length} reels from ${profileUrl}`);
+          return { profileUrl, reels };
+        }),
+      );
+      for (const result of igScrapeResults) {
+        if (result.status === "rejected") {
+          log.warn(`[SCRAPE-IG] Failed: ${result.reason}`);
+          continue;
+        }
+        for (const v of result.value.reels) {
+          if (v.videoId) {
+            igProfileCount++;
+            allCandidates.push({
+              videoId: v.videoId, url: v.url, title: v.title,
+              channelId: "", channelName: v.channelName,
+              viewCount: v.viewCount, publishedAt: "",
+              durationSec: v.durationSec, platform: "instagram", source: "search",
+            });
+          }
+        }
+      }
+    } else {
+      log.log(`[SCRAPE-IG] Skipping profile scraping — search already found ${igSearchCount} candidates (>= ${IG_SEARCH_SUFFICIENT})`);
+    }
+    log.log(`[IG-TOTAL] ${igSearchCount + igProfileCount} raw (${igSearchCount} search + ${igProfileCount} profiles)`);
   }
-  log.log(`[IG-TOTAL] ${igSearchCount + igProfileCount} raw (${igSearchCount} search + ${igProfileCount} profiles)`);
 
 
   // ── 4. YouTube Trending + Creative Commons (when API key available) ──
@@ -962,6 +968,7 @@ export async function discoverVideo(config: {
   log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.platform}/${best.source}] from ${unique.length} candidates`);
   return {
     selected: best,
+    rankedCandidates: scoredWithRank.slice(0, 20).map(({ score: _score, ...v }) => v),
     candidates: candidatesSummary,
     totalConsidered: unique.length,
     platformBreakdown: platformCounts,
