@@ -17,6 +17,8 @@ DEFAULT_CERT_NAME="narrateai-online"
 declare -a PORT80_PIDS=()
 declare -a STOPPED_SERVICES=()
 declare -a KILLED_PROCS=()
+declare -a RESTARTED_SERVICES=()
+declare -a FAILED_RESTARTS=()
 
 print_banner() {
   cat <<'BANNER'
@@ -85,10 +87,23 @@ print_port80_processes() {
 
   echo "Processes currently listening on port 80:"
   printf "  %-7s %s\n" "PID" "COMMAND"
+  declare -A counts=()
+  declare -A sample_pid=()
   for pid in "${PORT80_PIDS[@]}"; do
     local cmd
     cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<exited>")
-    printf "  %-7s %s\n" "$pid" "$cmd"
+    ((counts["$cmd"]++))
+    if [[ -z "${sample_pid[$cmd]:-}" ]]; then
+      sample_pid["$cmd"]="$pid"
+    fi
+  done
+  for cmd in "${!counts[@]}"; do
+    local pid="${sample_pid[$cmd]}"
+    local suffix=""
+    if (( counts["$cmd"] > 1 )); then
+      suffix=" (x${counts[$cmd]})"
+    fi
+    printf "  %-7s %s%s\n" "$pid" "$cmd" "$suffix"
   done
 }
 
@@ -112,7 +127,7 @@ attempt_stop_port80_processes() {
   for pid in "${pids_to_kill[@]}"; do
     local cmd
     cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<unknown>")
-    KILLED_PROCS+=("$pid $cmd (SIGTERM)")
+    KILLED_PROCS+=("$pid\t$cmd\tSIGTERM")
     kill "$pid" 2>/dev/null || true
   done
   sleep 2
@@ -127,7 +142,7 @@ attempt_stop_port80_processes() {
   for pid in "${stubborn[@]}"; do
     local cmd
     cmd=$(ps -p "$pid" -o cmd= 2>/dev/null || echo "<unknown>")
-    KILLED_PROCS+=("$pid $cmd (SIGKILL)")
+    KILLED_PROCS+=("$pid\t$cmd\tSIGKILL")
     kill -9 "$pid" 2>/dev/null || true
   done
   sleep 1
@@ -154,20 +169,76 @@ ensure_port80_clear() {
   echo "Port 80 is now free."
 }
 
+restart_stopped_services() {
+  if [[ ${#STOPPED_SERVICES[@]} -eq 0 ]]; then
+    return
+  fi
+
+  echo ""
+  echo "Restarting services that were stopped earlier..."
+  declare -A seen=()
+  local unique_commands=()
+  for cmd in "${STOPPED_SERVICES[@]}"; do
+    if [[ -z "${seen[$cmd]:-}" ]]; then
+      unique_commands+=("$cmd")
+      seen[$cmd]=1
+    fi
+  done
+
+  for cmd in "${unique_commands[@]}"; do
+    if eval "$cmd" >/dev/null 2>&1; then
+      RESTARTED_SERVICES+=("$cmd")
+      echo "  ✓ $cmd"
+    else
+      FAILED_RESTARTS+=("$cmd")
+      echo "  ✗ $cmd (please restart manually)"
+    fi
+  done
+}
+
+print_killed_summary() {
+  if [[ ${#KILLED_PROCS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  declare -A summary=()
+  for entry in "${KILLED_PROCS[@]}"; do
+    IFS=$'\t' read -r _pid cmd signal <<<"$entry"
+    local key="$cmd|$signal"
+    ((summary["$key"]++))
+  done
+
+  echo ""
+  echo "Processes terminated while freeing port 80:"
+  for key in "${!summary[@]}"; do
+    local cmd="${key%|*}"
+    local signal="${key##*|}"
+    local count="${summary[$key]}"
+    local label="$cmd"
+    if (( count > 1 )); then
+      label+=" (x${count})"
+    fi
+    echo "  $label — $signal"
+  done
+}
+
 print_restart_reminders() {
-  if [[ ${#STOPPED_SERVICES[@]} -gt 0 ]]; then
+  restart_stopped_services
+  print_killed_summary
+
+  if [[ ${#RESTARTED_SERVICES[@]} -gt 0 ]]; then
     echo ""
-    echo "Restart services that were stopped to free port 80:"
-    for cmd in "${STOPPED_SERVICES[@]}"; do
-      echo "  sudo $cmd"
+    echo "Services restarted automatically:"
+    for cmd in "${RESTARTED_SERVICES[@]}"; do
+      echo "  $cmd"
     done
   fi
 
-  if [[ ${#KILLED_PROCS[@]} -gt 0 ]]; then
+  if [[ ${#FAILED_RESTARTS[@]} -gt 0 ]]; then
     echo ""
-    echo "Processes terminated while freeing port 80 (restart manually if needed):"
-    for entry in "${KILLED_PROCS[@]}"; do
-      echo "  $entry"
+    echo "Unable to restart automatically—please run manually:"
+    for cmd in "${FAILED_RESTARTS[@]}"; do
+      echo "  $cmd"
     done
   fi
 }
