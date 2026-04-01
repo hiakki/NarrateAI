@@ -312,6 +312,54 @@ install_xvfb() {
 }
 
 # ── Install all prerequisites ────────────────────────────────────────────────
+configure_timezone() {
+  if [[ "${SKIP_TZ_PROMPT:-false}" == "true" ]]; then
+    return
+  fi
+
+  if [[ "$(uname)" != "Linux" ]]; then
+    return
+  fi
+
+  local current_tz
+  current_tz=$(readlink /etc/localtime 2>/dev/null || true)
+  if [[ "$current_tz" == *"Asia/Kolkata"* ]]; then
+    ok "System timezone already set to IST (Asia/Kolkata)"
+    return
+  fi
+
+  echo ""
+  info "System timezone"
+  echo "  Current: ${current_tz:-Unknown}"
+  read -rp "  Switch system timezone to IST (Asia/Kolkata)? [y/N] " tz_answer
+  if [[ "${tz_answer,,}" != "y" ]]; then
+    info "Keeping existing timezone. Export TZ=Asia/Kolkata in your shell if you need IST timestamps per process."
+    return
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    if sudo timedatectl set-timezone Asia/Kolkata; then
+      ok "System timezone set to IST (Asia/Kolkata)"
+    else
+      warn "timedatectl failed. Attempting to link /etc/localtime manually."
+    fi
+  fi
+
+  if [[ -L /etc/localtime ]]; then
+    local tz_link
+    tz_link=$(readlink /etc/localtime 2>/dev/null || true)
+    if [[ "$tz_link" == *"Asia/Kolkata"* ]]; then
+      return
+    fi
+  fi
+
+  if sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime; then
+    ok "System timezone set to IST (Asia/Kolkata) via /etc/localtime"
+  else
+    warn "Could not set timezone automatically. Set it manually or export TZ=Asia/Kolkata when running PM2."
+  fi
+}
+
 install_all_prereqs() {
   step "Installing prerequisites"
   detect_os
@@ -326,10 +374,13 @@ install_all_prereqs() {
   install_xvfb
 
   if [[ "$(uname)" == "Linux" ]]; then
+    configure_timezone
     if ! command -v Xvfb &>/dev/null; then
       warn "Xvfb not available — Chrome-based flows may require running under xvfb-run."
     else
-      ok "Xvfb available — use 'xvfb-run -s "-screen 0 1280x720x24" pnpm tsx scripts/cookie-extract.ts' for interactive cookie setup."
+      ok "Xvfb available — use './scripts/run_cookie_extractor.sh [facebook|instagram|both]' for interactive cookie setup."
+      info "After the extractor runs, download data/ytdlp-cookies.txt from this server and upload it in NarrateAI (Settings → Content Discovery Access)."
+      info "Example download command: scp user@server:$PROJECT_DIR/data/ytdlp-cookies.txt ./ytdlp-cookies.txt"
     fi
   fi
 }
@@ -487,6 +538,7 @@ module.exports = {
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm start'",
       env: { NODE_ENV: "production", PORT: "${PORT}", NEXT_TELEMETRY_DISABLED: "1" },
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "512M",
     },
     {
@@ -494,6 +546,7 @@ module.exports = {
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker'",
       env: { NODE_ENV: "production" },
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
     {
@@ -501,6 +554,7 @@ module.exports = {
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm worker:clip'",
       env: { NODE_ENV: "production" },
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "1G",
     },
     {
@@ -508,6 +562,7 @@ module.exports = {
       script: "/bin/bash",
       args: "-lc 'cd ${PROJECT_DIR} && pnpm scheduler'",
       env: { NODE_ENV: "production" },
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       max_memory_restart: "256M",
     },
   ],
@@ -760,6 +815,7 @@ USAGE
     info "FB/IG Content Discovery (optional)"
     info "To discover and clip trending videos from Facebook and Instagram,"
     info "you can log in now. A browser window will open — just sign in."
+    info "Alternatively, run './scripts/run_cookie_extractor.sh both' later to capture cookies."
     echo ""
     read -rp "  Set up Facebook/Instagram access now? [y/N] " cookie_answer
     if [[ "${cookie_answer,,}" == "y" ]]; then

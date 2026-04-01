@@ -10,6 +10,18 @@ From `contrib/nginx`:
 
 This installs nginx (Homebrew on macOS, apt/dnf/apk on Linux when available), optionally installs **mkcert** on macOS, runs `mkcert -install` when mkcert is present, creates temp dirs under this tree, runs `./scripts/gen-local-ssl.sh`, optionally appends `/etc/hosts`, and runs `nginx -t`. It then prints exact commands to start and stop nginx (binding to 80/443 usually needs `sudo`).
 
+### Production certificates (Let's Encrypt)
+
+Use the helper script to obtain publicly trusted certs once your DNS points to the server:
+
+```bash
+cd contrib/NarrateAI/ssl
+sudo ./scripts/issue-letsencrypt.sh --email you@example.com
+```
+
+The script installs certbot (if missing), requests a certificate for
+`app.narrateai.online`, `chat.narrateai.online`, `narrateai.online`, and `www.narrateai.online`, and reports where the files are stored (`/etc/letsencrypt/live/<name>/`). Update `nginx.conf` to reference those paths and reload nginx. Run `sudo certbot renew --dry-run` to verify renewal. A cron/systemd timer is usually installed with certbot to automate renewal.
+
 ---
 
 | Host | Upstream |
