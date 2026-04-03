@@ -50,7 +50,7 @@ const { log, warn, error: err, debug } = logger;
 const sfl = getSchedulerFileLogger();
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
 const RECONCILE_FORCE_PROMOTE_MS =
-  Math.max(5, parseInt(process.env.RECONCILE_FORCE_PROMOTE_MINUTES ?? "30", 10)) * 60 * 1000;
+  Math.max(5, parseInt(process.env.RECONCILE_FORCE_PROMOTE_MINUTES ?? "15", 10)) * 60 * 1000;
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
@@ -115,6 +115,19 @@ interface FailedVideoRow {
     character?: { fullPrompt: string } | null;
     user: AutoUser;
   };
+}
+
+function derivePostIdFromUrl(platform: string, url?: string | null): string | null {
+  if (!url) return null;
+  if (platform === "YOUTUBE") {
+    const m = url.match(/(?:shorts\/|watch\?v=)([\w-]+)/i);
+    return m?.[1] ?? null;
+  }
+  if (platform === "FACEBOOK") {
+    const m = url.match(/facebook\.com\/reel\/(\d+)/i);
+    return m?.[1] ?? null;
+  }
+  return null;
 }
 
 const SCHEDULER_REASON_CODES = {
@@ -967,7 +980,8 @@ async function reconcileScheduledPosts() {
           let isLive = false;
           // Intentionally only used for YT/FB checks here; IG handled via app-level delayed jobs.
 
-          if (entry.postId && user) {
+          const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
+          if (postId && user) {
             try {
               if (entry.platform === "YOUTUBE") {
                 const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
@@ -975,10 +989,10 @@ async function reconcileScheduledPosts() {
                   const accessToken = decrypt(account.accessTokenEnc);
                   const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
                   const privacy = await getYouTubeVideoPrivacy(
-                    accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
+                    accessToken, refreshToken, postId, account.platformUserId, user.id,
                   );
                   isLive = privacy === "public";
-                  if (isLive) log(`YT ${video.id}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
+                  if (isLive) log(`YT ${video.id}: postId=${postId} → public (${overdueMins}m overdue)`);
                 }
               } else if (entry.platform === "FACEBOOK") {
                 const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
@@ -991,9 +1005,9 @@ async function reconcileScheduledPosts() {
                       );
                     } catch { /* use existing token */ }
                   }
-                  const published = await getFacebookVideoPublished(entry.postId, accessToken);
+                  const published = await getFacebookVideoPublished(postId, accessToken);
                   isLive = published === true;
-                  if (isLive) log(`FB ${video.id}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+                  if (isLive) log(`FB ${video.id}: postId=${postId} → published (${overdueMins}m overdue)`);
                 }
               } else if (entry.platform === "INSTAGRAM") {
                 debug(`IG ${video.id}: deferred/native entry (handled by app delayed jobs)`);
@@ -1368,7 +1382,7 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
 
     type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string; error?: string };
       const entries = getPlatformEntriesArray(video.postedPlatforms) as PlatEntry[];
-      const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
+      const scheduledEntries = entries.filter((e) => e.success === "scheduled");
       if (scheduledEntries.length === 0) {
         log(`[RECONCILE] Video ${videoId}: no scheduled entries to check`);
         return;
@@ -1391,19 +1405,20 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
 
       let isLive = false;
 
+      const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
       try {
-        if (entry.platform === "YOUTUBE" && user) {
+        if (entry.platform === "YOUTUBE" && user && postId) {
           const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
           if (account) {
             const accessToken = decrypt(account.accessTokenEnc);
             const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
             const privacy = await getYouTubeVideoPrivacy(
-              accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+              accessToken, refreshToken, postId, account.platformUserId, user.id,
             );
             isLive = privacy === "public";
-            if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
+            if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${postId} → public (${overdueMins}m overdue)`);
           }
-        } else if (entry.platform === "FACEBOOK" && user) {
+        } else if (entry.platform === "FACEBOOK" && user && postId) {
           const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
           if (account) {
             let accessToken = decrypt(account.accessTokenEnc);
@@ -1414,10 +1429,12 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
                 );
               } catch { /* use existing */ }
             }
-            const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+            const published = await getFacebookVideoPublished(postId, accessToken);
             isLive = published === true;
-            if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+            if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${postId} → published (${overdueMins}m overdue)`);
           }
+        } else if ((entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && !postId) {
+          warn(`[RECONCILE] ${entry.platform} ${videoId}: scheduled entry missing postId/url`);
         }
       } catch (checkErr) {
         const msg = checkErr instanceof Error ? checkErr.message : String(checkErr);
