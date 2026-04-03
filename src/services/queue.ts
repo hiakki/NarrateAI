@@ -247,7 +247,11 @@ export async function clearPostQueueJobsForVideo(videoId: string): Promise<void>
   }
 }
 
-async function clearExistingJob(queue: Queue<PostVideoJobData>, jobId: string): Promise<boolean> {
+async function clearExistingJob(
+  queue: Queue<PostVideoJobData>,
+  jobId: string,
+  opts?: { replaceActive?: boolean },
+): Promise<boolean> {
   try {
     const existing = await queue.getJob(jobId);
     if (existing) {
@@ -255,8 +259,19 @@ async function clearExistingJob(queue: Queue<PostVideoJobData>, jobId: string): 
       if (["failed", "completed", "unknown", "waiting", "delayed"].includes(state)) {
         await existing.remove();
       } else if (state === "active") {
-        log.log(`Post job ${jobId} already active, skipping re-enqueue`);
-        return false;
+        if (opts?.replaceActive) {
+          try {
+            await existing.moveToFailed(new Error("Replaced by cooldown retry"), "0", true);
+            await existing.remove();
+            log.warn(`Replaced active post job ${jobId} for cooldown retry`);
+          } catch (e) {
+            log.warn(`Could not replace active post job ${jobId}:`, e);
+            return false;
+          }
+        } else {
+          log.log(`Post job ${jobId} already active, skipping re-enqueue`);
+          return false;
+        }
       }
     }
   } catch (e) {
@@ -392,7 +407,7 @@ export async function enqueueScheduledPost(
 
   if (igPlatforms.length > 0) {
     const jobId = `post-${videoId}-ig`;
-    const ok = await clearExistingJob(queue, jobId);
+    const ok = await clearExistingJob(queue, jobId, { replaceActive: true });
     if (ok) {
       const delay = scheduledPostTime
         ? Math.max(0, scheduledPostTime.getTime() - Date.now())

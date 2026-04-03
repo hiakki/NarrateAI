@@ -150,7 +150,11 @@ function shouldSkip(entry: PlatformEntry | undefined): { skip: boolean; reason: 
  * Atomically claim a platform for uploading by writing an "uploading" entry.
  * Returns true if the claim succeeded, false if someone else got there first.
  */
-async function claimPlatform(videoId: string, platform: string): Promise<boolean> {
+async function claimPlatform(
+  videoId: string,
+  platform: string,
+  opts?: { allowScheduledClaim?: boolean },
+): Promise<boolean> {
   return db.$transaction(async (tx) => {
     const row = await tx.video.findUnique({
       where: { id: videoId },
@@ -159,7 +163,9 @@ async function claimPlatform(videoId: string, platform: string): Promise<boolean
     const entries = getPlatformEntriesArray(row?.postedPlatforms);
     const existing = entries.find((entry) => entry.platform === platform);
     const { skip, reason } = shouldSkip(existing);
-    if (skip) {
+    const allowScheduledClaim = opts?.allowScheduledClaim === true;
+    const scheduledBypass = allowScheduledClaim && existing?.success === "scheduled";
+    if (skip && !scheduledBypass) {
       log.log(`Claim denied for ${platform} on ${videoId}: ${reason}`);
       return false;
     }
@@ -386,7 +392,10 @@ export async function postVideoToSocials(
 
   // Post to all platforms in parallel
   async function postToPlatform(platform: string): Promise<PostResult> {
-    const claimed = await claimPlatform(videoId, platform);
+    const claimed = await claimPlatform(videoId, platform, {
+      // IG delayed jobs should be allowed to claim previously "scheduled" entries.
+      allowScheduledClaim: platform === "INSTAGRAM" && isIgOnlyImmediateJob,
+    });
     if (!claimed) {
       fileLogger?.poster(`${platform}: already claimed/handled`);
       return { platform, success: true, postId: "already-handled" };
