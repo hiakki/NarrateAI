@@ -386,6 +386,11 @@ async function processAutomation(
           enableHflip: auto.enableHflip ?? false,
         },
         targetPlatforms: (auto.targetPlatforms ?? []) as string[],
+        triggerSource: trigger,
+        triggerType: "scheduler",
+        triggerLabel: triggerText,
+        triggerReason: runReason,
+        triggeredAt: new Date().toISOString(),
       });
 
       const msg = `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
@@ -536,6 +541,11 @@ async function processAutomation(
       imageProvider: providers.image,
       imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
+      triggerSource: trigger,
+      triggerType: "scheduler",
+      triggerLabel: triggerText,
+      triggerReason: runReason,
+      triggeredAt: new Date().toISOString(),
     });
 
     log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
@@ -749,6 +759,11 @@ async function recoverStuckVideos() {
               enableHflip: (auto?.enableHflip as boolean) ?? false,
             },
             targetPlatforms: ((auto?.targetPlatforms ?? []) as string[]),
+            triggerSource: "safety-net-recovery",
+            triggerType: "recovery",
+            triggerLabel: "Safety Net Recovery",
+            triggerReason: `Recovered stuck ${video.status} job`,
+            triggeredAt: new Date().toISOString(),
           });
 
           log(`[RETRY-CLIP] Re-enqueued clip video ${video.id} (attempt ${retryCount + 1}/${MAX_AUTO_RETRIES})`);
@@ -816,6 +831,11 @@ async function recoverStuckVideos() {
           imageToVideoProvider: usr.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
           characterPrompt: video.series.character?.fullPrompt ?? undefined,
           aspectRatio: niche?.aspectRatio ?? "9:16",
+          triggerSource: "safety-net-recovery",
+          triggerType: "recovery",
+          triggerLabel: "Safety Net Recovery",
+          triggerReason: `Recovered stuck ${video.status} job`,
+          triggeredAt: new Date().toISOString(),
         });
 
         log(`Re-enqueued video ${video.id} for recovery (will resume from ${hasCheckpoint ? `stage after [${completedStages.join(",")}]` : "beginning"})`);
@@ -1069,8 +1089,8 @@ const postWorker = new BullWorker<PostVideoJobData>(
     const schedDate = scheduledAt ? new Date(scheduledAt) : undefined;
     const isIgOnly = platforms.length === 1 && platforms[0] === "INSTAGRAM";
 
-    log(`[POST-WORKER] Posting video ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
-    sfl.action(`POST-WORKER: posting ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
+    log(`[POST-WORKER] Posting video ${videoId} (scheduled=${scheduledAt ?? "immediate"})`);
+    sfl.action(`POST-WORKER: posting ${videoId} (scheduled=${scheduledAt ?? "immediate"})`);
 
     const video = await db.video.findUnique({
       where: { id: videoId },
@@ -1101,7 +1121,10 @@ const postWorker = new BullWorker<PostVideoJobData>(
       ? getAutomationFileLogger(userInfo.id, userInfo.name ?? userInfo.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
       : null;
 
-    fl?.poster(`POST-WORKER: posting video=${videoId} → ${platforms.join(", ")}`);
+    fl?.poster(`POST-WORKER: posting video=${videoId}`);
+    for (const platform of platforms) {
+      fl?.poster(`POST-WORKER: platform=${platform} scheduled=${scheduledAt ?? "immediate"}`);
+    }
 
     try {
       const results = await postVideoToSocials(
@@ -1119,11 +1142,21 @@ const postWorker = new BullWorker<PostVideoJobData>(
 
       if (ok.length > 0) {
         log(`[POST-WORKER] ${videoId} OK → ${ok.join(", ")}`);
-        fl?.poster(`POST OK: ${ok.join(", ")}`);
       }
       if (failed.length > 0) {
         log(`[POST-WORKER] ${videoId} FAIL → ${failed.join("; ")}`);
-        fl?.poster(`POST FAIL: ${failed.join("; ")}`);
+      }
+      for (const r of results) {
+        const postUrl = r.postUrl ?? (r.postId ? (r.platform === "YOUTUBE"
+          ? `https://youtube.com/shorts/${r.postId}`
+          : r.platform === "FACEBOOK"
+            ? `https://www.facebook.com/reel/${r.postId}`
+            : undefined) : undefined);
+        if (r.success) {
+          fl?.poster(`POST RESULT: platform=${r.platform} status=ok postId=${r.postId ?? "?"}${postUrl ? ` url=${postUrl}` : ""}`);
+        } else {
+          fl?.poster(`POST RESULT: platform=${r.platform} status=failed error=${r.error ?? "unknown"}`);
+        }
       }
 
       // Check for cooldown entries that need re-enqueue

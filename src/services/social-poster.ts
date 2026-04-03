@@ -579,7 +579,9 @@ export async function postVideoToSocials(
             await db.video.update({ where: { id: videoId }, data: { postedPlatforms: [...entries.values()] as never } });
           }
         }
-        fileLogger?.poster(`${platform}: ${successStatus === "scheduled" ? "SCHEDULED" : "POSTED"} postId=${result.postId ?? "?"}`);
+        fileLogger?.poster(
+          `${platform}: ${successStatus === "scheduled" ? "SCHEDULED" : "POSTED"} postId=${result.postId ?? "?"}${url ? ` url=${url}` : ""}`,
+        );
         return { platform, ...result };
       } else {
         const errMsg = result.error ?? "Unknown error";

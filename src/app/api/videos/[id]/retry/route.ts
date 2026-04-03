@@ -98,6 +98,11 @@ export async function POST(
           enableHflip: video.series.automation?.enableHflip ?? false,
         },
         targetPlatforms: (video.series.automation?.targetPlatforms as string[] | null) ?? (video.scheduledPlatforms as string[] | null) ?? [],
+        triggerSource: "video-retry",
+        triggerType: "manual",
+        triggerLabel: "Retry",
+        triggerReason: "User retried failed clip video",
+        triggeredAt: new Date().toISOString(),
       });
 
       return NextResponse.json({ data: { videoId: video.id, status: "QUEUED", pipeline: "clip-repurpose" } });
@@ -188,6 +193,11 @@ export async function POST(
       imageToVideoProvider: video.series.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO ?? undefined,
       characterPrompt: video.series.character?.fullPrompt ?? undefined,
       aspectRatio: niche?.aspectRatio ?? "9:16",
+      triggerSource: "video-retry",
+      triggerType: "manual",
+      triggerLabel: "Retry",
+      triggerReason: "User retried failed video",
+      triggeredAt: new Date().toISOString(),
     });
 
     return NextResponse.json({ data: { videoId: video.id, status: "QUEUED" } });

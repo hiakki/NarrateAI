@@ -16,6 +16,36 @@ function parseLines(content: string) {
   });
 }
 
+function extractVideoRunLines(
+  lines: Array<{ raw: string; ts: string | null; tag: string | null; message: string }>,
+  videoId: string,
+) {
+  const directMatches = lines.filter((line) => line.raw.includes(videoId) || line.message.includes(`video=${videoId}`));
+  if (directMatches.length === 0) return [];
+
+  const startIdx = lines.findIndex((line) => line.message.includes(`JOB START: video=${videoId}`));
+  if (startIdx === -1) return directMatches;
+
+  let endIdx = lines.length - 1;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const msg = lines[i].message;
+    if (msg.startsWith("JOB START: video=") && !msg.includes(`video=${videoId}`)) {
+      endIdx = i - 1;
+      break;
+    }
+    if (msg.includes("FAILED:") && msg.includes(videoId)) {
+      endIdx = i;
+      break;
+    }
+    if (msg.startsWith("READY:") && msg.includes(videoId)) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  return lines.slice(startIdx, endIdx + 1);
+}
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -60,13 +90,22 @@ export async function GET(
   const generationContext = (ctxRoot.generationContext && typeof ctxRoot.generationContext === "object")
     ? (ctxRoot.generationContext as Record<string, unknown>)
     : null;
+  const triggerFallback = generationContext ?? (() => {
+    const t = (ctxRoot.triggerType && typeof ctxRoot.triggerType === "string") ? ctxRoot.triggerType : null;
+    const s = (ctxRoot.triggerSource && typeof ctxRoot.triggerSource === "string") ? ctxRoot.triggerSource : null;
+    const label = (ctxRoot.triggerLabel && typeof ctxRoot.triggerLabel === "string") ? ctxRoot.triggerLabel : null;
+    const reason = (ctxRoot.triggerReason && typeof ctxRoot.triggerReason === "string") ? ctxRoot.triggerReason : null;
+    const at = (ctxRoot.triggeredAt && typeof ctxRoot.triggeredAt === "string") ? ctxRoot.triggeredAt : null;
+    if (!t && !s && !label && !reason && !at) return null;
+    return { triggerType: t, triggerSource: s, triggerLabel: label, reason, triggeredAt: at };
+  })();
 
   const automation = video.series.automation;
   if (!automation) {
     return NextResponse.json({
       data: {
         videoId,
-        trigger: generationContext,
+        trigger: triggerFallback,
         logDate: null,
         lines: [],
       },
@@ -81,7 +120,7 @@ export async function GET(
       data: {
         videoId,
         automationId: automation.id,
-        trigger: generationContext,
+        trigger: triggerFallback,
         logDate: null,
         lines: [],
       },
@@ -94,14 +133,13 @@ export async function GET(
   const content = (await readLogFile(logDir, chosenDate)) ?? "";
   const parsed = parseLines(content);
 
-  const needle = `video=${videoId}`;
-  const filtered = parsed.filter((line) => line.raw.includes(videoId) || line.message.includes(needle));
+  const filtered = extractVideoRunLines(parsed, videoId);
 
   return NextResponse.json({
     data: {
       videoId,
       automationId: automation.id,
-      trigger: generationContext,
+      trigger: triggerFallback,
       logDate: chosenDate,
       lines: filtered,
       lineCount: filtered.length,

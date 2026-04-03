@@ -152,6 +152,11 @@ export async function POST(
       imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
       aspectRatio: getNicheById(auto.niche)?.aspectRatio ?? "9:16",
+      triggerSource: "user-run-now",
+      triggerType: "manual",
+      triggerLabel: "Run Now",
+      triggerReason: "User clicked Run Now from automation page",
+      triggeredAt: triggeredAt.toISOString(),
     });
 
     await db.schedulerLog.create({

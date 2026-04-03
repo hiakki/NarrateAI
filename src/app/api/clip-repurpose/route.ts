@@ -262,6 +262,11 @@ export async function POST(req: NextRequest) {
           enableHflip: auto.enableHflip,
         },
         targetPlatforms,
+        triggerSource: "user-run-now",
+        triggerType: "manual",
+        triggerLabel: "Run Now",
+        triggerReason: "User clicked Run Now for clip automation",
+        triggeredAt: triggeredAt.toISOString(),
       });
 
       return NextResponse.json({ videoId: video.id, message: "Clip job queued", scheduledPostTime });

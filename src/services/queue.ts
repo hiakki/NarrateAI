@@ -32,6 +32,11 @@ export interface VideoJobData {
   characterPrompt?: string;
   /** Output aspect ratio. Default 9:16 (Reels/Shorts). Use 16:9 for cinematic/long-form (e.g. character-storytelling niche). */
   aspectRatio?: "9:16" | "16:9";
+  triggerSource?: string;
+  triggerType?: "manual" | "scheduler" | "recovery" | "system";
+  triggerLabel?: string;
+  triggerReason?: string;
+  triggeredAt?: string;
 }
 
 function createRedisConnection() {
@@ -114,6 +119,11 @@ export interface ClipRepurposeJobData {
     enableHflip?: boolean;
   };
   targetPlatforms: string[];
+  triggerSource?: string;
+  triggerType?: "manual" | "scheduler" | "recovery" | "system";
+  triggerLabel?: string;
+  triggerReason?: string;
+  triggeredAt?: string;
 }
 
 let clipQueueInstance: Queue<ClipRepurposeJobData> | null = null;
@@ -341,6 +351,9 @@ export async function enqueueScheduledPost(
     if (ok) {
       const at = scheduledPostTime?.toISOString() ?? "immediate";
       log.log(`Enqueuing ${jobId}: ${nativePlatforms.join(",")} nativeSchedule=${at}`);
+      for (const platform of nativePlatforms) {
+        log.log(`Scheduling ${platform} for video=${videoId} at ${at} (native platform scheduler)`);
+      }
       const job = await queue.add("post-video", {
         videoId,
         platforms: nativePlatforms,
@@ -360,6 +373,7 @@ export async function enqueueScheduledPost(
       const delaySec = Math.round(delay / 1000);
       const at = scheduledPostTime?.toISOString() ?? "immediate";
       log.log(`Enqueuing ${jobId}: IG appSchedule=${at} (delay=${delaySec}s)`);
+      log.log(`Scheduling INSTAGRAM for video=${videoId} at ${at} (app-level delayed post job)`);
       // No scheduledAt → worker posts immediately when the delayed job fires
       const job = await queue.add("post-video", {
         videoId,

@@ -235,6 +235,13 @@ const worker = new Worker<ClipRepurposeJobData>(
         data: {
           sourceUrl: downloadTarget.url,
           sourceMetadata: {
+            generationContext: {
+              triggerSource: (job.data as { triggerSource?: string }).triggerSource ?? "unknown",
+              triggerType: (job.data as { triggerType?: string }).triggerType ?? "unknown",
+              triggerLabel: (job.data as { triggerLabel?: string }).triggerLabel ?? "Unknown",
+              reason: (job.data as { triggerReason?: string }).triggerReason ?? "Clip repurpose automation run",
+              triggeredAt: (job.data as { triggeredAt?: string }).triggeredAt ?? new Date().toISOString(),
+            },
             niche: nicheKey,
             platform: downloadTarget.platform,
             channelName: downloadTarget.channelName,
@@ -413,6 +420,13 @@ const worker = new Worker<ClipRepurposeJobData>(
           videoUrl: relVideoUrl,
           duration: clipDuration,
           sourceMetadata: {
+            generationContext: {
+              triggerSource: (job.data as { triggerSource?: string }).triggerSource ?? "unknown",
+              triggerType: (job.data as { triggerType?: string }).triggerType ?? "unknown",
+              triggerLabel: (job.data as { triggerLabel?: string }).triggerLabel ?? "Unknown",
+              reason: (job.data as { triggerReason?: string }).triggerReason ?? "Clip repurpose automation run",
+              triggeredAt: (job.data as { triggeredAt?: string }).triggeredAt ?? new Date().toISOString(),
+            },
             niche: nicheKey,
             platform: downloadTarget.platform,
             channelName: downloadTarget.channelName,
