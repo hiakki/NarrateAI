@@ -46,6 +46,29 @@ function extractVideoRunLines(
   return lines.slice(startIdx, endIdx + 1);
 }
 
+function parseTriggerFromSchedulerMessage(message: string): {
+  triggerSource: string | null;
+  triggerLabel: string | null;
+  reason: string | null;
+} {
+  const triggerMatch = message.match(/\[trigger=([^\]]+)\]/);
+  const triggerSource = triggerMatch?.[1] ?? null;
+
+  const labelMap: Record<string, string> = {
+    "build-window-cron": "BUILD_ALL_TIME window",
+    "catch-up-cron": "Catch-up window",
+    startup: "Scheduler startup",
+    "post-optimize": "Post-optimize sweep",
+    "user-run-now": "Run Now",
+  };
+  const triggerLabel = triggerSource ? (labelMap[triggerSource] ?? triggerSource) : null;
+
+  const reasonMatch = message.match(/Ran \([^)]+\):\s*([^.]*)/);
+  const reason = reasonMatch?.[1]?.trim() ?? null;
+
+  return { triggerSource, triggerLabel, reason };
+}
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -99,6 +122,7 @@ export async function GET(
     if (!t && !s && !label && !reason && !at) return null;
     return { triggerType: t, triggerSource: s, triggerLabel: label, reason, triggeredAt: at };
   })();
+  let resolvedTrigger = triggerFallback;
 
   const automation = video.series.automation;
   if (!automation) {
@@ -114,13 +138,32 @@ export async function GET(
 
   const userDisplay = video.series.user.name ?? video.series.user.email?.split("@")[0] ?? "user";
   const logDir = automationLogDir(video.series.user.id, userDisplay, automation.id, automation.name);
+
+  if (!resolvedTrigger) {
+    const lastRunLog = await db.schedulerLog.findFirst({
+      where: { automationId: automation.id, videoId },
+      orderBy: { createdAt: "desc" },
+      select: { message: true, createdAt: true },
+    });
+    if (lastRunLog?.message) {
+      const parsed = parseTriggerFromSchedulerMessage(lastRunLog.message);
+      resolvedTrigger = {
+        triggerType: "scheduler",
+        triggerSource: parsed.triggerSource,
+        triggerLabel: parsed.triggerLabel,
+        reason: parsed.reason,
+        triggeredAt: lastRunLog.createdAt.toISOString(),
+      };
+    }
+  }
+
   const dates = await listLogDates(logDir);
   if (dates.length === 0) {
     return NextResponse.json({
       data: {
         videoId,
         automationId: automation.id,
-        trigger: triggerFallback,
+        trigger: resolvedTrigger,
         logDate: null,
         lines: [],
       },
@@ -139,7 +182,7 @@ export async function GET(
     data: {
       videoId,
       automationId: automation.id,
-      trigger: triggerFallback,
+      trigger: resolvedTrigger,
       logDate: chosenDate,
       lines: filtered,
       lineCount: filtered.length,

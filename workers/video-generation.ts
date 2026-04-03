@@ -639,6 +639,13 @@ const worker = new Worker<VideoJobData>(
           await enqueueScheduledPost(videoId, schedAt, platforms);
           log.log(`[POST]`, `Enqueued delayed post for ${schedAt?.toISOString() ?? "immediate"} → ${platforms.join(", ")}`);
           fl?.worker(`POST: enqueued for ${schedAt?.toISOString() ?? "immediate"} → ${platforms.join(", ")}`);
+          for (const platform of platforms) {
+            if (platform === "INSTAGRAM") {
+              fl?.poster(`SCHEDULE: INSTAGRAM app-level delayed post at ${schedAt?.toISOString() ?? "immediate"} (no native IG scheduler)`);
+            } else {
+              fl?.poster(`SCHEDULE: ${platform} native schedule at ${schedAt?.toISOString() ?? "immediate"}`);
+            }
+          }
         } else {
           log.log(`[POST]`, `No target platforms, skipping post enqueue`);
         }
