@@ -464,6 +464,9 @@ const worker = new Worker<ClipRepurposeJobData>(
           await enqueueScheduledPost(videoId, schedAt, jobTargets);
           log.log(`[SCHEDULE]`, `Enqueued delayed post for ${schedAt?.toISOString() ?? "immediate"} → ${jobTargets.join(", ")}`);
           fl?.poster(`SCHEDULE: video=${videoId} enqueued for ${schedAt?.toISOString() ?? "immediate"} → ${jobTargets.join(", ")}`);
+          if (jobTargets.includes("INSTAGRAM")) {
+            fl?.poster(`POST-WORKER: platform=INSTAGRAM scheduled=${schedAt?.toISOString() ?? "immediate"} (delayed job; executes at schedule time)`);
+          }
           for (const platform of jobTargets) {
             if (platform === "INSTAGRAM") {
               fl?.poster(`SCHEDULE: INSTAGRAM app-level delayed post at ${schedAt?.toISOString() ?? "immediate"} (no native IG scheduler)`);

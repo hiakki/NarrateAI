@@ -1,8 +1,35 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { createLogger } from "@/lib/logger";
+import { db } from "@/lib/db";
+import { getPlatformEntriesArray, upsertPlatformEntry } from "@/lib/platform-utils";
 
 const log = createLogger("Queue");
+
+async function markInstagramScheduled(videoId: string, scheduledPostTime: Date | null): Promise<void> {
+  try {
+    const row = await db.video.findUnique({
+      where: { id: videoId },
+      select: { postedPlatforms: true },
+    });
+    if (!row) return;
+    const entries = getPlatformEntriesArray(row.postedPlatforms);
+    const existing = entries.find((e) => e.platform === "INSTAGRAM");
+    if (existing?.success === true) return; // already posted, keep terminal state
+
+    const next = upsertPlatformEntry(entries, {
+      platform: "INSTAGRAM",
+      success: "scheduled",
+      scheduledFor: scheduledPostTime?.toISOString(),
+    });
+    await db.video.update({
+      where: { id: videoId },
+      data: { postedPlatforms: next as never },
+    });
+  } catch (e) {
+    log.warn(`Could not mark IG scheduled for ${videoId}:`, e);
+  }
+}
 
 export interface VideoJobData {
   videoId: string;
@@ -374,6 +401,7 @@ export async function enqueueScheduledPost(
       const at = scheduledPostTime?.toISOString() ?? "immediate";
       log.log(`Enqueuing ${jobId}: IG appSchedule=${at} (delay=${delaySec}s)`);
       log.log(`Scheduling INSTAGRAM for video=${videoId} at ${at} (app-level delayed post job)`);
+      await markInstagramScheduled(videoId, scheduledPostTime);
       // No scheduledAt → worker posts immediately when the delayed job fires
       const job = await queue.add("post-video", {
         videoId,

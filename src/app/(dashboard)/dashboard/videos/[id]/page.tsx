@@ -239,6 +239,7 @@ export default function VideoDetailPage() {
   const [videoLogDate, setVideoLogDate] = useState<string | null>(null);
   const [videoLogLines, setVideoLogLines] = useState<Array<{ raw: string; ts: string | null; tag: string | null; message: string }>>([]);
   const [triggerContext, setTriggerContext] = useState<Record<string, unknown> | null>(null);
+  const [copyLogDone, setCopyLogDone] = useState(false);
 
   async function handleSaveLink(platform: string) {
     const url = linkInput.trim();
@@ -618,6 +619,17 @@ export default function VideoDetailPage() {
     fetchVideoLogs();
   }, [fetchVideoLogs, video?.status]);
 
+  async function handleCopyAllLogs() {
+    try {
+      const text = videoLogLines.map((l) => l.raw).join("\n");
+      await navigator.clipboard.writeText(text);
+      setCopyLogDone(true);
+      setTimeout(() => setCopyLogDone(false), 1500);
+    } catch {
+      // no-op: clipboard can fail in some browsers/contexts
+    }
+  }
+
   useEffect(() => {
     if (providerData?.defaults?.imageProvider && providerData.available?.image?.some((p) => p.id === providerData.defaults.imageProvider)) {
       setRerunImageProvider(providerData.defaults.imageProvider);
@@ -799,9 +811,21 @@ export default function VideoDetailPage() {
 
       <Card className="mb-6">
         <CardContent className="p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <ScrollText className="h-4 w-4" />
-            <h2 className="text-sm font-semibold">End-to-End Logs</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ScrollText className="h-4 w-4" />
+              <h2 className="text-sm font-semibold">End-to-End Logs</h2>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleCopyAllLogs}
+              disabled={videoLogLines.length === 0}
+            >
+              {copyLogDone ? "Copied" : "Copy All"}
+            </Button>
           </div>
 
           <div className="text-xs text-muted-foreground rounded border bg-muted/20 p-2">
