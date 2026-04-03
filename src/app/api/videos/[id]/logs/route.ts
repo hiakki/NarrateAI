@@ -16,6 +16,11 @@ function parseLines(content: string) {
   });
 }
 
+function extractVideoId(msg: string): string | null {
+  const m = msg.match(/video=([a-z0-9]+)/i);
+  return m?.[1] ?? null;
+}
+
 function extractVideoRunLines(
   lines: Array<{ raw: string; ts: string | null; tag: string | null; message: string }>,
   videoId: string,
@@ -24,12 +29,26 @@ function extractVideoRunLines(
   if (directMatches.length === 0) return [];
 
   const startIdx = lines.findIndex((line) => line.message.includes(`JOB START: video=${videoId}`));
-  if (startIdx === -1) return directMatches;
+  const firstDirectIdx = lines.findIndex((line) => line.raw.includes(videoId) || line.message.includes(`video=${videoId}`));
+  const actualStart = startIdx >= 0 ? startIdx : firstDirectIdx;
+  if (actualStart < 0) return directMatches;
 
   let endIdx = lines.length - 1;
-  for (let i = startIdx + 1; i < lines.length; i++) {
+  for (let i = actualStart + 1; i < lines.length; i++) {
     const msg = lines[i].message;
+    const tag = lines[i].tag;
     if (msg.startsWith("JOB START: video=") && !msg.includes(`video=${videoId}`)) {
+      endIdx = i - 1;
+      break;
+    }
+    // Another worker/poster block for a different video usually indicates we should stop.
+    const seenVideoId = extractVideoId(msg);
+    if (seenVideoId && seenVideoId !== videoId && (tag === "WORKER" || tag === "POSTER")) {
+      endIdx = i - 1;
+      break;
+    }
+    // Avoid trailing unrelated scheduler noise that has no video linkage.
+    if (tag === "SCHEDULER" && !msg.includes(videoId)) {
       endIdx = i - 1;
       break;
     }
@@ -43,7 +62,7 @@ function extractVideoRunLines(
     }
   }
 
-  return lines.slice(startIdx, endIdx + 1);
+  return lines.slice(actualStart, endIdx + 1);
 }
 
 function parseTriggerFromSchedulerMessage(message: string): {
@@ -170,20 +189,46 @@ export async function GET(
     });
   }
 
-  // Prefer the video creation day, then fallback to newest available file.
+  // Read this video's date and all subsequent dates (newer) so cross-day
+  // scheduling/reconcile activity stays visible.
   const videoDate = video.createdAt.toISOString().slice(0, 10);
-  const chosenDate = dates.includes(videoDate) ? videoDate : dates[0];
-  const content = (await readLogFile(logDir, chosenDate)) ?? "";
-  const parsed = parseLines(content);
+  const relevantDates = dates
+    .filter((d) => d >= videoDate)
+    .sort()
+    .slice(-7); // cap to recent week for response size
 
-  const filtered = extractVideoRunLines(parsed, videoId);
+  const parsedByDate: Array<{ date: string; lines: Array<{ raw: string; ts: string | null; tag: string | null; message: string }> }> = [];
+  for (const d of relevantDates) {
+    const content = (await readLogFile(logDir, d)) ?? "";
+    if (!content) continue;
+    const parsed = parseLines(content);
+    const block = extractVideoRunLines(parsed, videoId);
+    if (block.length > 0) parsedByDate.push({ date: d, lines: block });
+  }
+
+  const filtered = parsedByDate.flatMap((x) => x.lines);
+  const chosenDate = parsedByDate.length > 0 ? parsedByDate[0].date : (relevantDates[0] ?? dates[0]);
+  const datesUsed = parsedByDate.map((x) => x.date);
+
+  let finalTrigger = resolvedTrigger;
+  if (!finalTrigger && filtered.length > 0) {
+    finalTrigger = {
+      triggerType: "inferred",
+      triggerSource: "historical-log-inference",
+      triggerLabel: "Automation Run (inferred)",
+      reason: "Historical run created before trigger metadata was stored",
+      triggeredAt: filtered[0]?.ts ?? null,
+    };
+  }
 
   return NextResponse.json({
     data: {
       videoId,
       automationId: automation.id,
-      trigger: resolvedTrigger,
+      trigger: finalTrigger,
       logDate: chosenDate,
+      logDatesUsed: datesUsed,
+      availableDates: dates,
       lines: filtered,
       lineCount: filtered.length,
     },

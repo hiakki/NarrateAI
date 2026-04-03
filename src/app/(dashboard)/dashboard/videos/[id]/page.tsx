@@ -237,6 +237,7 @@ export default function VideoDetailPage() {
   const [rerunI2VProvider, setRerunI2VProvider] = useState<string>("LOCAL_BACKEND");
   const [videoLogsLoading, setVideoLogsLoading] = useState(false);
   const [videoLogDate, setVideoLogDate] = useState<string | null>(null);
+  const [videoLogDatesUsed, setVideoLogDatesUsed] = useState<string[]>([]);
   const [videoLogLines, setVideoLogLines] = useState<Array<{ raw: string; ts: string | null; tag: string | null; message: string }>>([]);
   const [triggerContext, setTriggerContext] = useState<Record<string, unknown> | null>(null);
   const [copyLogDone, setCopyLogDone] = useState(false);
@@ -600,14 +601,17 @@ export default function VideoDetailPage() {
       const json = await res.json();
       const data = json?.data as {
         logDate?: string | null;
+        logDatesUsed?: string[];
         lines?: Array<{ raw: string; ts: string | null; tag: string | null; message: string }>;
         trigger?: Record<string, unknown> | null;
       } | undefined;
       setVideoLogDate(data?.logDate ?? null);
+      setVideoLogDatesUsed(Array.isArray(data?.logDatesUsed) ? data!.logDatesUsed! : []);
       setVideoLogLines(Array.isArray(data?.lines) ? data!.lines! : []);
       setTriggerContext(data?.trigger ?? null);
     } catch {
       setVideoLogDate(null);
+      setVideoLogDatesUsed([]);
       setVideoLogLines([]);
       setTriggerContext(null);
     } finally {
@@ -841,7 +845,12 @@ export default function VideoDetailPage() {
                   </p>
                   {reason && <p>Reason: {reason}</p>}
                   {triggeredAt && <p>Triggered at: {new Date(triggeredAt).toLocaleString()}</p>}
-                  {videoLogDate && <p>Log file date: {videoLogDate}</p>}
+                  {videoLogDate && (
+                    <p>
+                      Log file date{videoLogDatesUsed.length > 1 ? "s" : ""}:{" "}
+                      {videoLogDatesUsed.length > 0 ? videoLogDatesUsed.join(", ") : videoLogDate}
+                    </p>
+                  )}
                 </div>
               );
             })()}
