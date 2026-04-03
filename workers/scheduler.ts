@@ -48,8 +48,17 @@ const logger = createLogger("Scheduler");
 const { log, warn, error: err, debug } = logger;
 const sfl = getSchedulerFileLogger();
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
-const RECONCILE_FORCE_PROMOTE_MS =
-  Math.max(5, parseInt(process.env.RECONCILE_FORCE_PROMOTE_MINUTES ?? "15", 10)) * 60 * 1000;
+
+function parseIntWithDefault(value: string | undefined, fallback: number): number {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+const RECONCILE_FORCE_PROMOTE_MINUTES = Math.max(
+  5,
+  parseIntWithDefault(process.env.RECONCILE_FORCE_PROMOTE_MINUTES, 15),
+);
+const RECONCILE_FORCE_PROMOTE_MS = RECONCILE_FORCE_PROMOTE_MINUTES * 60 * 1000;
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
@@ -210,6 +219,19 @@ function triggerLabel(trigger: string): string {
     case "post-optimize": return "post-optimize sweep";
     default: return trigger;
   }
+}
+
+function logReconcileDecision(
+  rfl: ReturnType<typeof getAutomationFileLogger> | null,
+  videoId: string,
+  platform: string,
+  decision: "promote" | "hold",
+  reason: string,
+  extra?: string,
+) {
+  rfl?.poster(
+    `RECONCILE DECISION: video=${videoId} platform=${platform} decision=${decision} reason=${reason}${extra ? ` ${extra}` : ""}`,
+  );
 }
 
 async function processAutomation(
@@ -988,9 +1010,20 @@ async function reconcileScheduledPosts() {
           const isPastSchedule = effectiveSchedTime <= nowMs || effectiveSchedTime === 0;
           const overdueMins = effectiveSchedTime > 0 ? Math.round((nowMs - effectiveSchedTime) / 60000) : 0;
 
-          if (!isPastSchedule) continue;
+          if (!isPastSchedule) {
+            logReconcileDecision(
+              rfl,
+              video.id,
+              entry.platform,
+              "hold",
+              "NOT_DUE_YET",
+              `scheduledFor=${new Date(effectiveSchedTime).toISOString()}`,
+            );
+            continue;
+          }
 
           let isLive = false;
+          let decisionReason = "NO_VERIFICATION_SIGNAL";
           // Intentionally only used for YT/FB checks here; IG handled via app-level delayed jobs.
 
           const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
@@ -1008,6 +1041,7 @@ async function reconcileScheduledPosts() {
                     accessToken, refreshToken, postId, account.platformUserId, user.id,
                   );
                   isLive = privacy === "public";
+                  if (isLive) decisionReason = "API_CONFIRMED_PUBLIC";
                   rfl?.poster(`RECONCILE DEBUG: YOUTUBE privacy=${privacy ?? "unknown"} postId=${postId}`);
                   if (isLive) log(`YT ${video.id}: postId=${postId} → public (${overdueMins}m overdue)`);
                 }
@@ -1024,11 +1058,20 @@ async function reconcileScheduledPosts() {
                   }
                   const published = await getFacebookVideoPublished(postId, accessToken);
                   isLive = published === true;
+                  if (isLive) decisionReason = "API_CONFIRMED_PUBLISHED";
                   rfl?.poster(`RECONCILE DEBUG: FACEBOOK published=${String(published)} postId=${postId}`);
                   if (isLive) log(`FB ${video.id}: postId=${postId} → published (${overdueMins}m overdue)`);
                 }
               } else if (entry.platform === "INSTAGRAM") {
                 debug(`IG ${video.id}: deferred/native entry (handled by app delayed jobs)`);
+                logReconcileDecision(
+                  rfl,
+                  video.id,
+                  entry.platform,
+                  "hold",
+                  "INSTAGRAM_APP_DELAYED",
+                  `overdueMins=${overdueMins}`,
+                );
                 continue;
               }
             } catch (checkErr) {
@@ -1036,6 +1079,7 @@ async function reconcileScheduledPosts() {
               warn(`Reconcile check failed for ${entry.platform} ${video.id}: ${msg}`);
               entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
               changed = true;
+              decisionReason = "API_CHECK_ERROR";
               rfl?.poster(`RECONCILE DEBUG: API check failed for ${entry.platform}: ${msg.slice(0, 180)}`);
             }
           }
@@ -1043,6 +1087,7 @@ async function reconcileScheduledPosts() {
           if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
             log(`Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue`);
             isLive = true;
+            decisionReason = "FORCE_PROMOTE_TIMEOUT";
             rfl?.poster(`RECONCILE DEBUG: force-promote applied for ${entry.platform} (${overdueMins}m overdue)`);
           }
 
@@ -1052,6 +1097,7 @@ async function reconcileScheduledPosts() {
             if (publicOpen) {
               log(`Public URL verification passed for ${entry.platform} ${video.id}: scheduled → posted`);
               isLive = true;
+              decisionReason = "PUBLIC_URL_ACCESSIBLE";
             }
           }
 
@@ -1062,6 +1108,10 @@ async function reconcileScheduledPosts() {
             log(`Reconciled ${entry.platform} for ${video.id}: scheduled → posted`);
             rfl?.poster(`RECONCILE: ${entry.platform} for video=${video.id} → posted`);
             sfl.reconcile(`${video.id}: ${entry.platform} scheduled → posted`);
+            logReconcileDecision(rfl, video.id, entry.platform, "promote", decisionReason, `overdueMins=${overdueMins}`);
+          } else {
+            if (!postId && !entry.url) decisionReason = "MISSING_POST_ID_AND_URL";
+            logReconcileDecision(rfl, video.id, entry.platform, "hold", decisionReason, `overdueMins=${overdueMins}`);
           }
         }
       }
@@ -1438,6 +1488,7 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
       const overdueMins = effectiveSchedTime > 0 ? Math.round((nowMs - effectiveSchedTime) / 60000) : 0;
 
       let isLive = false;
+      let decisionReason = "NO_VERIFICATION_SIGNAL";
 
       const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
       rfl?.poster(
@@ -1453,6 +1504,7 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
               accessToken, refreshToken, postId, account.platformUserId, user.id,
             );
             isLive = privacy === "public";
+            if (isLive) decisionReason = "API_CONFIRMED_PUBLIC";
             rfl?.poster(`RECONCILE DEBUG: worker YOUTUBE privacy=${privacy ?? "unknown"} postId=${postId}`);
             if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${postId} → public (${overdueMins}m overdue)`);
           }
@@ -1469,11 +1521,13 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
             }
             const published = await getFacebookVideoPublished(postId, accessToken);
             isLive = published === true;
+            if (isLive) decisionReason = "API_CONFIRMED_PUBLISHED";
             rfl?.poster(`RECONCILE DEBUG: worker FACEBOOK published=${String(published)} postId=${postId}`);
             if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${postId} → published (${overdueMins}m overdue)`);
           }
         } else if ((entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && !postId) {
           warn(`[RECONCILE] ${entry.platform} ${videoId}: scheduled entry missing postId/url`);
+          decisionReason = "MISSING_POST_ID_AND_URL";
           rfl?.poster(`RECONCILE DEBUG: worker ${entry.platform} missing postId/url`);
         }
       } catch (checkErr) {
@@ -1481,12 +1535,14 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         warn(`[RECONCILE] check failed for ${entry.platform} ${videoId}: ${msg}`);
         entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
         changed = true;
+        decisionReason = "API_CHECK_ERROR";
         rfl?.poster(`RECONCILE DEBUG: worker API check failed for ${entry.platform}: ${msg.slice(0, 180)}`);
       }
 
       if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
         log(`[RECONCILE] Force-promoting ${entry.platform} for ${videoId}: ${overdueMins}m overdue`);
         isLive = true;
+        decisionReason = "FORCE_PROMOTE_TIMEOUT";
         rfl?.poster(`RECONCILE DEBUG: worker force-promote applied for ${entry.platform} (${overdueMins}m overdue)`);
       }
 
@@ -1496,6 +1552,7 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         if (publicOpen) {
           log(`[RECONCILE] Public URL verification passed for ${entry.platform} ${videoId}: scheduled → posted`);
           isLive = true;
+          decisionReason = "PUBLIC_URL_ACCESSIBLE";
         }
       }
 
@@ -1506,6 +1563,9 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         log(`[RECONCILE] ${entry.platform} ${videoId}: scheduled → posted`);
         rfl?.poster(`RECONCILE: ${entry.platform} → posted`);
         sfl.reconcile(`${videoId}: ${entry.platform} scheduled → posted`);
+        logReconcileDecision(rfl, videoId, entry.platform, "promote", decisionReason, `overdueMins=${overdueMins}`);
+      } else {
+        logReconcileDecision(rfl, videoId, entry.platform, "hold", decisionReason, `overdueMins=${overdueMins}`);
       }
       }
 
@@ -1836,6 +1896,7 @@ log(`Started. Event-driven scheduler.`);
 log(`  Build: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE} (${BUILD_WINDOW_MINUTES}min window)`);
 log(`  Post-video: BullMQ delayed queue (exact-time posting)`);
 log(`  Clip optimizer: ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform, ${PLATFORM_POST_GAP_MINUTES}min gap`);
+log(`  Reconcile force-promote threshold: ${RECONCILE_FORCE_PROMOTE_MINUTES}m`);
 log(`  Safety net: every 4h (recovery + reconciliation)`);
 log(`  Catch-up: ${catchUpH}:${String(catchUpMin).padStart(2, "0")} (BUILD_ALL_TIME + 2h)`);
 
@@ -1844,8 +1905,11 @@ sfl.action(`Scheduler started — Build: ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}
 cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
 backfillLastRunAt()
   .then(() => bootstrapClipAutomations())
-  .then(() => {
-    catchUpOverdueScheduledPostsOnStartup();
-    planDailyBuilds("startup");
-    safetyNet();
+  .then(async () => {
+    // Deterministic startup sequence so overdue scheduled posts are reconciled
+    // before normal planning begins.
+    await catchUpOverdueScheduledPostsOnStartup();
+    await reconcileScheduledPosts();
+    await planDailyBuilds("startup");
+    await safetyNet();
   });
