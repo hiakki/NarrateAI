@@ -49,6 +49,8 @@ const logger = createLogger("Scheduler");
 const { log, warn, error: err, debug } = logger;
 const sfl = getSchedulerFileLogger();
 const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
+const RECONCILE_FORCE_PROMOTE_MS =
+  Math.max(5, parseInt(process.env.RECONCILE_FORCE_PROMOTE_MINUTES ?? "30", 10)) * 60 * 1000;
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
@@ -949,7 +951,6 @@ async function reconcileScheduledPosts() {
         }
       }
 
-      const FORCE_PROMOTE_MS = 90 * 60 * 1000;
       if (scheduledEntries.length > 0) {
         const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
         for (const entry of scheduledEntries) {
@@ -964,39 +965,46 @@ async function reconcileScheduledPosts() {
           // Intentionally only used for YT/FB checks here; IG handled via app-level delayed jobs.
 
           if (entry.postId && user) {
-            if (entry.platform === "YOUTUBE") {
-              const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
-              if (account) {
-                const accessToken = decrypt(account.accessTokenEnc);
-                const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
-                const privacy = await getYouTubeVideoPrivacy(
-                  accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
-                );
-                isLive = privacy === "public";
-                if (isLive) log(`YT ${video.id}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
-              }
-            } else if (entry.platform === "FACEBOOK") {
-              const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
-              if (account) {
-                let accessToken = decrypt(account.accessTokenEnc);
-                if (account.refreshTokenEnc && account.pageId) {
-                  try {
-                    accessToken = await getFreshFacebookToken(
-                      account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
-                    );
-                  } catch { /* use existing token */ }
+            try {
+              if (entry.platform === "YOUTUBE") {
+                const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
+                if (account) {
+                  const accessToken = decrypt(account.accessTokenEnc);
+                  const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+                  const privacy = await getYouTubeVideoPrivacy(
+                    accessToken, refreshToken, entry.postId, account.platformUserId, user.id,
+                  );
+                  isLive = privacy === "public";
+                  if (isLive) log(`YT ${video.id}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
                 }
-                const published = await getFacebookVideoPublished(entry.postId, accessToken);
-                isLive = published === true;
-                if (isLive) log(`FB ${video.id}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+              } else if (entry.platform === "FACEBOOK") {
+                const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+                if (account) {
+                  let accessToken = decrypt(account.accessTokenEnc);
+                  if (account.refreshTokenEnc && account.pageId) {
+                    try {
+                      accessToken = await getFreshFacebookToken(
+                        account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                      );
+                    } catch { /* use existing token */ }
+                  }
+                  const published = await getFacebookVideoPublished(entry.postId, accessToken);
+                  isLive = published === true;
+                  if (isLive) log(`FB ${video.id}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+                }
+              } else if (entry.platform === "INSTAGRAM") {
+                debug(`IG ${video.id}: deferred/native entry (handled by app delayed jobs)`);
+                continue;
               }
-            } else if (entry.platform === "INSTAGRAM") {
-              debug(`IG ${video.id}: deferred/native entry (handled by checkDeferredInstagramPosts or platform auto-publish)`);
-              continue;
+            } catch (checkErr) {
+              const msg = checkErr instanceof Error ? checkErr.message : String(checkErr);
+              warn(`Reconcile check failed for ${entry.platform} ${video.id}: ${msg}`);
+              entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
+              changed = true;
             }
           }
 
-          if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+          if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
             log(`Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue`);
             isLive = true;
           }
@@ -1289,7 +1297,6 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
 
       let changed = false;
       const nowMs = Date.now();
-      const FORCE_PROMOTE_MS = 90 * 60 * 1000;
 
       for (const entry of scheduledEntries) {
       const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
@@ -1299,35 +1306,42 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
 
       let isLive = false;
 
-      if (entry.platform === "YOUTUBE" && user) {
-        const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
-        if (account) {
-          const accessToken = decrypt(account.accessTokenEnc);
-          const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
-          const privacy = await getYouTubeVideoPrivacy(
-            accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
-          );
-          isLive = privacy === "public";
-          if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
-        }
-      } else if (entry.platform === "FACEBOOK" && user) {
-        const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
-        if (account) {
-          let accessToken = decrypt(account.accessTokenEnc);
-          if (account.refreshTokenEnc && account.pageId) {
-            try {
-              accessToken = await getFreshFacebookToken(
-                account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
-              );
-            } catch { /* use existing */ }
+      try {
+        if (entry.platform === "YOUTUBE" && user) {
+          const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
+          if (account) {
+            const accessToken = decrypt(account.accessTokenEnc);
+            const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
+            const privacy = await getYouTubeVideoPrivacy(
+              accessToken, refreshToken, entry.postId!, account.platformUserId, user.id,
+            );
+            isLive = privacy === "public";
+            if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${entry.postId} → public (${overdueMins}m overdue)`);
           }
-          const published = await getFacebookVideoPublished(entry.postId!, accessToken);
-          isLive = published === true;
-          if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+        } else if (entry.platform === "FACEBOOK" && user) {
+          const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
+          if (account) {
+            let accessToken = decrypt(account.accessTokenEnc);
+            if (account.refreshTokenEnc && account.pageId) {
+              try {
+                accessToken = await getFreshFacebookToken(
+                  account.id, accessToken, account.refreshTokenEnc, account.pageId, account.tokenExpiresAt,
+                );
+              } catch { /* use existing */ }
+            }
+            const published = await getFacebookVideoPublished(entry.postId!, accessToken);
+            isLive = published === true;
+            if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${entry.postId} → published (${overdueMins}m overdue)`);
+          }
         }
+      } catch (checkErr) {
+        const msg = checkErr instanceof Error ? checkErr.message : String(checkErr);
+        warn(`[RECONCILE] check failed for ${entry.platform} ${videoId}: ${msg}`);
+        entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
+        changed = true;
       }
 
-      if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > FORCE_PROMOTE_MS) {
+      if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
         log(`[RECONCILE] Force-promoting ${entry.platform} for ${videoId}: ${overdueMins}m overdue`);
         isLive = true;
       }
