@@ -994,6 +994,9 @@ async function reconcileScheduledPosts() {
           // Intentionally only used for YT/FB checks here; IG handled via app-level delayed jobs.
 
           const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
+          rfl?.poster(
+            `RECONCILE DEBUG: platform=${entry.platform} overdueMins=${overdueMins} postId=${postId ?? "none"} url=${entry.url ?? "none"} scheduledFor=${new Date(effectiveSchedTime || nowMs).toISOString()}`,
+          );
           if (postId && user) {
             try {
               if (entry.platform === "YOUTUBE") {
@@ -1005,6 +1008,7 @@ async function reconcileScheduledPosts() {
                     accessToken, refreshToken, postId, account.platformUserId, user.id,
                   );
                   isLive = privacy === "public";
+                  rfl?.poster(`RECONCILE DEBUG: YOUTUBE privacy=${privacy ?? "unknown"} postId=${postId}`);
                   if (isLive) log(`YT ${video.id}: postId=${postId} → public (${overdueMins}m overdue)`);
                 }
               } else if (entry.platform === "FACEBOOK") {
@@ -1020,6 +1024,7 @@ async function reconcileScheduledPosts() {
                   }
                   const published = await getFacebookVideoPublished(postId, accessToken);
                   isLive = published === true;
+                  rfl?.poster(`RECONCILE DEBUG: FACEBOOK published=${String(published)} postId=${postId}`);
                   if (isLive) log(`FB ${video.id}: postId=${postId} → published (${overdueMins}m overdue)`);
                 }
               } else if (entry.platform === "INSTAGRAM") {
@@ -1031,16 +1036,19 @@ async function reconcileScheduledPosts() {
               warn(`Reconcile check failed for ${entry.platform} ${video.id}: ${msg}`);
               entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
               changed = true;
+              rfl?.poster(`RECONCILE DEBUG: API check failed for ${entry.platform}: ${msg.slice(0, 180)}`);
             }
           }
 
           if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
             log(`Force-promoting ${entry.platform} for ${video.id}: ${overdueMins}m overdue`);
             isLive = true;
+            rfl?.poster(`RECONCILE DEBUG: force-promote applied for ${entry.platform} (${overdueMins}m overdue)`);
           }
 
           if (!isLive && (entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && entry.url) {
             const publicOpen = await canOpenPublicUrl(entry.url);
+            rfl?.poster(`RECONCILE DEBUG: public-url-check platform=${entry.platform} open=${String(publicOpen)} url=${entry.url}`);
             if (publicOpen) {
               log(`Public URL verification passed for ${entry.platform} ${video.id}: scheduled → posted`);
               isLive = true;
@@ -1144,6 +1152,7 @@ async function catchUpOverdueScheduledPostsOnStartup() {
       const overduePlatforms = overdueScheduled.map((e) => e.platform);
       const hasOverdueIg = overduePlatforms.includes("INSTAGRAM");
       const hasOverdueNative = overduePlatforms.some((p) => p === "YOUTUBE" || p === "FACEBOOK");
+      fl?.poster(`STARTUP CATCH-UP: video=${video.id} overdue platforms=[${overduePlatforms.join(", ")}]`);
 
       if (hasOverdueIg) {
         await enqueueScheduledPost(video.id, new Date(), ["INSTAGRAM"]);
@@ -1431,6 +1440,9 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
       let isLive = false;
 
       const postId = entry.postId ?? derivePostIdFromUrl(entry.platform, entry.url);
+      rfl?.poster(
+        `RECONCILE DEBUG: worker platform=${entry.platform} overdueMins=${overdueMins} postId=${postId ?? "none"} url=${entry.url ?? "none"} scheduledFor=${new Date(effectiveSchedTime || nowMs).toISOString()}`,
+      );
       try {
         if (entry.platform === "YOUTUBE" && user && postId) {
           const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
@@ -1441,6 +1453,7 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
               accessToken, refreshToken, postId, account.platformUserId, user.id,
             );
             isLive = privacy === "public";
+            rfl?.poster(`RECONCILE DEBUG: worker YOUTUBE privacy=${privacy ?? "unknown"} postId=${postId}`);
             if (isLive) log(`[RECONCILE] YT ${videoId}: postId=${postId} → public (${overdueMins}m overdue)`);
           }
         } else if (entry.platform === "FACEBOOK" && user && postId) {
@@ -1456,25 +1469,30 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
             }
             const published = await getFacebookVideoPublished(postId, accessToken);
             isLive = published === true;
+            rfl?.poster(`RECONCILE DEBUG: worker FACEBOOK published=${String(published)} postId=${postId}`);
             if (isLive) log(`[RECONCILE] FB ${videoId}: postId=${postId} → published (${overdueMins}m overdue)`);
           }
         } else if ((entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && !postId) {
           warn(`[RECONCILE] ${entry.platform} ${videoId}: scheduled entry missing postId/url`);
+          rfl?.poster(`RECONCILE DEBUG: worker ${entry.platform} missing postId/url`);
         }
       } catch (checkErr) {
         const msg = checkErr instanceof Error ? checkErr.message : String(checkErr);
         warn(`[RECONCILE] check failed for ${entry.platform} ${videoId}: ${msg}`);
         entry.error = `Reconcile check failed: ${msg.slice(0, 180)}`;
         changed = true;
+        rfl?.poster(`RECONCILE DEBUG: worker API check failed for ${entry.platform}: ${msg.slice(0, 180)}`);
       }
 
       if (!isLive && effectiveSchedTime > 0 && (nowMs - effectiveSchedTime) > RECONCILE_FORCE_PROMOTE_MS) {
         log(`[RECONCILE] Force-promoting ${entry.platform} for ${videoId}: ${overdueMins}m overdue`);
         isLive = true;
+        rfl?.poster(`RECONCILE DEBUG: worker force-promote applied for ${entry.platform} (${overdueMins}m overdue)`);
       }
 
       if (!isLive && (entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && entry.url) {
         const publicOpen = await canOpenPublicUrl(entry.url);
+        rfl?.poster(`RECONCILE DEBUG: worker public-url-check platform=${entry.platform} open=${String(publicOpen)} url=${entry.url}`);
         if (publicOpen) {
           log(`[RECONCILE] Public URL verification passed for ${entry.platform} ${videoId}: scheduled → posted`);
           isLive = true;

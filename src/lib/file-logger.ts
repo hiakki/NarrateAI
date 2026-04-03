@@ -4,7 +4,6 @@ import path from "path";
 const LOGS_ROOT = path.join(process.cwd(), "logs");
 const SCHEDULER_LOGS_DIR = path.join(LOGS_ROOT, "_scheduler");
 const MAX_AGE_DAYS = 30;
-
 function safeName(s: string, maxLen = 80): string {
   return s
     .replace(/[^a-zA-Z0-9_-]/g, "_")
@@ -14,9 +13,27 @@ function safeName(s: string, maxLen = 80): string {
 }
 
 function ts(): string {
+  const tz = process.env.LOG_TIMEZONE
+    ?? process.env.BUILD_ALL_TIMEZONE
+    ?? process.env.TZ
+    ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "longOffset",
+  });
+  const parts = fmt.formatToParts(d);
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const tzPart = v("timeZoneName").replace(/^GMT/, "");
+  const offset = tzPart === "" ? "+00:00" : tzPart;
+  return `${v("year")}-${v("month")}-${v("day")} ${v("hour")}:${v("minute")}:${v("second")} ${offset}`;
 }
 
 function todayFile(): string {
