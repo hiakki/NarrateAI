@@ -882,6 +882,9 @@ async function reconcileScheduledPosts() {
         OR: [
           { scheduledPostTime: { gte: twoHoursAgo, lte: tenMinFromNow } },
           { scheduledPostTime: null, status: "SCHEDULED" },
+          // Always include SCHEDULED videos (including long-overdue) so restart/recovery
+          // can still reconcile and promote when platform APIs confirm publication.
+          { status: "SCHEDULED" },
         ],
       },
       select: {
@@ -1047,6 +1050,88 @@ async function reconcileScheduledPosts() {
     }
   } catch (e) {
     err("reconcileScheduledPosts error:", e);
+  }
+}
+
+/**
+ * Startup catch-up:
+ * 1) For overdue YT/FB scheduled entries, trigger immediate reconcile checks.
+ * 2) For overdue IG scheduled entries, enqueue immediate IG post (app-level scheduling).
+ */
+async function catchUpOverdueScheduledPostsOnStartup() {
+  try {
+    const now = Date.now();
+    const rows = await db.video.findMany({
+      where: {
+        status: { in: ["READY", "SCHEDULED"] },
+        scheduledPostTime: { lte: new Date() },
+      },
+      select: {
+        id: true,
+        scheduledPostTime: true,
+        postedPlatforms: true,
+        series: {
+          select: {
+            automation: { select: { id: true, name: true } },
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+
+    let igQueued = 0;
+    let reconcileQueued = 0;
+
+    for (const video of rows) {
+      const entries = getPlatformEntriesArray(video.postedPlatforms);
+      if (entries.length === 0) continue;
+
+      const autoInfo = video.series?.automation;
+      const userInfo = video.series?.user;
+      const fl = autoInfo && userInfo
+        ? getAutomationFileLogger(
+            userInfo.id,
+            userInfo.name ?? userInfo.email?.split("@")[0] ?? "user",
+            autoInfo.id,
+            autoInfo.name,
+          )
+        : null;
+
+      const overdueScheduled = entries.filter((e) => {
+        if (e.success !== "scheduled") return false;
+        const schedMs = e.scheduledFor
+          ? new Date(e.scheduledFor).getTime()
+          : (video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0);
+        return schedMs > 0 && schedMs <= now;
+      });
+      if (overdueScheduled.length === 0) continue;
+
+      const overduePlatforms = overdueScheduled.map((e) => e.platform);
+      const hasOverdueIg = overduePlatforms.includes("INSTAGRAM");
+      const hasOverdueNative = overduePlatforms.some((p) => p === "YOUTUBE" || p === "FACEBOOK");
+
+      if (hasOverdueIg) {
+        await enqueueScheduledPost(video.id, new Date(), ["INSTAGRAM"]);
+        igQueued++;
+        fl?.poster(`STARTUP CATCH-UP: overdue INSTAGRAM schedule detected; enqueued immediate IG post`);
+      }
+
+      if (hasOverdueNative) {
+        await enqueueReconcileCheck(video.id, new Date(), 0);
+        reconcileQueued++;
+        fl?.poster(`STARTUP CATCH-UP: overdue native scheduled post detected; enqueued immediate reconcile check`);
+      }
+    }
+
+    if (igQueued > 0 || reconcileQueued > 0) {
+      log(`Startup catch-up queued: IG immediate=${igQueued}, reconcile=${reconcileQueued}`);
+      sfl.action(`STARTUP CATCH-UP queued: IG immediate=${igQueued}, reconcile=${reconcileQueued}`);
+    } else {
+      debug("Startup catch-up: no overdue scheduled posts found");
+    }
+  } catch (e) {
+    err("catchUpOverdueScheduledPostsOnStartup error:", e);
+    sfl.error(`catchUpOverdueScheduledPostsOnStartup: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -1701,6 +1786,7 @@ cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
 backfillLastRunAt()
   .then(() => bootstrapClipAutomations())
   .then(() => {
+    catchUpOverdueScheduledPostsOnStartup();
     planDailyBuilds("startup");
     safetyNet();
   });
