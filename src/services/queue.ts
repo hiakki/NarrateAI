@@ -190,6 +190,26 @@ export function getPostVideoQueue(): Queue<PostVideoJobData> {
   return getPostQueue();
 }
 
+export async function clearPostQueueJobsForVideo(videoId: string): Promise<void> {
+  const queue = getPostQueue();
+  const jobIds = [`post-${videoId}`, `post-${videoId}-ig`];
+  for (const jobId of jobIds) {
+    try {
+      const existing = await queue.getJob(jobId);
+      if (!existing) continue;
+      const state = await existing.getState();
+      if (["waiting", "delayed", "failed", "completed", "unknown"].includes(state)) {
+        await existing.remove();
+        log.log(`Removed post queue job ${jobId} (${state})`);
+      } else if (state === "active") {
+        log.warn(`Post queue job ${jobId} is active; skip remove`);
+      }
+    } catch (e) {
+      log.warn(`Could not clear post queue job ${jobId}:`, e);
+    }
+  }
+}
+
 async function clearExistingJob(queue: Queue<PostVideoJobData>, jobId: string): Promise<boolean> {
   try {
     const existing = await queue.getJob(jobId);
@@ -244,6 +264,29 @@ function getReconcileQueue(): Queue<ReconcileJobData> {
 
 export function getReconcileVideoQueue(): Queue<ReconcileJobData> {
   return getReconcileQueue();
+}
+
+export async function clearReconcileQueueJobsForVideo(videoId: string): Promise<void> {
+  const queue = getReconcileQueue();
+  try {
+    const delayed = await queue.getDelayed();
+    const waiting = await queue.getWaiting();
+    const failed = await queue.getFailed();
+    const completed = await queue.getCompleted();
+    const all = [...delayed, ...waiting, ...failed, ...completed];
+    for (const job of all) {
+      const data = job.data as Partial<ReconcileJobData>;
+      if (data.videoId !== videoId) continue;
+      try {
+        await job.remove();
+        log.log(`Removed reconcile job ${job.id} for video ${videoId}`);
+      } catch (err) {
+        log.warn(`Failed removing reconcile job ${job.id} for ${videoId}:`, err);
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not clear reconcile queue jobs for ${videoId}:`, e);
+  }
 }
 
 export async function enqueueReconcileCheck(

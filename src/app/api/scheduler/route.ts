@@ -10,6 +10,18 @@ import {
   localTimeToUTC,
 } from "@/lib/scheduler-utils";
 
+function parseReasonCode(message: string | null): string | null {
+  if (!message) return null;
+  const m = message.match(/^\[([A-Z_]+)\]/);
+  return m?.[1] ?? null;
+}
+
+function parseTriggerSource(message: string | null): string | null {
+  if (!message) return null;
+  const m = message.match(/\[trigger=([^\]]+)\]/);
+  return m?.[1] ?? null;
+}
+
 export async function GET() {
   try {
     const session = await auth();
@@ -80,6 +92,7 @@ export async function GET() {
         status: true,
         scheduledPostTime: true,
         scheduledPlatforms: true,
+        postedPlatforms: true,
         seriesId: true,
       },
     });
@@ -180,6 +193,8 @@ export async function GET() {
         lastSchedulerLogAt: lastLog?.createdAt?.toISOString() ?? null,
         lastSchedulerOutcome: lastLog?.outcome ?? null,
         lastSchedulerMessage: lastLog?.message ?? null,
+        lastSchedulerReasonCode: parseReasonCode(lastLog?.message ?? null),
+        lastSchedulerTriggerSource: parseTriggerSource(lastLog?.message ?? null),
       },
     });
   } catch (error) {

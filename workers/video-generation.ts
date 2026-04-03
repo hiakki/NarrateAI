@@ -6,13 +6,14 @@ import { getTtsProvider, getImageProvider, getImageProviderFallbackChain } from 
 import { TTS_PROVIDERS, IMAGE_PROVIDERS } from "../src/config/providers";
 import { resolveVoiceForProvider } from "../src/config/voices";
 import { assembleVideo, isValidAudioFile } from "../src/services/video-assembler";
-import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File, calculateI2VAllocation } from "../src/services/image-to-video";
+import { generateClipsFromImages, buildImageToVideoPrompt, isValidMp4File, calculateI2VAllocation } from "../src/services/image-to-video/coordinator";
 import { buildImagePrompt } from "../src/services/providers/image/prompt-builder";
 import { getArtStyleById } from "../src/config/art-styles";
 import { expandScenesToImageSlots } from "../src/services/scene-expander";
 import { enqueueScheduledPost } from "../src/services/queue";
 import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
 import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
+import { recordMetric } from "../src/lib/ops-metrics";
 import {
   buildVideoRelDir, videoRelUrl, videoAbsDir, videoAbsPath,
   scenesAbsDir, voiceoverAbsPath, contextAbsPath, scriptAbsPath,
@@ -111,6 +112,7 @@ async function fileExists(p: string): Promise<boolean> {
 const worker = new Worker<VideoJobData>(
   "video-generation",
   async (job) => {
+    const jobStartedAt = Date.now();
     const {
       videoId, userId, userName, automationId, automationName, artStylePrompt, negativePrompt,
       voiceId, language, musicPath, ttsProvider, imageProvider, llmProvider,
@@ -672,6 +674,11 @@ const worker = new Worker<VideoJobData>(
       }
 
       throw error;
+    } finally {
+      recordMetric("queue.video_generation.duration_ms", {
+        videoId,
+        durationMs: Date.now() - jobStartedAt,
+      });
     }
     });
   },

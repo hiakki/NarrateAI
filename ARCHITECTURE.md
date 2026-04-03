@@ -1,3 +1,20 @@
+## Optimization Rollout Notes
+
+- Reliability and idempotency hardening:
+  - Posting claims/finalization are now transactional, and status promotion uses strict target-platform completion checks.
+  - Scheduler and reconcile flows use shared platform/state helpers to avoid route/worker drift.
+  - Cancel/reset/delete API flows clear delayed post and reconcile jobs to prevent post-after-cancel races.
+- Scheduler explainability:
+  - Scheduler logs now include explicit reason-code and trigger-source prefixes in messages.
+  - Scheduler API meta exposes parsed last-run reason and trigger for dashboard diagnostics.
+- Performance and latency:
+  - Added bounded concurrency for Facebook insights refresh calls.
+  - Clip discovery fallback scraping fanout is capped via env-configured limits.
+  - Added structured runtime metrics logs for scheduler tick/automation duration, queue worker durations, and FFmpeg stage timings.
+- Maintainability:
+  - Introduced shared `platform-utils` and `video-state` modules and migrated key posting/reconcile/update paths.
+  - Added an image-to-video coordinator module to separate orchestration-facing exports from provider-heavy implementation.
+
 # Architecture — NarrateAI
 
 ## 1. System Architecture Overview

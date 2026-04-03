@@ -14,6 +14,7 @@ import { getLocalBackendUrl, wrapLocalBackendFetchError } from "@/lib/local-back
 import { requireHuggingFaceToken } from "@/lib/huggingface";
 import { getKeyRotator, resetDailyExhaustion, DEFAULT_EXHAUSTION_TTL_MS, RATE_LIMIT_TTL_MS, getAllExhaustionStatus } from "@/lib/api-key-rotation";
 import type { ProviderExhaustionStatus } from "@/lib/api-key-rotation";
+import { recordMetric } from "@/lib/ops-metrics";
 
 const log = createLogger("ImageToVideo");
 
@@ -335,6 +336,7 @@ export async function generateClipFromImage(
     aspectRatio?: "9:16" | "16:9";
   } = {}
 ): Promise<ImageToVideoResult> {
+  const startedAt = Date.now();
   const providerId = options.providerId ?? "SVD_REPLICATE";
   const chain = buildFallbackChain(providerId);
   if (chain.length === 0) {
@@ -353,6 +355,12 @@ export async function generateClipFromImage(
         } else {
           log.log(`[I2V]`, `${provider.id} succeeded`);
         }
+        recordMetric("i2v.provider.call", {
+          requestedProvider: providerId,
+          actualProvider: provider.id,
+          durationMs: Date.now() - startedAt,
+          fallbackUsed: provider.id !== providerId,
+        });
         return clip;
       }
       const name = PROVIDER_FRIENDLY_NAMES[provider.id] ?? provider.id;

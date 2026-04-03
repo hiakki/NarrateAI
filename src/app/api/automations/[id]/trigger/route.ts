@@ -77,6 +77,20 @@ export async function POST(
       );
     }
 
+    const claim = await db.automation.updateMany({
+      where: {
+        id: auto.id,
+        ...(auto.lastRunAt ? { lastRunAt: auto.lastRunAt } : { lastRunAt: null }),
+      },
+      data: { lastRunAt: new Date() },
+    });
+    if (claim.count === 0) {
+      return NextResponse.json(
+        { error: "Automation was triggered concurrently. Please try again." },
+        { status: 409 },
+      );
+    }
+
     let characterPrompt: string | undefined;
     if (auto.characterId) {
       const char = await db.character.findUnique({
@@ -128,11 +142,6 @@ export async function POST(
       imageToVideoProvider: (auto.imageToVideoProvider ?? auto.user.defaultImageToVideoProvider ?? process.env.USE_IMAGE_TO_VIDEO) || undefined,
       characterPrompt,
       aspectRatio: getNicheById(auto.niche)?.aspectRatio ?? "9:16",
-    });
-
-    await db.automation.update({
-      where: { id: auto.id },
-      data: { lastRunAt: new Date() },
     });
 
     log.log(`Triggered "${auto.name}" → video ${video.id} queued`);

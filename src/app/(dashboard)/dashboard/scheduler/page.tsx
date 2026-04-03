@@ -31,6 +31,12 @@ interface ScheduledVideo {
   status: string;
   scheduledPostTime: string | null;
   scheduledPlatforms: string[] | null;
+  postedPlatforms?: Array<{
+    platform: string;
+    success?: boolean | string;
+    scheduledFor?: string;
+    error?: string | null;
+  }> | null;
 }
 
 interface SchedulerLogEntry {
@@ -117,6 +123,16 @@ function outcomeBg(outcome: string): string {
     case "skipped": return "bg-muted-foreground/40";
     case "error": return "bg-red-500";
     default: return "bg-muted-foreground";
+  }
+}
+
+function outcomePillClass(outcome: string): string {
+  switch (outcome) {
+    case "enqueued": return "bg-green-50 text-green-700 border-green-200";
+    case "posted": return "bg-blue-50 text-blue-700 border-blue-200";
+    case "skipped": return "bg-amber-50 text-amber-700 border-amber-200";
+    case "error": return "bg-red-50 text-red-700 border-red-200";
+    default: return "bg-muted text-muted-foreground border-border";
   }
 }
 
@@ -334,6 +350,7 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
   const nextRunLabel = useCountdown(auto.nextRunAt);
   const nextPostLabel = useCountdown(auto.nextPostAt);
   const lastError = auto.schedulerLogs.find((l) => l.outcome === "error");
+  const latestLog = auto.schedulerLogs[0];
 
   const borderCls = hasIssues ? "border-red-300"
     : missed === "critical" ? "border-red-400"
@@ -370,6 +387,16 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
             {" "}&middot;{" "}{auto.frequency}
             {" "}&middot;{" "}{auto.timezone.replace(/^.*\//, "")}
           </div>
+          {latestLog && (
+            <div className="text-[11px] mt-1 flex items-start gap-2 min-w-0">
+              <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-semibold uppercase tracking-wide shrink-0 ${outcomePillClass(latestLog.outcome)}`}>
+                {latestLog.outcome}
+              </span>
+              <span className="text-muted-foreground truncate" title={latestLog.message}>
+                {latestLog.message}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Timer chips */}
@@ -479,6 +506,32 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
                       posts {formatRelative(new Date(v.scheduledPostTime))}
                     </span>
                   )}
+                  {(() => {
+                    const ig = (v.postedPlatforms ?? []).find((p) => p.platform === "INSTAGRAM");
+                    if (!ig) return null;
+                    if (ig.success === "scheduled") {
+                      return (
+                        <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
+                          IG delayed post queued
+                        </Badge>
+                      );
+                    }
+                    if (ig.success === true) {
+                      return (
+                        <Badge variant="outline" className="text-[10px] border-green-300 text-green-700">
+                          IG posted
+                        </Badge>
+                      );
+                    }
+                    if (ig.success === false) {
+                      return (
+                        <Badge variant="outline" className="text-[10px] border-red-300 text-red-700">
+                          IG failed
+                        </Badge>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               ))}
             </div>

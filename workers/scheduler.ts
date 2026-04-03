@@ -8,8 +8,6 @@ import {
   enqueueClipRepurpose,
   enqueueScheduledPost,
   enqueueReconcileCheck,
-  getPostVideoQueue,
-  getReconcileVideoQueue,
   RECONCILE_INTERVAL_MS,
   type PostVideoJobData,
   type ReconcileJobData,
@@ -33,6 +31,9 @@ import {
   shouldBuildNow,
   computeAndGuardPostTime,
 } from "../src/lib/scheduler-utils";
+import { deriveVideoStatusFromPlatforms, shouldPromoteVideoToPosted } from "../src/lib/video-state";
+import { getPlatformEntriesArray } from "../src/lib/platform-utils";
+import { recordMetric } from "../src/lib/ops-metrics";
 import { probeAllNicheTrends } from "../src/services/clip-repurpose/trending-probe";
 import { CLIP_NICHE_META } from "../src/config/clip-niches";
 import {
@@ -114,6 +115,31 @@ interface FailedVideoRow {
   };
 }
 
+const SCHEDULER_REASON_CODES = {
+  WAIT_BUILD_WINDOW: "WAIT_BUILD_WINDOW",
+  POST_TIME_PASSED: "POST_TIME_PASSED",
+  NOT_DUE: "NOT_DUE",
+  BUILD_WINDOW_DUE: "BUILD_WINDOW_DUE",
+  CATCHUP_OVERDUE: "CATCHUP_OVERDUE",
+  CATCHUP_MISSED_WINDOW: "CATCHUP_MISSED_WINDOW",
+  NEW_AUTOMATION_DUE: "NEW_AUTOMATION_DUE",
+  PENDING_VIDEO_BLOCK: "PENDING_VIDEO_BLOCK",
+  READY_VIDEO_BLOCK: "READY_VIDEO_BLOCK",
+  CLAIMED_BY_OTHER: "CLAIMED_BY_OTHER",
+  ENQUEUED: "ENQUEUED",
+} as const;
+
+function getReasonCode(reason: string): string {
+  if (reason.includes("new automation")) return SCHEDULER_REASON_CODES.NEW_AUTOMATION_DUE;
+  if (reason.includes("waiting for build window")) return SCHEDULER_REASON_CODES.WAIT_BUILD_WINDOW;
+  if (reason.includes("post time passed")) return SCHEDULER_REASON_CODES.POST_TIME_PASSED;
+  if (reason.includes("need")) return SCHEDULER_REASON_CODES.NOT_DUE;
+  if (reason.includes("build window active")) return SCHEDULER_REASON_CODES.BUILD_WINDOW_DUE;
+  if (reason.includes("catch-up: overdue")) return SCHEDULER_REASON_CODES.CATCHUP_OVERDUE;
+  if (reason.includes("missed today's")) return SCHEDULER_REASON_CODES.CATCHUP_MISSED_WINDOW;
+  return "UNKNOWN";
+}
+
 async function writeSchedulerLog(
   automationId: string,
   outcome: string,
@@ -148,7 +174,20 @@ async function writeSchedulerLog(
   }
 }
 
-async function processAutomation(auto: AutoRow & { series?: { videos?: { createdAt: Date }[] } | null }) {
+function triggerLabel(trigger: string): string {
+  switch (trigger) {
+    case "build-window-cron": return `BUILD_ALL_TIME ${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}`;
+    case "catch-up-cron": return "catch-up window";
+    case "startup": return "scheduler startup";
+    case "post-optimize": return "post-optimize sweep";
+    default: return trigger;
+  }
+}
+
+async function processAutomation(
+  auto: AutoRow & { series?: { videos?: { createdAt: Date }[] } | null },
+  trigger: string,
+) {
   return runWithAutomationIdAsync(auto.id, async () => {
   const runStart = Date.now();
   const fl = getAutomationFileLogger(
@@ -158,18 +197,23 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
     auto.name,
   );
 
-  // Use actual last video build time instead of scheduler's lastRunAt
+  // Use actual last video build time instead of scheduler's lastRunAt,
+  // except when lastRunAt is intentionally reset (e.g. newly enabled niche).
   const lastVideoBuildAt = auto.series?.videos?.[0]?.createdAt ?? null;
-  const effectiveLastRun = lastVideoBuildAt ?? auto.lastRunAt;
+  const effectiveLastRun = auto.lastRunAt === null ? null : (lastVideoBuildAt ?? auto.lastRunAt);
   const { build, reason } = shouldBuildNow({ ...auto, lastRunAt: effectiveLastRun, postTime: auto.postTime });
+  const triggerText = triggerLabel(trigger);
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
     fl.scheduler(`SKIP: ${reason}`);
-    // Only persist non-trivial skips to the DB log (avoid flooding with "outside build window")
-    if (!reason.includes("outside build window")) {
-      await writeSchedulerLog(auto.id, "skipped", reason, { durationMs: Date.now() - runStart });
-    }
+    const reasonCode = getReasonCode(reason);
+    await writeSchedulerLog(
+      auto.id,
+      "skipped",
+      `[${reasonCode}] [trigger=${trigger}] Did not run (${triggerText}): ${reason}`,
+      { durationMs: Date.now() - runStart },
+    );
     return;
   }
 
@@ -206,10 +250,10 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
     },
   }) : null;
   if (pendingVideo) {
-    const msg = `Video ${pendingVideo.id} is ${pendingVideo.status}`;
+    const msg = `Did not run (${triggerText}): unposted video ${pendingVideo.id} is ${pendingVideo.status}`;
     log(`[SKIP]`, msg);
     fl.scheduler(`SKIP: pending video ${pendingVideo.id} (${pendingVideo.status})`);
-    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart, videoId: pendingVideo.id });
+    await writeSchedulerLog(auto.id, "skipped", `[${SCHEDULER_REASON_CODES.PENDING_VIDEO_BLOCK}] [trigger=${trigger}] ${msg}`, { durationMs: Date.now() - runStart, videoId: pendingVideo.id });
     return;
   }
 
@@ -262,7 +306,12 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
           warn(`[POST-READY]`, `Failed to enqueue post for ${readyVideo.id}: ${errMsg}`);
           fl.scheduler(`POST-READY ERROR: ${errMsg.slice(0, 500)}`);
         }
-        await writeSchedulerLog(auto.id, "skipped", `Posted/scheduled READY video ${readyVideo.id} instead of creating new`, { durationMs: Date.now() - runStart, videoId: readyVideo.id });
+        await writeSchedulerLog(
+          auto.id,
+          "skipped",
+          `[${SCHEDULER_REASON_CODES.READY_VIDEO_BLOCK}] [trigger=${trigger}] Did not run (${triggerText}): unposted video ${readyVideo.id} exists; scheduled missing platforms [${remaining.join(", ")}]`,
+          { durationMs: Date.now() - runStart, videoId: readyVideo.id },
+        );
         return;
       }
     }
@@ -282,12 +331,15 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
     const msg = "Another scheduler instance already claimed this run";
     debug(`[SKIP]`, `"${auto.name}" — ${msg}`);
     fl.scheduler(`SKIP: ${msg}`);
-    await writeSchedulerLog(auto.id, "skipped", msg, { durationMs: Date.now() - runStart });
+    await writeSchedulerLog(auto.id, "skipped", `[${SCHEDULER_REASON_CODES.CLAIMED_BY_OTHER}] [trigger=${trigger}] ${msg}`, { durationMs: Date.now() - runStart });
     return;
   }
 
-  log(`[BUILD]`, `"${auto.name}" — ${reason}`);
-  fl.scheduler(`BUILD: "${auto.name}" — ${reason}`);
+  const runReason = auto.lastRunAt === null && lastVideoBuildAt
+    ? `newly enabled niche/automation; forced fresh build`
+    : reason;
+  log(`[BUILD]`, `"${auto.name}" — ${runReason}`);
+  fl.scheduler(`BUILD: "${auto.name}" — ${runReason}`);
 
   // ── Route by automationType BEFORE retry logic to avoid cross-pipeline retries ──
   const autoType = auto.automationType ?? "original";
@@ -327,7 +379,7 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
         targetPlatforms: (auto.targetPlatforms ?? []) as string[],
       });
 
-      const msg = `Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
+      const msg = `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
       log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
       fl.scheduler(`ENQUEUE: clip-repurpose video=${video.id}, postAt=${scheduledPostTime.toISOString()}`);
       await writeSchedulerLog(auto.id, "enqueued", msg, { durationMs: Date.now() - runStart, videoId: video.id });
@@ -405,7 +457,7 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
       aspectRatio: fNiche?.aspectRatio ?? "9:16",
     });
 
-    const retryMsg = `Re-enqueued failed video (resumes from [${completedStages.join(",")}])`;
+    const retryMsg = `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Re-enqueued failed video (resumes from [${completedStages.join(",")}])`;
     log(`[RETRY]`, `Re-enqueued failed video ${failedVideo.id} instead of creating new (resumes from [${completedStages.join(",")}])`);
     fl.scheduler(`RETRY: re-enqueued failed video=${failedVideo.id}, stages=[${completedStages.join(",")}]`);
     await writeSchedulerLog(auto.id, "enqueued", retryMsg, { durationMs: Date.now() - runStart, videoId: failedVideo.id });
@@ -470,7 +522,12 @@ async function processAutomation(auto: AutoRow & { series?: { videos?: { created
 
     log(`[ENQUEUE]`, `Queued video ${video.id} (script gen in worker)`);
     fl.scheduler(`ENQUEUE: AI video=${video.id}, postAt=${origScheduledPostTime.toISOString()}`);
-    await writeSchedulerLog(auto.id, "enqueued", `Queued AI video, post at ${origScheduledPostTime.toISOString()}`, { durationMs: Date.now() - runStart, videoId: video.id });
+    await writeSchedulerLog(
+      auto.id,
+      "enqueued",
+      `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued AI video, post at ${origScheduledPostTime.toISOString()}`,
+      { durationMs: Date.now() - runStart, videoId: video.id },
+    );
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 200);
     err(`[ERR]`, `Failed to auto-generate: ${msg}`);
@@ -490,7 +547,11 @@ async function runInBatches<T>(items: T[], concurrency: number, fn: (item: T) =>
   }
 }
 
-async function planDailyBuilds() {
+async function planDailyBuilds(trigger: string = "manual") {
+  const tickStart = Date.now();
+  let enqueuedCount = 0;
+  let skippedCount = 0;
+  let errorCount = 0;
   try {
     const automations = await db.automation.findMany({
       where: { enabled: true },
@@ -521,11 +582,45 @@ async function planDailyBuilds() {
     log(`planDailyBuilds: ${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
     sfl.action(`planDailyBuilds: ${automations.length} enabled automation(s), batch=${SCHEDULER_CONCURRENCY}`);
 
-    await runInBatches(automations as unknown as AutoRow[], SCHEDULER_CONCURRENCY, processAutomation);
+    await runInBatches(
+      automations as unknown as AutoRow[],
+      SCHEDULER_CONCURRENCY,
+      async (auto) => {
+        const before = Date.now();
+        try {
+          await processAutomation(auto, trigger);
+          const latest = await db.schedulerLog.findFirst({
+            where: { automationId: auto.id },
+            orderBy: { createdAt: "desc" },
+            select: { outcome: true, createdAt: true },
+          });
+          if (latest?.outcome === "enqueued") enqueuedCount++;
+          else if (latest?.outcome === "skipped") skippedCount++;
+          else if (latest?.outcome === "error") errorCount++;
+        } catch {
+          errorCount++;
+        } finally {
+          recordMetric("scheduler.automation.duration_ms", {
+            automationId: auto.id,
+            trigger,
+            durationMs: Date.now() - before,
+          });
+        }
+      },
+    );
     sfl.action(`planDailyBuilds: completed`);
   } catch (e) {
     err("planDailyBuilds error:", e);
     sfl.error(`planDailyBuilds: ${e instanceof Error ? e.message : String(e)}`);
+    errorCount++;
+  } finally {
+    recordMetric("scheduler.tick", {
+      trigger,
+      durationMs: Date.now() - tickStart,
+      enqueued: enqueuedCount,
+      skipped: skippedCount,
+      errors: errorCount,
+    });
   }
 }
 
@@ -782,7 +877,7 @@ async function reconcileScheduledPosts() {
     const UPLOADING_STALE_MS = 10 * 60 * 1000;
 
     for (const video of videos) {
-      const entries = (video.postedPlatforms ?? []) as PlatEntry[];
+      const entries = getPlatformEntriesArray(video.postedPlatforms) as PlatEntry[];
       if (entries.length === 0) continue;
       const scheduledEntries = entries.filter((e) => e.success === "scheduled");
       const hasUnpromotedSuccess = video.status !== "POSTED" && entries.some((e) => e.success === true);
@@ -828,13 +923,12 @@ async function reconcileScheduledPosts() {
           if (!isPastSchedule) continue;
 
           let isLive = false;
-          let apiChecked = false;
+          // Intentionally only used for YT/FB checks here; IG handled via app-level delayed jobs.
 
           if (entry.postId && user) {
             if (entry.platform === "YOUTUBE") {
               const account = user.socialAccounts.find((a) => a.platform === "YOUTUBE");
               if (account) {
-                apiChecked = true;
                 const accessToken = decrypt(account.accessTokenEnc);
                 const refreshToken = account.refreshTokenEnc ? decrypt(account.refreshTokenEnc) : null;
                 const privacy = await getYouTubeVideoPrivacy(
@@ -846,7 +940,6 @@ async function reconcileScheduledPosts() {
             } else if (entry.platform === "FACEBOOK") {
               const account = user.socialAccounts.find((a) => a.platform === "FACEBOOK");
               if (account) {
-                apiChecked = true;
                 let accessToken = decrypt(account.accessTokenEnc);
                 if (account.refreshTokenEnc && account.pageId) {
                   try {
@@ -881,20 +974,10 @@ async function reconcileScheduledPosts() {
         }
       }
 
-      const targeted = (video.scheduledPlatforms ?? []) as string[];
+      const targeted = ((video.scheduledPlatforms ?? []) as string[]) ?? [];
       const hasAnySuccess = entries.some((e) => e.success === true);
       if (!hasAnySuccess && !changed) continue;
-
-      const allTargetedDone = targeted.length > 0 && targeted.every((plat) => {
-        const e = entries.find((x) => x.platform === plat);
-        return e && (e.success === true || e.success === "deleted");
-      });
-
-      const allEntriesDone = entries.length > 0 && entries.every(
-        (e) => e.success === true || e.success === "deleted",
-      );
-
-      const shouldPromote = video.status !== "POSTED" && (allTargetedDone || allEntriesDone);
+      const shouldPromote = video.status !== "POSTED" && shouldPromoteVideoToPosted(entries, targeted);
 
       if (shouldPromote) {
         await db.video.update({
@@ -963,8 +1046,10 @@ const postRedis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379",
 const postWorker = new BullWorker<PostVideoJobData>(
   "post-video",
   async (job) => {
+    const startedAt = Date.now();
     const { videoId, platforms, scheduledAt } = job.data;
     const schedDate = scheduledAt ? new Date(scheduledAt) : undefined;
+    const isIgOnly = platforms.length === 1 && platforms[0] === "INSTAGRAM";
 
     log(`[POST-WORKER] Posting video ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
     sfl.action(`POST-WORKER: posting ${videoId} → ${platforms.join(", ")} (scheduled=${scheduledAt ?? "immediate"})`);
@@ -1001,7 +1086,12 @@ const postWorker = new BullWorker<PostVideoJobData>(
     fl?.poster(`POST-WORKER: posting video=${videoId} → ${platforms.join(", ")}`);
 
     try {
-      const results = await postVideoToSocials(videoId, platforms, schedDate, fl ?? undefined);
+      const results = await postVideoToSocials(
+        videoId,
+        platforms,
+        isIgOnly ? undefined : schedDate,
+        fl ?? undefined,
+      );
 
       const ok = results.filter((r) => r.success).map((r) => r.platform);
       const cooldowns: { platform: string; retryAfter: number }[] = [];
@@ -1059,6 +1149,12 @@ const postWorker = new BullWorker<PostVideoJobData>(
       err(`[POST-WORKER] Error posting ${videoId}:`, e);
       fl?.poster(`POST ERROR: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
+    } finally {
+      recordMetric("queue.post_video.duration_ms", {
+        videoId,
+        durationMs: Date.now() - startedAt,
+        platformCount: platforms.length,
+      });
     }
   },
   {
@@ -1084,11 +1180,13 @@ const reconcileRedis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6
 const reconcileWorker = new BullWorker<ReconcileJobData>(
   "reconcile-video",
   async (job) => {
+    const startedAt = Date.now();
     const { videoId, attempt } = job.data;
-    log(`[RECONCILE] Checking video ${videoId} (attempt ${attempt + 1})`);
-    sfl.reconcile(`Checking video ${videoId} (attempt ${attempt + 1})`);
+    try {
+      log(`[RECONCILE] Checking video ${videoId} (attempt ${attempt + 1})`);
+      sfl.reconcile(`Checking video ${videoId} (attempt ${attempt + 1})`);
 
-    const video = await db.video.findUnique({
+      const video = await db.video.findUnique({
       where: { id: videoId },
       select: {
         id: true,
@@ -1115,34 +1213,34 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
       },
     });
 
-    if (!video) {
-      log(`[RECONCILE] Video ${videoId} not found, skipping`);
-      return;
-    }
-    if (!["READY", "SCHEDULED"].includes(video.status)) {
-      log(`[RECONCILE] Video ${videoId} status=${video.status}, nothing to reconcile`);
-      return;
-    }
+      if (!video) {
+        log(`[RECONCILE] Video ${videoId} not found, skipping`);
+        return;
+      }
+      if (!["READY", "SCHEDULED"].includes(video.status)) {
+        log(`[RECONCILE] Video ${videoId} status=${video.status}, nothing to reconcile`);
+        return;
+      }
 
     type PlatEntry = { platform: string; success?: boolean | string; postId?: string | null; url?: string | null; scheduledFor?: string; error?: string };
-    const entries = (video.postedPlatforms ?? []) as PlatEntry[];
-    const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
-    if (scheduledEntries.length === 0) {
-      log(`[RECONCILE] Video ${videoId}: no scheduled entries to check`);
-      return;
-    }
+      const entries = getPlatformEntriesArray(video.postedPlatforms) as PlatEntry[];
+      const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.postId);
+      if (scheduledEntries.length === 0) {
+        log(`[RECONCILE] Video ${videoId}: no scheduled entries to check`);
+        return;
+      }
 
-    const user = video.series?.user;
-    const autoInfo = video.series?.automation;
-    const rfl = autoInfo && user
-      ? getAutomationFileLogger(user.id, user.name ?? user.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
-      : null;
+      const user = video.series?.user;
+      const autoInfo = video.series?.automation;
+      const rfl = autoInfo && user
+        ? getAutomationFileLogger(user.id, user.name ?? user.email?.split("@")[0] ?? "user", autoInfo.id, autoInfo.name)
+        : null;
 
-    let changed = false;
-    const nowMs = Date.now();
-    const FORCE_PROMOTE_MS = 90 * 60 * 1000;
+      let changed = false;
+      const nowMs = Date.now();
+      const FORCE_PROMOTE_MS = 90 * 60 * 1000;
 
-    for (const entry of scheduledEntries) {
+      for (const entry of scheduledEntries) {
       const entrySchedTime = entry.scheduledFor ? new Date(entry.scheduledFor).getTime() : 0;
       const videoSchedTime = video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0;
       const effectiveSchedTime = entrySchedTime || videoSchedTime;
@@ -1191,43 +1289,66 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         rfl?.poster(`RECONCILE: ${entry.platform} → posted`);
         sfl.reconcile(`${videoId}: ${entry.platform} scheduled → posted`);
       }
-    }
+      }
 
-    const targeted = (video.scheduledPlatforms ?? []) as string[];
-    const allTargetedDone = targeted.length > 0 && targeted.every((plat) => {
-      const e = entries.find((x) => x.platform === plat);
-      return e && (e.success === true || e.success === "deleted");
-    });
-    const allEntriesDone = entries.length > 0 && entries.every(
-      (e) => e.success === true || e.success === "deleted",
-    );
-    const shouldPromote = video.status !== "POSTED" && (allTargetedDone || allEntriesDone);
+      const targeted = ((video.scheduledPlatforms ?? []) as string[]) ?? [];
+      const shouldPromote = video.status !== "POSTED" && shouldPromoteVideoToPosted(entries, targeted);
 
-    if (shouldPromote) {
-      await db.video.update({
-        where: { id: videoId },
-        data: { status: "POSTED", postedPlatforms: entries as never },
-      });
-      const postedPlats = entries.filter(e => e.success === true).map(e => e.platform).join(", ");
-      log(`[RECONCILE] ${videoId} → POSTED (${postedPlats})`);
-      rfl?.poster(`PROMOTED: video=${videoId} → POSTED (${postedPlats})`);
-      sfl.reconcile(`${videoId} → POSTED (${postedPlats})`);
-    } else if (changed) {
-      await db.video.update({
-        where: { id: videoId },
-        data: { postedPlatforms: entries as never },
-      });
+      if (shouldPromote) {
+        const nextStatus = deriveVideoStatusFromPlatforms(video.status, entries, targeted);
+        await db.video.update({
+          where: { id: videoId },
+          data: { status: nextStatus, postedPlatforms: entries as never },
+        });
+        const postedPlats = entries.filter(e => e.success === true).map(e => e.platform).join(", ");
+        log(`[RECONCILE] ${videoId} → POSTED (${postedPlats})`);
+        rfl?.poster(`PROMOTED: video=${videoId} → POSTED (${postedPlats})`);
+        sfl.reconcile(`${videoId} → POSTED (${postedPlats})`);
+        if (autoInfo?.id) {
+          const platformOutcome = entries
+            .map((e) => `${e.platform}=${String(e.success ?? "unknown")}`)
+            .join(", ");
+          await writeSchedulerLog(
+            autoInfo.id,
+            "posted",
+            `Status promotion: video ${videoId} SCHEDULED/READY → POSTED | outcomes: ${platformOutcome}`,
+            { videoId },
+          );
+        }
+      } else if (changed) {
+        await db.video.update({
+          where: { id: videoId },
+          data: { postedPlatforms: entries as never },
+        });
 
       const stillScheduled = entries.filter((e) => e.success === "scheduled").length;
       if (stillScheduled > 0) {
         const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
         await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
         log(`[RECONCILE] ${videoId}: ${stillScheduled} platform(s) still scheduled, re-check at ${nextAt.toISOString()}`);
+        if (autoInfo?.id) {
+          const platformOutcome = entries
+            .map((e) => `${e.platform}=${String(e.success ?? "unknown")}`)
+            .join(", ");
+          await writeSchedulerLog(
+            autoInfo.id,
+            "skipped",
+            `Reconcile pending: video ${videoId} still waiting on ${stillScheduled} platform(s) | outcomes: ${platformOutcome}`,
+            { videoId },
+          );
+        }
       }
-    } else {
-      const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
-      await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
-      log(`[RECONCILE] ${videoId}: no change, re-check at ${nextAt.toISOString()}`);
+      } else {
+        const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
+        await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
+        log(`[RECONCILE] ${videoId}: no change, re-check at ${nextAt.toISOString()}`);
+      }
+    } finally {
+      recordMetric("queue.reconcile_video.duration_ms", {
+        videoId,
+        attempt,
+        durationMs: Date.now() - startedAt,
+      });
     }
   },
   {
@@ -1249,7 +1370,7 @@ const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
 cron.schedule(`${buildM} ${buildH} * * *`, () => {
   log(`planDailyBuilds: BUILD_ALL_TIME (${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}) triggered`);
   sfl.action(`CRON: planDailyBuilds triggered (BUILD_ALL_TIME ${BUILD_ALL_TIME})`);
-  planDailyBuilds();
+  planDailyBuilds("build-window-cron");
 });
 
 // Catch-up cron: 2 hours after build window, pick up anything missed
@@ -1258,7 +1379,7 @@ const catchUpH = (buildH + Math.floor((buildM + BUILD_WINDOW_MINUTES + 60) / 60)
 cron.schedule(`${catchUpMin} ${catchUpH} * * *`, () => {
   log("planDailyBuilds: catch-up run (BUILD_ALL_TIME + 2h)");
   sfl.action(`CRON: catch-up planDailyBuilds triggered`);
-  planDailyBuilds();
+  planDailyBuilds("catch-up-cron");
 });
 
 // Safety net: recover stuck videos + reconcile overdue posts (every 4h)
@@ -1463,22 +1584,32 @@ async function optimizeClipAutomations() {
     for (const entry of selected) {
       const postTime = schedule.get(entry.niche) ?? entry.bestTimesUTC[0];
       const platforms = entry.assignedPlatforms;
-
-      const updated = await db.automation.updateMany({
+      const autos = await db.automation.findMany({
         where: {
           automationType: "clip-repurpose",
           clipConfig: { path: ["clipNiche"], equals: entry.niche },
         },
-        data: {
-          enabled: true,
-          postTime,
-          targetPlatforms: platforms,
-        },
+        select: { id: true, enabled: true, name: true },
       });
 
-      if (updated.count > 0) {
-        log(`[OPTIMIZE] Enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}`);
-        sfl.action(`OPTIMIZE: enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}`);
+      for (const auto of autos) {
+        // If an automation is newly re-enabled by optimizer, reset lastRunAt so
+        // the next build window treats it as due and schedules a fresh video.
+        await db.automation.update({
+          where: { id: auto.id },
+          data: {
+            enabled: true,
+            postTime,
+            targetPlatforms: platforms,
+            ...(!auto.enabled ? { lastRunAt: null } : {}),
+          },
+        });
+      }
+
+      if (autos.length > 0) {
+        const reEnabled = autos.filter((a) => !a.enabled).length;
+        log(`[OPTIMIZE] Enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}, autos=${autos.length}, reEnabled=${reEnabled}`);
+        sfl.action(`OPTIMIZE: enabled "${entry.niche}" → postTime=${postTime}, platforms=${platforms.join(",")}, rank=${entry.rankScore.toFixed(1)}, autos=${autos.length}, reEnabled=${reEnabled}`);
       }
     }
 
@@ -1505,6 +1636,6 @@ cleanupOldLogs().then(() => log("Old log cleanup done")).catch(() => {});
 backfillLastRunAt()
   .then(() => bootstrapClipAutomations())
   .then(() => {
-    planDailyBuilds();
+    planDailyBuilds("startup");
     safetyNet();
   });

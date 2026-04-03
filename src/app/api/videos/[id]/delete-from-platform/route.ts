@@ -5,6 +5,7 @@ import { deleteYouTubeVideo } from "@/lib/social/youtube";
 import { deleteInstagramMedia } from "@/lib/social/instagram";
 import { deleteFacebookVideo, getFreshFacebookToken } from "@/lib/social/facebook";
 import { decrypt } from "@/lib/social/encrypt";
+import { clearPostQueueJobsForVideo, clearReconcileQueueJobsForVideo } from "@/services/queue";
 
 interface PlatformEntry {
   platform: string;
@@ -177,6 +178,8 @@ export async function POST(
         status: stillPosted.length > 0 ? video.status : "READY",
       },
     });
+    await clearPostQueueJobsForVideo(id);
+    await clearReconcileQueueJobsForVideo(id);
 
     return NextResponse.json({ success: true, results, postedPlatforms: updatedPosted });
   } catch (error) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { clearPostQueueJobsForVideo, clearReconcileQueueJobsForVideo } from "@/services/queue";
 
 export async function POST(
   req: NextRequest,
@@ -77,6 +78,8 @@ export async function POST(
         status: hasActive ? video.status : "READY",
       },
     });
+    await clearPostQueueJobsForVideo(id);
+    await clearReconcileQueueJobsForVideo(id);
 
     return NextResponse.json({ success: true, postedPlatforms: newPosted });
   } catch (error) {

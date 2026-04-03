@@ -1,9 +1,11 @@
-import puppeteer, { type Browser, type Page, type HTTPRequest } from "puppeteer-core";
+import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import fsSync from "fs";
+import { execSync } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { createLogger } from "@/lib/logger";
-import { getDataCookiePath, getCookieFilePath } from "@/lib/cookie-path";
+import { getCookieFilePath } from "@/lib/cookie-path";
 
 const log = createLogger("BrowserScraper");
 
@@ -36,7 +38,6 @@ const UA =
 
 function findChrome(): string | null {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const fsSync = require("fs") as typeof import("fs");
   for (const p of CHROME_PATHS[process.platform] ?? []) {
     if (!p || p.startsWith("\\")) continue;
     if (fsSync.existsSync(p)) return p;
@@ -118,6 +119,19 @@ async function launchBrowser(): Promise<Browser> {
     ],
     ignoreDefaultArgs: ["--enable-automation"],
   });
+}
+
+async function runWithPage<T>(
+  domain: string,
+  fn: (browser: Browser, page: Page) => Promise<T>,
+): Promise<T> {
+  const browser = await launchBrowser();
+  try {
+    const page = await prepPage(browser, domain);
+    return await fn(browser, page);
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 async function prepPage(browser: Browser, domain: string): Promise<Page> {
@@ -216,10 +230,8 @@ export async function searchFbVideos(
   query: string,
   maxItems = 15,
 ): Promise<ScrapedVideo[]> {
-  let browser: Browser | null = null;
   try {
-    browser = await launchBrowser();
-    const page = await prepPage(browser, "facebook.com");
+    return await runWithPage("facebook.com", async (_browser, page) => {
 
     const intercepted = new Map<string, FbInterceptedVideo>();
 
@@ -347,11 +359,10 @@ export async function searchFbVideos(
         platform: "facebook" as const,
       };
     });
+    });
   } catch (err) {
     log.warn(`[FB] Search failed for "${query}": ${err instanceof Error ? err.message : err}`);
     return [];
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 
@@ -362,10 +373,8 @@ export async function searchIgReels(
   query: string,
   maxItems = 15,
 ): Promise<ScrapedVideo[]> {
-  let browser: Browser | null = null;
   try {
-    browser = await launchBrowser();
-    const page = await prepPage(browser, "instagram.com");
+    return await runWithPage("instagram.com", async (_browser, page) => {
 
     const tag = query.replace(/\s+/g, "").toLowerCase();
     const tagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/`;
@@ -415,11 +424,10 @@ export async function searchIgReels(
       durationSec: 0,
       platform: "instagram" as const,
     }));
+    });
   } catch (err) {
     log.warn(`[IG] Tag search failed for "${query}": ${err instanceof Error ? err.message : err}`);
     return [];
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 
@@ -731,7 +739,6 @@ export async function downloadFbVideo(
     let duration = extracted.duration;
     if (!duration) {
       try {
-        const { execSync } = require("child_process");
         const probe = execSync(
           `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${outPath}"`,
         ).toString().trim();

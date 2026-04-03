@@ -6,6 +6,8 @@ import { searchFbVideos, discoverFbPageVideos, searchIgReels, discoverIgReels } 
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipDiscovery");
+const FB_SCRAPE_TARGET_LIMIT = Math.max(2, parseInt(process.env.CLIP_DISCOVERY_FB_SCRAPE_TARGET_LIMIT ?? "6", 10));
+const IG_SCRAPE_TARGET_LIMIT = Math.max(2, parseInt(process.env.CLIP_DISCOVERY_IG_SCRAPE_TARGET_LIMIT ?? "6", 10));
 
 export type Platform = "youtube" | "facebook" | "instagram" | "tiktok" | "twitter" | "other";
 
@@ -558,7 +560,6 @@ export function scoreCandidate(
   niche: ClipNiche,
   copyrightMap?: Map<string, { licensedContent: boolean; license: string }>,
 ): number {
-  const nowMs = Date.now();
   let score = 40;
 
   if (v.viewCount >= 100_000_000) score += 35;
@@ -651,7 +652,6 @@ export async function discoverVideo(config: {
   const igMinViews = 50_000;
   const minDur = config.minDurationSec ?? 60;
   const maxDur = config.maxDurationSec ?? 3600;
-  const nowMs = Date.now();
 
   const allCandidates: DiscoveredVideo[] = [];
   const queries = NICHE_SEARCH_QUERIES[config.niche] ?? NICHE_SEARCH_QUERIES["auto"];
@@ -720,8 +720,9 @@ export async function discoverVideo(config: {
       }
 
       log.log(`[SCRAPE-FB] Search found only ${fbSearchCount} (< ${FB_SEARCH_SUFFICIENT}), scraping ${fbScrapeTargets.length} page URLs as fallback...`);
+      const limitedTargets = fbScrapeTargets.slice(0, FB_SCRAPE_TARGET_LIMIT);
       const fbScrapeResults = await Promise.allSettled(
-        fbScrapeTargets.map(async (url) => {
+        limitedTargets.map(async (url) => {
           log.log(`[SCRAPE-FB] Scraping ${url}...`);
           const videos = await discoverFbPageVideos(url, 15);
           log.log(`[SCRAPE-FB] Got ${videos.length} videos from ${url}`);
@@ -778,8 +779,9 @@ export async function discoverVideo(config: {
     const igProfiles = NICHE_IG_PROFILES[config.niche] ?? NICHE_IG_PROFILES["auto"];
     if (igSearchCount < IG_SEARCH_SUFFICIENT) {
       log.log(`[SCRAPE-IG] Search found only ${igSearchCount} (< ${IG_SEARCH_SUFFICIENT}), scraping ${igProfiles.length} profiles as fallback...`);
+      const limitedProfiles = igProfiles.slice(0, IG_SCRAPE_TARGET_LIMIT);
       const igScrapeResults = await Promise.allSettled(
-        igProfiles.map(async (profileUrl) => {
+        limitedProfiles.map(async (profileUrl) => {
           log.log(`[SCRAPE-IG] Scraping ${profileUrl}...`);
           const reels = await discoverIgReels(profileUrl, 15);
           log.log(`[SCRAPE-IG] Got ${reels.length} reels from ${profileUrl}`);
@@ -968,7 +970,10 @@ export async function discoverVideo(config: {
   log.log(`[RESULT] "${best.title}" (${best.viewCount.toLocaleString()} views, velocity=${Math.round(best.viewCount / 30)}/day, score=${best.score}, licensed=${best.licensedContent ?? "??"}) [${best.platform}/${best.source}] from ${unique.length} candidates`);
   return {
     selected: best,
-    rankedCandidates: scoredWithRank.slice(0, 20).map(({ score: _score, ...v }) => v),
+    rankedCandidates: scoredWithRank.slice(0, 20).map(({ score, ...v }) => {
+      void score;
+      return v;
+    }),
     candidates: candidatesSummary,
     totalConsidered: unique.length,
     platformBreakdown: platformCounts,

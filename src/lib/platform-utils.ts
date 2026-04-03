@@ -1,11 +1,12 @@
 export interface PlatformEntry {
   platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted";
+  success?: boolean | "uploading" | "scheduled" | "deleted" | "cooldown";
   postId?: string;
   url?: string;
   error?: string;
   scheduledFor?: string;
   startedAt?: number;
+  retryAfter?: number;
 }
 
 export function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<string, PlatformEntry> {
@@ -20,4 +21,20 @@ export function parsePlatformEntries(raw: (string | PlatformEntry)[]): Map<strin
     }
   }
   return map;
+}
+
+export function getPlatformEntriesArray(raw: unknown): PlatformEntry[] {
+  const arr = Array.isArray(raw) ? (raw as (string | PlatformEntry)[]) : [];
+  return [...parsePlatformEntries(arr).values()];
+}
+
+export function upsertPlatformEntry(entries: PlatformEntry[], entry: PlatformEntry): PlatformEntry[] {
+  const filtered = entries.filter((e) => e.platform !== entry.platform);
+  filtered.push(entry);
+  return filtered;
+}
+
+export function isTerminalPlatformSuccess(entry: PlatformEntry | undefined): boolean {
+  if (!entry) return false;
+  return entry.success === true || entry.success === "deleted";
 }

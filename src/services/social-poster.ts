@@ -1,4 +1,4 @@
-import { PrismaClient, Platform } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import { decrypt } from "@/lib/social/encrypt";
 import { postInstagramReel } from "@/lib/social/instagram";
 import { postFacebookReel, getFreshFacebookToken } from "@/lib/social/facebook";
@@ -8,6 +8,8 @@ import { uploadMojVideo } from "@/lib/social/moj";
 import { generateVideoSEO, generateInstagramCaption, generateFacebookCaption } from "@/lib/social/seo";
 import { createLogger } from "@/lib/logger";
 import type { AutomationFileLogger } from "@/lib/file-logger";
+import { deriveVideoStatusFromPlatforms, shouldPromoteVideoToPosted } from "@/lib/video-state";
+import { getPlatformEntriesArray, upsertPlatformEntry, type PlatformEntry } from "@/lib/platform-utils";
 import path from "path";
 
 const log = createLogger("SocialPoster");
@@ -56,17 +58,6 @@ interface PostResult {
   error?: string;
 }
 
-interface PlatformEntry {
-  platform: string;
-  success?: boolean | "uploading" | "scheduled" | "deleted" | "cooldown";
-  postId?: string | null;
-  url?: string | null;
-  error?: string;
-  startedAt?: number;
-  scheduledFor?: string;
-  retryAfter?: number;
-}
-
 const STALE_UPLOAD_MS = 10 * 60 * 1000; // 10 minutes
 const POST_COOLDOWN_MS = 10_000; // wait after video becomes READY before posting
 const MAX_RETRIES = 3;
@@ -89,11 +80,12 @@ async function getLatestPlatformSuccessTime(
   platform: string,
   excludeVideoId: string,
 ): Promise<Date | null> {
-  // Look back 48h for recent success entries; enough for cooldown checks.
+  // Narrow scans to recently posted videos only.
   const recent = await db.video.findMany({
     where: {
       id: { not: excludeVideoId },
       updatedAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+      status: "POSTED",
       series: { userId },
     },
     select: { id: true, updatedAt: true, postedPlatforms: true },
@@ -118,20 +110,8 @@ async function getPlatformEntries(videoId: string): Promise<Map<string, Platform
     where: { id: videoId },
     select: { postedPlatforms: true },
   });
-  const raw = (row?.postedPlatforms ?? []) as (string | PlatformEntry)[];
-  const map = new Map<string, PlatformEntry>();
-  for (const p of raw) {
-    if (typeof p === "string") {
-      map.set(p, { platform: p, success: true });
-    } else {
-      const entry = { ...p };
-      if (entry.success === undefined && (entry.postId || entry.url)) {
-        entry.success = true;
-      }
-      map.set(entry.platform, entry);
-    }
-  }
-  return map;
+  const entries = getPlatformEntriesArray(row?.postedPlatforms);
+  return new Map(entries.map((entry) => [entry.platform, entry]));
 }
 
 /**
@@ -171,31 +151,31 @@ function shouldSkip(entry: PlatformEntry | undefined): { skip: boolean; reason: 
  * Returns true if the claim succeeded, false if someone else got there first.
  */
 async function claimPlatform(videoId: string, platform: string): Promise<boolean> {
-  const entries = await getPlatformEntries(videoId);
-  const existing = entries.get(platform);
-  const { skip, reason } = shouldSkip(existing);
+  return db.$transaction(async (tx) => {
+    const row = await tx.video.findUnique({
+      where: { id: videoId },
+      select: { postedPlatforms: true },
+    });
+    const entries = getPlatformEntriesArray(row?.postedPlatforms);
+    const existing = entries.find((entry) => entry.platform === platform);
+    const { skip, reason } = shouldSkip(existing);
+    if (skip) {
+      log.log(`Claim denied for ${platform} on ${videoId}: ${reason}`);
+      return false;
+    }
 
-  if (skip) {
-    log.log(`Claim denied for ${platform} on ${videoId}: ${reason}`);
-    return false;
-  }
-
-  // Write "uploading" marker to DB
-  const allEntries = [...entries.values()].filter((e) => e.platform !== platform);
-  const uploadingEntry: PlatformEntry = {
-    platform,
-    success: "uploading",
-    startedAt: Date.now(),
-  };
-  allEntries.push(uploadingEntry);
-
-  await db.video.update({
-    where: { id: videoId },
-    data: { postedPlatforms: allEntries as never },
+    const next = upsertPlatformEntry(entries, {
+      platform,
+      success: "uploading",
+      startedAt: Date.now(),
+    });
+    await tx.video.update({
+      where: { id: videoId },
+      data: { postedPlatforms: next as never },
+    });
+    log.log(`Claimed ${platform} for ${videoId} (uploading)`);
+    return true;
   });
-
-  log.log(`Claimed ${platform} for ${videoId} (uploading)`);
-  return true;
 }
 
 /**
@@ -203,28 +183,36 @@ async function claimPlatform(videoId: string, platform: string): Promise<boolean
  */
 async function finalizePlatform(
   videoId: string,
+  targetPlatforms: string[],
   entry:
     | { platform: string; success: true; postId: string | null; url: string | null }
     | { platform: string; success: false; error: string },
 ) {
   try {
-    const entries = await getPlatformEntries(videoId);
-    const filtered = [...entries.values()].filter((e) => e.platform !== entry.platform);
-    filtered.push(entry as PlatformEntry);
+    await db.$transaction(async (tx) => {
+      const row = await tx.video.findUnique({
+        where: { id: videoId },
+        select: { status: true, postedPlatforms: true },
+      });
+      if (!row) return;
+      const entries = getPlatformEntriesArray(row.postedPlatforms);
+      const filtered = upsertPlatformEntry(entries, entry as PlatformEntry);
+      const forcePosted = shouldPromoteVideoToPosted(filtered, targetPlatforms);
+      const derivedStatus = deriveVideoStatusFromPlatforms(row.status, filtered, targetPlatforms);
+      const nextStatus = forcePosted ? "POSTED" : derivedStatus;
 
-    const hasAnySuccess = filtered.some((e) => e.success === true);
+      const summary = entry.success
+        ? `success postId=${(entry as { postId?: string | null }).postId ?? "?"}`
+        : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
+      log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
 
-    const summary = entry.success
-      ? `success postId=${(entry as { postId?: string | null }).postId ?? "?"}`
-      : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
-    log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
-
-    await db.video.update({
-      where: { id: videoId },
-      data: {
-        postedPlatforms: filtered as never,
-        ...(hasAnySuccess ? { status: "POSTED" } : {}),
-      },
+      await tx.video.update({
+        where: { id: videoId },
+        data: {
+          postedPlatforms: filtered as never,
+          status: nextStatus,
+        },
+      });
     });
   } catch (e) {
     log.error(`Failed to finalize ${entry.platform} for ${videoId}:`, e);
@@ -233,30 +221,36 @@ async function finalizePlatform(
 
 async function finalizePlatformEx(
   videoId: string,
+  targetPlatforms: string[],
   entry:
     | { platform: string; success: true | "scheduled"; postId: string | null; url: string | null }
     | { platform: string; success: false; error: string },
 ) {
   try {
-    const entries = await getPlatformEntries(videoId);
-    const filtered = [...entries.values()].filter((e) => e.platform !== entry.platform);
-    filtered.push(entry as PlatformEntry);
+    await db.$transaction(async (tx) => {
+      const row = await tx.video.findUnique({
+        where: { id: videoId },
+        select: { status: true, postedPlatforms: true },
+      });
+      if (!row) return;
+      const entries = getPlatformEntriesArray(row.postedPlatforms);
+      const filtered = upsertPlatformEntry(entries, entry as PlatformEntry);
+      const forcePosted = shouldPromoteVideoToPosted(filtered, targetPlatforms);
+      const derivedStatus = deriveVideoStatusFromPlatforms(row.status, filtered, targetPlatforms);
+      const nextStatus = forcePosted ? "POSTED" : derivedStatus;
 
-    const hasAnySuccess = filtered.some((e) => e.success === true);
-    const hasAnyScheduled = filtered.some((e) => e.success === "scheduled");
-    const newStatus = hasAnySuccess ? "POSTED" : hasAnyScheduled ? "SCHEDULED" : undefined;
+      const summary = entry.success
+        ? `${entry.success} postId=${(entry as { postId?: string | null }).postId ?? "?"}`
+        : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
+      log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
 
-    const summary = entry.success
-      ? `${entry.success} postId=${(entry as { postId?: string | null }).postId ?? "?"}`
-      : `failed: ${(entry as { error?: string }).error ?? "unknown"}`;
-    log.log(`Finalizing ${entry.platform} for ${videoId}: ${summary}`);
-
-    await db.video.update({
-      where: { id: videoId },
-      data: {
-        postedPlatforms: filtered as never,
-        ...(newStatus ? { status: newStatus } : {}),
-      },
+      await tx.video.update({
+        where: { id: videoId },
+        data: {
+          postedPlatforms: filtered as never,
+          status: nextStatus,
+        },
+      });
     });
   } catch (e) {
     log.error(`Failed to finalize ${entry.platform} for ${videoId}:`, e);
@@ -384,6 +378,12 @@ export async function postVideoToSocials(
     ytSeo.description += `\n\n${creditSection}`;
   }
 
+  // For IG app-level delayed jobs we intentionally call without scheduledAt.
+  // Keep YT/FB native scheduling only.
+  const isIgOnlyImmediateJob = !scheduledAt
+    && targetPlatforms.length === 1
+    && targetPlatforms[0] === "INSTAGRAM";
+
   // Post to all platforms in parallel
   async function postToPlatform(platform: string): Promise<PostResult> {
     const claimed = await claimPlatform(videoId, platform);
@@ -401,14 +401,14 @@ export async function postVideoToSocials(
       const stubResult = platform === "SHARECHAT"
         ? await uploadShareChatVideo("", videoPath, title, igCaption)
         : await uploadMojVideo("", videoPath, title, igCaption);
-      await finalizePlatform(videoId, {
+      await finalizePlatform(videoId, targetPlatforms, {
         platform, success: false, error: stubResult.error ?? "Upload not available",
       });
       return { platform, success: false, error: stubResult.error };
     }
 
     if (accounts.length === 0) {
-      await finalizePlatform(videoId, {
+      await finalizePlatform(videoId, targetPlatforms, {
         platform, success: false, error: "No connected account",
       });
       return { platform, success: false, error: "No connected account" };
@@ -469,8 +469,9 @@ export async function postVideoToSocials(
         }
       }
 
-      const schedUnix = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
-      const schedIso = scheduledAt ? scheduledAt.toISOString() : undefined;
+      const shouldNativeSchedule = !!scheduledAt && !isIgOnlyImmediateJob;
+      const schedUnix = shouldNativeSchedule ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
+      const schedIso = shouldNativeSchedule ? scheduledAt.toISOString() : undefined;
 
       let lastResult: { success: boolean; postId?: string; postUrl?: string; error?: string } | null = null;
 
@@ -566,11 +567,11 @@ export async function postVideoToSocials(
           ?? (result.postId && PLATFORM_URLS[platform]
             ? PLATFORM_URLS[platform](result.postId)
             : null);
-        const successStatus: true | "scheduled" = scheduledAt ? "scheduled" : true;
-        await finalizePlatformEx(videoId, {
+        const successStatus: true | "scheduled" = shouldNativeSchedule ? "scheduled" : true;
+        await finalizePlatformEx(videoId, targetPlatforms, {
           platform, success: successStatus, postId: result.postId ?? null, url: url ?? null,
         });
-        if (scheduledAt) {
+        if (shouldNativeSchedule) {
           const entries = await getPlatformEntries(videoId);
           const platEntry = entries.get(platform);
           if (platEntry) {
@@ -586,7 +587,7 @@ export async function postVideoToSocials(
         const displayError = platform === "FACEBOOK"
           ? `${cleanMsg}\nRetry after 24 hours.`
           : cleanMsg;
-        await finalizePlatform(videoId, {
+        await finalizePlatform(videoId, targetPlatforms, {
           platform, success: false, error: displayError,
         });
         fileLogger?.poster(`${platform}: FAILED — ${cleanMsg}`);
@@ -597,7 +598,7 @@ export async function postVideoToSocials(
     return { platform, success: false, error: "No accounts processed" };
   }
 
-  log.log(`${scheduledAt ? "Scheduling" : "Posting"} video ${videoId} to ${targetPlatforms.join(", ")}${scheduledAt ? ` for ${scheduledAt.toISOString()} (unix=${Math.floor(scheduledAt.getTime() / 1000)})` : " immediately"}`);
+  log.log(`${scheduledAt && !isIgOnlyImmediateJob ? "Scheduling" : "Posting"} video ${videoId} to ${targetPlatforms.join(", ")}${scheduledAt ? ` for ${scheduledAt.toISOString()} (unix=${Math.floor(scheduledAt.getTime() / 1000)})` : " immediately"}`);
   const settled = await Promise.allSettled(targetPlatforms.map(postToPlatform));
 
   const results: PostResult[] = [];
@@ -609,7 +610,7 @@ export async function postVideoToSocials(
       const platform = targetPlatforms[i];
       const errMsg = sanitizeErrorForUi(String(s.reason));
       log.error(`Platform ${platform} threw unhandled:`, s.reason);
-      await finalizePlatform(videoId, { platform, success: false, error: errMsg });
+      await finalizePlatform(videoId, targetPlatforms, { platform, success: false, error: errMsg });
       results.push({ platform, success: false, error: errMsg });
     }
   }

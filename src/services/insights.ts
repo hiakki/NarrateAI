@@ -12,6 +12,7 @@ import {
 } from "@/lib/social/instagram";
 import { getFacebookVideoInsights, getFreshFacebookToken } from "@/lib/social/facebook";
 import { createLogger } from "@/lib/logger";
+import pLimit from "p-limit";
 
 const log = createLogger("Insights");
 const db = new PrismaClient();
@@ -136,7 +137,7 @@ export async function refreshInsightsForUser(
   // Fetch YouTube video stats
   const ytAccount = accountByPlatform.get("YOUTUBE");
   const ytStatsByPostId: Record<string, { views: number; likes: number; comments: number }> = {};
-  if (ytAccount && (ytList.length > 0 || true)) {
+  if (ytAccount && ytList.length > 0) {
     try {
       const accessToken = decrypt(ytAccount.accessTokenEnc);
       const refreshToken = ytAccount.refreshTokenEnc ? decrypt(ytAccount.refreshTokenEnc) : null;
@@ -159,7 +160,7 @@ export async function refreshInsightsForUser(
   // Fetch Instagram media metrics (resolve shortcodes from URLs to media IDs)
   const igAccount = accountByPlatform.get("INSTAGRAM");
   const igStatsByPostId: Record<string, { likes: number; comments: number; views: number }> = {};
-  if (igAccount && (igList.length > 0 || true)) {
+  if (igAccount && igList.length > 0) {
     try {
       let accessToken = decrypt(igAccount.accessTokenEnc);
       if (igAccount.refreshTokenEnc && igAccount.pageId) {
@@ -194,16 +195,18 @@ export async function refreshInsightsForUser(
   // Fetch Facebook video insights
   const fbAccount = accountByPlatform.get("FACEBOOK");
   const fbStatsByPostId: Record<string, { views: number; reactions: number; comments: number }> = {};
-  if (fbAccount && (fbList.length > 0 || true)) {
+  if (fbAccount && fbList.length > 0) {
     try {
       let accessToken = decrypt(fbAccount.accessTokenEnc);
       if (fbAccount.refreshTokenEnc && fbAccount.pageId) {
         try { accessToken = await getFreshFacebookToken(fbAccount.id, accessToken, fbAccount.refreshTokenEnc, fbAccount.pageId, fbAccount.tokenExpiresAt); } catch { /* use stored */ }
       }
-      for (const { postId } of fbList) {
+      const uniquePostIds = [...new Set(fbList.map((x) => x.postId))];
+      const limit = pLimit(4);
+      await Promise.all(uniquePostIds.map((postId) => limit(async () => {
         const ins = await getFacebookVideoInsights(accessToken, postId);
         fbStatsByPostId[postId] = ins;
-      }
+      })));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`Facebook: ${msg}`);

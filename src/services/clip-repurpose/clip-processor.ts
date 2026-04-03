@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { createLogger } from "@/lib/logger";
 import type { PeakSegment } from "./heatmap";
+import { recordMetric } from "@/lib/ops-metrics";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("ClipProcessor");
@@ -211,6 +212,7 @@ export async function extractAndCrop(
   cropMode: "blur-bg" | "center-crop" = "blur-bg",
   hflip = true,
 ): Promise<void> {
+  const stageStartedAt = Date.now();
   const duration = segment.endSec - segment.startSec;
   const antiFpVideo = buildAntiFpVideo(hflip);
 
@@ -305,6 +307,13 @@ export async function extractAndCrop(
 
   const stat = await fs.stat(outputPath);
   log.log(`Clip extracted: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);
+  recordMetric("ffmpeg.stage", {
+    stage: "CLIPPING",
+    durationMs: Date.now() - stageStartedAt,
+    codec,
+    mode: cropMode,
+    outputMb: Number((stat.size / 1024 / 1024).toFixed(2)),
+  });
 }
 
 const HTML_ENTITIES: Record<string, string> = {
@@ -586,6 +595,7 @@ export async function enhanceClip(
   tmpDir: string,
   enableBgm = false,
 ): Promise<{ bgmTrack: string | null; bgmInfo: { origVol: number; bgmVol: number; meanLUFS: number; peakDB: number } | null }> {
+  const stageStartedAt = Date.now();
   const assPath = path.join(tmpDir, "captions.ass");
   await fs.writeFile(assPath, assContent, "utf-8");
 
@@ -662,5 +672,11 @@ export async function enhanceClip(
 
   const stat = await fs.stat(outputPath);
   log.log(`Enhanced clip: ${(stat.size / 1024 / 1024).toFixed(1)}MB`);
+  recordMetric("ffmpeg.stage", {
+    stage: "ENHANCE",
+    durationMs: Date.now() - stageStartedAt,
+    outputMb: Number((stat.size / 1024 / 1024).toFixed(2)),
+    bgmEnabled: !!bgmPath,
+  });
   return { bgmTrack: bgmPath ? path.basename(bgmPath) : null, bgmInfo };
 }

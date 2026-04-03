@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { deriveVideoStatusFromPlatforms } from "@/lib/video-state";
+import { getPlatformEntriesArray, upsertPlatformEntry, type PlatformEntry } from "@/lib/platform-utils";
 
 const PLATFORM_URL_PATTERNS: Record<string, RegExp[]> = {
   YOUTUBE: [
@@ -35,16 +37,6 @@ function extractPostIdFromUrl(platform: string, url: string): string | null {
     return m ? m[1].replace(/\/$/, "") : null;
   }
   return null;
-}
-
-interface PlatformEntry {
-  platform: string;
-  success?: boolean | "uploading";
-  postId?: string | null;
-  url?: string | null;
-  error?: string;
-  startedAt?: number;
-  manualUrl?: boolean;
 }
 
 function validatePlatformUrl(platform: string, url: string): { valid: boolean; reason?: string } {
@@ -122,39 +114,26 @@ export async function POST(
     if (video.series.userId !== session.user.id && session.user.role === "USER")
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    const currentPosted = (video.postedPlatforms ?? []) as unknown as PlatformEntry[];
+    const currentPosted = getPlatformEntriesArray(video.postedPlatforms);
     const trimmedUrl = url.trim();
 
-    const existingIdx = currentPosted.findIndex(
-      (e) => (typeof e === "string" ? e : e.platform) === platform,
-    );
-
     const extractedPostId = extractPostIdFromUrl(platform, trimmedUrl);
-    const newEntry: PlatformEntry = {
+    const newEntry: PlatformEntry & { manualUrl?: boolean } = {
       platform,
       success: true,
       url: trimmedUrl,
       manualUrl: true,
       ...(extractedPostId && { postId: extractedPostId }),
     };
-    let newPosted: PlatformEntry[];
-    if (existingIdx >= 0) {
-      newPosted = [...currentPosted];
-      const existing = newPosted[existingIdx];
-      if (typeof existing === "string") {
-        newPosted[existingIdx] = newEntry;
-      } else {
-        newPosted[existingIdx] = { ...existing, ...newEntry };
-      }
-    } else {
-      newPosted = [...currentPosted, newEntry];
-    }
+    const newPosted = upsertPlatformEntry(currentPosted, newEntry);
+    const scheduledTargets = Array.isArray(video.scheduledPlatforms) ? (video.scheduledPlatforms as string[]) : [];
+    const nextStatus = deriveVideoStatusFromPlatforms(video.status, newPosted, scheduledTargets);
 
     await db.video.update({
       where: { id },
       data: {
         postedPlatforms: newPosted as never,
-        status: "POSTED",
+        status: nextStatus,
       },
     });
 

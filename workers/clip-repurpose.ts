@@ -12,6 +12,7 @@ import { createLogger, runWithVideoIdAsync } from "../src/lib/logger";
 import { getAutomationFileLogger, type AutomationFileLogger } from "../src/lib/file-logger";
 import { enqueueScheduledPost } from "../src/services/queue";
 import type { ClipRepurposeJobData } from "../src/services/queue";
+import { recordMetric } from "../src/lib/ops-metrics";
 import fs from "fs/promises";
 import path from "path";
 
@@ -117,6 +118,7 @@ Reply with ONLY a JSON object (no markdown):
 const worker = new Worker<ClipRepurposeJobData>(
   "clip-repurpose",
   async (job) => {
+    const jobStartedAt = Date.now();
     const {
       videoId,
       seriesId,
@@ -474,6 +476,11 @@ const worker = new Worker<ClipRepurposeJobData>(
       }
 
       throw error;
+    } finally {
+      recordMetric("queue.clip_repurpose.duration_ms", {
+        videoId,
+        durationMs: Date.now() - jobStartedAt,
+      });
     }
     });
   },
