@@ -8,7 +8,6 @@ import {
   enqueueClipRepurpose,
   enqueueScheduledPost,
   enqueueReconcileCheck,
-  RECONCILE_INTERVAL_MS,
   type PostVideoJobData,
   type ReconcileJobData,
 } from "../src/services/queue";
@@ -128,6 +127,20 @@ function derivePostIdFromUrl(platform: string, url?: string | null): string | nu
     return m?.[1] ?? null;
   }
   return null;
+}
+
+async function canOpenPublicUrl(url?: string | null): Promise<boolean> {
+  if (!url) return false;
+  try {
+    const res = await fetch(url, { method: "GET", redirect: "follow" });
+    if (!(res.status >= 200 && res.status < 400)) return false;
+    const finalUrl = res.url.toLowerCase();
+    // Login/checkpoint redirects are not public visibility.
+    if (finalUrl.includes("login") || finalUrl.includes("checkpoint")) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const SCHEDULER_REASON_CODES = {
@@ -1026,6 +1039,14 @@ async function reconcileScheduledPosts() {
             isLive = true;
           }
 
+          if (!isLive && (entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && entry.url) {
+            const publicOpen = await canOpenPublicUrl(entry.url);
+            if (publicOpen) {
+              log(`Public URL verification passed for ${entry.platform} ${video.id}: scheduled → posted`);
+              isLive = true;
+            }
+          }
+
           if (isLive) {
             entry.success = true;
             delete entry.scheduledFor;
@@ -1154,7 +1175,6 @@ async function catchUpOverdueScheduledPostsOnStartup() {
 async function safetyNet() {
   try {
     await recoverStuckVideos();
-    await reconcileScheduledPosts();
   } catch (e) {
     err("safetyNet error:", e);
   }
@@ -1297,7 +1317,7 @@ const postWorker = new BullWorker<PostVideoJobData>(
       const scheduledEntries = entries.filter((e) => e.success === "scheduled" && e.scheduledFor);
       if (scheduledEntries.length > 0) {
         const latestSchedMs = Math.max(...scheduledEntries.map((e) => new Date(e.scheduledFor!).getTime()));
-        const reconcileAt = new Date(latestSchedMs + RECONCILE_INTERVAL_MS);
+        const reconcileAt = new Date(latestSchedMs);
         await enqueueReconcileCheck(videoId, reconcileAt, 0);
         log(`[POST-WORKER] ${videoId} → reconcile check at ${reconcileAt.toISOString()}`);
         fl?.poster(`RECONCILE: scheduled check at ${reconcileAt.toISOString()}`);
@@ -1343,6 +1363,11 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
     try {
       log(`[RECONCILE] Checking video ${videoId} (attempt ${attempt + 1})`);
       sfl.reconcile(`Checking video ${videoId} (attempt ${attempt + 1})`);
+
+      // Also reconcile any older overdue scheduled posts when a scheduled reconcile runs.
+      if (attempt === 0) {
+        await reconcileScheduledPosts();
+      }
 
       const video = await db.video.findUnique({
       where: { id: videoId },
@@ -1448,6 +1473,14 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         isLive = true;
       }
 
+      if (!isLive && (entry.platform === "YOUTUBE" || entry.platform === "FACEBOOK") && entry.url) {
+        const publicOpen = await canOpenPublicUrl(entry.url);
+        if (publicOpen) {
+          log(`[RECONCILE] Public URL verification passed for ${entry.platform} ${videoId}: scheduled → posted`);
+          isLive = true;
+        }
+      }
+
       if (isLive) {
         entry.success = true;
         delete entry.scheduledFor;
@@ -1489,26 +1522,17 @@ const reconcileWorker = new BullWorker<ReconcileJobData>(
         });
 
       const stillScheduled = entries.filter((e) => e.success === "scheduled").length;
-      if (stillScheduled > 0) {
-        const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
-        await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
-        log(`[RECONCILE] ${videoId}: ${stillScheduled} platform(s) still scheduled, re-check at ${nextAt.toISOString()}`);
-        if (autoInfo?.id) {
-          const platformOutcome = entries
-            .map((e) => `${e.platform}=${String(e.success ?? "unknown")}`)
-            .join(", ");
-          await writeSchedulerLog(
-            autoInfo.id,
-            "skipped",
-            `Reconcile pending: video ${videoId} still waiting on ${stillScheduled} platform(s) | outcomes: ${platformOutcome}`,
-            { videoId },
-          );
-        }
+      if (stillScheduled > 0 && autoInfo?.id) {
+        const platformOutcome = entries
+          .map((e) => `${e.platform}=${String(e.success ?? "unknown")}`)
+          .join(", ");
+        await writeSchedulerLog(
+          autoInfo.id,
+          "skipped",
+          `Reconcile pending: video ${videoId} still waiting on ${stillScheduled} platform(s) | outcomes: ${platformOutcome}`,
+          { videoId },
+        );
       }
-      } else {
-        const nextAt = new Date(Date.now() + RECONCILE_INTERVAL_MS);
-        await enqueueReconcileCheck(videoId, nextAt, attempt + 1);
-        log(`[RECONCILE] ${videoId}: no change, re-check at ${nextAt.toISOString()}`);
       }
     } finally {
       recordMetric("queue.reconcile_video.duration_ms", {
@@ -1549,9 +1573,9 @@ cron.schedule(`${catchUpMin} ${catchUpH} * * *`, () => {
   planDailyBuilds("catch-up-cron");
 });
 
-// Safety net: recover stuck videos + reconcile overdue posts (every 4h)
+// Safety net: recover stuck generation jobs only (every 4h)
 cron.schedule("0 */4 * * *", () => {
-  debug("safetyNet: running recovery + reconciliation");
+  debug("safetyNet: running recovery");
   sfl.action(`CRON: safetyNet triggered (every 4h)`);
   safetyNet();
 });
