@@ -560,6 +560,7 @@ export function scoreCandidate(
   niche: ClipNiche,
   copyrightMap?: Map<string, { licensedContent: boolean; license: string }>,
 ): number {
+  const nowMs = Date.now();
   let score = 40;
 
   if (v.viewCount >= 100_000_000) score += 35;
