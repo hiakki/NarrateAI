@@ -112,11 +112,21 @@ export async function POST(
     );
 
     // Create video record immediately — script generation happens in the worker
+    const triggeredAt = new Date();
     const video = await db.video.create({
       data: {
         seriesId: auto.seriesId,
         targetDuration: auto.duration,
         status: "QUEUED",
+        sourceMetadata: {
+          generationContext: {
+            triggerSource: "user-run-now",
+            triggerType: "manual",
+            triggerLabel: "Run Now",
+            reason: "User clicked Run Now from automation page",
+            triggeredAt: triggeredAt.toISOString(),
+          },
+        } as never,
       },
     });
 
@@ -143,6 +153,15 @@ export async function POST(
       characterPrompt,
       aspectRatio: getNicheById(auto.niche)?.aspectRatio ?? "9:16",
     });
+
+    await db.schedulerLog.create({
+      data: {
+        automationId: auto.id,
+        outcome: "enqueued",
+        message: `[MANUAL_TRIGGER] [trigger=user-run-now] Ran (manual): user clicked Run Now. Queued AI video ${video.id}`,
+        videoId: video.id,
+      },
+    }).catch(() => {});
 
     log.log(`Triggered "${auto.name}" → video ${video.id} queued`);
 

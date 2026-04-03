@@ -355,6 +355,15 @@ async function processAutomation(
           status: "QUEUED",
           scheduledPostTime,
           scheduledPlatforms: (auto.targetPlatforms ?? []) as string[],
+          sourceMetadata: {
+            generationContext: {
+              triggerSource: trigger,
+              triggerType: "scheduler",
+              triggerLabel: triggerText,
+              reason: runReason,
+              triggeredAt: new Date().toISOString(),
+            },
+          } as never,
         },
       });
 
@@ -494,6 +503,15 @@ async function processAutomation(
         status: "QUEUED",
         scheduledPostTime: origScheduledPostTime,
         scheduledPlatforms: (auto.targetPlatforms ?? []) as string[],
+        sourceMetadata: {
+          generationContext: {
+            triggerSource: trigger,
+            triggerType: "scheduler",
+            triggerLabel: triggerText,
+            reason: runReason,
+            triggeredAt: new Date().toISOString(),
+          },
+        } as never,
       },
     });
 

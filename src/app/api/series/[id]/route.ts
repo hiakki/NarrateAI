@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import fs from "fs/promises";
-import path from "path";
+import { resolveVideoFile } from "@/lib/video-paths";
 
 export async function DELETE(
   _req: NextRequest,
@@ -32,11 +32,16 @@ export async function DELETE(
     await Promise.allSettled(
       series.videos.map(async (v) => {
         if (v.videoUrl?.includes("/video.mp4")) {
-          const dir = path.join(process.cwd(), "public", v.videoUrl.replace(/^\//, "").replace(/\/video\.mp4$/, ""));
+          const videoFile = resolveVideoFile(v.videoUrl);
+          const dir = videoFile.replace(/\/video\.mp4$/, "");
           await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+          await fs.unlink(videoFile).catch(() => {});
         }
-        await fs.unlink(path.join(process.cwd(), "public", "videos", `${v.id}.mp4`)).catch(() => {});
-        await fs.rm(path.join(process.cwd(), "public", "videos", v.id), { recursive: true, force: true }).catch(() => {});
+        // Legacy cleanup
+        const legacyMp4 = resolveVideoFile(`/videos/${v.id}.mp4`);
+        const legacyDir = resolveVideoFile(`/videos/${v.id}/video.mp4`).replace(/\/video\.mp4$/, "");
+        await fs.unlink(legacyMp4).catch(() => {});
+        await fs.rm(legacyDir, { recursive: true, force: true }).catch(() => {});
       }),
     );
 

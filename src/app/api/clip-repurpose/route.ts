@@ -223,11 +223,21 @@ export async function POST(req: NextRequest) {
         scheduledPostTime = guess;
       }
 
+      const triggeredAt = new Date();
       const video = await db.video.create({
         data: {
           seriesId,
           targetDuration: 45,
           status: "QUEUED",
+          sourceMetadata: {
+            generationContext: {
+              triggerSource: "user-run-now",
+              triggerType: "manual",
+              triggerLabel: "Run Now",
+              reason: "User clicked Run Now for clip automation",
+              triggeredAt: triggeredAt.toISOString(),
+            },
+          } as never,
           ...(scheduledPostTime ? { scheduledPostTime, scheduledPlatforms: targetPlatforms } : {}),
         },
       });

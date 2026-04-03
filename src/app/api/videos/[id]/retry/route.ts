@@ -57,12 +57,25 @@ export async function POST(
 
     if (isClipRepurpose) {
       // Keep clip-repurpose videos in the clip pipeline on retry.
+      const prevSourceMetadata = (video.sourceMetadata && typeof video.sourceMetadata === "object")
+        ? (video.sourceMetadata as Record<string, unknown>)
+        : {};
       await db.video.update({
         where: { id },
         data: {
           status: "QUEUED",
           generationStage: null,
           errorMessage: null,
+          sourceMetadata: {
+            ...prevSourceMetadata,
+            generationContext: {
+              triggerSource: "video-retry",
+              triggerType: "manual",
+              triggerLabel: "Retry",
+              reason: "User retried failed clip video",
+              triggeredAt: new Date().toISOString(),
+            },
+          } as never,
         },
       });
 
@@ -123,6 +136,9 @@ export async function POST(
       scenes = script.scenes;
     }
 
+    const prevSourceMetadata = (video.sourceMetadata && typeof video.sourceMetadata === "object")
+      ? (video.sourceMetadata as Record<string, unknown>)
+      : {};
     await db.video.update({
       where: { id },
       data: {
@@ -132,6 +148,16 @@ export async function POST(
         scriptText,
         title,
         scenesJson: scenes as never,
+        sourceMetadata: {
+          ...prevSourceMetadata,
+          generationContext: {
+            triggerSource: "video-retry",
+            triggerType: "manual",
+            triggerLabel: "Retry",
+            reason: "User retried failed video",
+            triggeredAt: new Date().toISOString(),
+          },
+        } as never,
       },
     });
 

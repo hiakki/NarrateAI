@@ -42,6 +42,7 @@ import {
   TrendingUp,
   Scissors,
   Sparkles,
+  ScrollText,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -234,6 +235,10 @@ export default function VideoDetailPage() {
   const [rerunImageProvider, setRerunImageProvider] = useState<string>("LOCAL_BACKEND");
   const [rerunTtsProvider, setRerunTtsProvider] = useState<string>("EDGE_TTS");
   const [rerunI2VProvider, setRerunI2VProvider] = useState<string>("LOCAL_BACKEND");
+  const [videoLogsLoading, setVideoLogsLoading] = useState(false);
+  const [videoLogDate, setVideoLogDate] = useState<string | null>(null);
+  const [videoLogLines, setVideoLogLines] = useState<Array<{ raw: string; ts: string | null; tag: string | null; message: string }>>([]);
+  const [triggerContext, setTriggerContext] = useState<Record<string, unknown> | null>(null);
 
   async function handleSaveLink(platform: string) {
     const url = linkInput.trim();
@@ -587,6 +592,32 @@ export default function VideoDetailPage() {
     enabled: !!video && (video.status === "READY" || video.status === "REVIEW"),
   });
 
+  const fetchVideoLogs = useCallback(async () => {
+    setVideoLogsLoading(true);
+    try {
+      const res = await fetch(`/api/videos/${id}/logs`, { cache: "no-store" });
+      const json = await res.json();
+      const data = json?.data as {
+        logDate?: string | null;
+        lines?: Array<{ raw: string; ts: string | null; tag: string | null; message: string }>;
+        trigger?: Record<string, unknown> | null;
+      } | undefined;
+      setVideoLogDate(data?.logDate ?? null);
+      setVideoLogLines(Array.isArray(data?.lines) ? data!.lines! : []);
+      setTriggerContext(data?.trigger ?? null);
+    } catch {
+      setVideoLogDate(null);
+      setVideoLogLines([]);
+      setTriggerContext(null);
+    } finally {
+      setVideoLogsLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    fetchVideoLogs();
+  }, [fetchVideoLogs, video?.status]);
+
   useEffect(() => {
     if (providerData?.defaults?.imageProvider && providerData.available?.image?.some((p) => p.id === providerData.defaults.imageProvider)) {
       setRerunImageProvider(providerData.defaults.imageProvider);
@@ -765,6 +796,42 @@ export default function VideoDetailPage() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
+
+      <Card className="mb-6">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <ScrollText className="h-4 w-4" />
+            <h2 className="text-sm font-semibold">End-to-End Logs</h2>
+          </div>
+
+          <div className="text-xs text-muted-foreground rounded border bg-muted/20 p-2">
+            {(() => {
+              const triggerLabel = typeof triggerContext?.triggerLabel === "string" ? triggerContext.triggerLabel : null;
+              const triggerSource = typeof triggerContext?.triggerSource === "string" ? triggerContext.triggerSource : null;
+              const reason = typeof triggerContext?.reason === "string" ? triggerContext.reason : null;
+              const triggeredAt = typeof triggerContext?.triggeredAt === "string" ? triggerContext.triggeredAt : null;
+              return (
+                <div className="space-y-0.5">
+                  <p>
+                    Triggered by: <span className="font-medium text-foreground">{triggerLabel || triggerSource || "unknown"}</span>
+                  </p>
+                  {reason && <p>Reason: {reason}</p>}
+                  {triggeredAt && <p>Triggered at: {new Date(triggeredAt).toLocaleString()}</p>}
+                  {videoLogDate && <p>Log file date: {videoLogDate}</p>}
+                </div>
+              );
+            })()}
+          </div>
+
+          <pre className="text-xs whitespace-pre-wrap rounded border bg-muted/20 p-3 max-h-72 overflow-auto">
+            {videoLogsLoading
+              ? "Loading logs..."
+              : videoLogLines.length > 0
+              ? videoLogLines.map((l) => l.raw).join("\n")
+              : "No video-specific log lines found yet."}
+          </pre>
+        </CardContent>
+      </Card>
 
       {/* ── PROGRESS TRACKER ── */}
       {isInProgress && (
