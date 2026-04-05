@@ -1764,7 +1764,15 @@ export default function VideoDetailPage() {
               { key: "MOJ", label: "Moj", icon: Smartphone, color: "text-amber-600" },
             ] as const;
 
-            type ServerEntry = { platform: string; success?: boolean | "uploading" | "scheduled" | "deleted"; postId?: string; url?: string; error?: string; scheduledFor?: string };
+            type ServerEntry = {
+              platform: string;
+              success?: boolean | "uploading" | "scheduled" | "deleted" | "cooldown";
+              postId?: string;
+              url?: string;
+              error?: string;
+              scheduledFor?: string;
+              retryAfter?: number;
+            };
             const postedRaw = (video.postedPlatforms ?? []) as (string | ServerEntry)[];
 
             const serverMap = new Map<string, ServerEntry>();
@@ -1855,6 +1863,7 @@ export default function VideoDetailPage() {
                     const isScheduled = entry?.success === "scheduled";
                     const isDeleted = entry?.success === "deleted";
                     const isUploading = entry?.success === "uploading";
+                    const isCooldown = entry?.success === "cooldown";
                     const isServerFailed = entry?.success === false;
                     const postUrl = (isPosted || isScheduled) ? (entry?.url ?? undefined) : undefined;
                     const connected = connectedSet.has(key);
@@ -1862,7 +1871,19 @@ export default function VideoDetailPage() {
                     const clientFailError = failedPublishes.get(key);
                     const serverFailError = isServerFailed && entry?.error ? formatPlatformError(entry.error) : undefined;
                     const failError = clientFailError || serverFailError;
-                    const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted && !isScheduled;
+                    const hasFailed = (isServerFailed || !!clientFailError) && !isPublishing && !isPosted && !isScheduled && !isCooldown;
+                    const cooldownRemainingMins = (() => {
+                      if (!isCooldown || !entry?.retryAfter) return null;
+                      const msLeft = entry.retryAfter - Date.now();
+                      if (msLeft <= 0) return 0;
+                      return Math.ceil(msLeft / 60000);
+                    })();
+                    const cooldownRetryText = (() => {
+                      if (!isCooldown) return "";
+                      if (cooldownRemainingMins === null) return "Retry scheduled soon";
+                      if (cooldownRemainingMins <= 0) return "Retrying now";
+                      return `Retry in ~${cooldownRemainingMins}m`;
+                    })();
                     const isEditingThisLink = editingLink === key;
                     const insightsRaw = (video as { insights?: Record<string, { views?: number; likes?: number; comments?: number; reactions?: number }> }).insights;
                     const platformInsights = insightsRaw?.[key] as { views?: number; likes?: number; comments?: number; reactions?: number } | undefined;
@@ -1875,6 +1896,7 @@ export default function VideoDetailPage() {
                     if (isDeleted) rowBg = "bg-zinc-50 border-zinc-200";
                     else if (isPosted) rowBg = "bg-green-50 border-green-200";
                     else if (isScheduled) rowBg = "bg-blue-50 border-blue-200";
+                    else if (isCooldown) rowBg = "bg-amber-50 border-amber-200";
                     else if (isUploading && !isPublishing) rowBg = "bg-amber-50/60 border-amber-200";
                     else if (isPublishing) rowBg = "bg-blue-50/60 border-blue-200";
                     else if (hasFailed) rowBg = "bg-red-50/60 border-red-200";
@@ -1955,10 +1977,16 @@ export default function VideoDetailPage() {
                             {isUploading && !isPublishing && !isPosted && !isScheduled && (
                               <p className="text-xs text-amber-600 mt-0.5">Upload stuck — retry or re-schedule</p>
                             )}
+                            {isCooldown && !isPosted && !isScheduled && (
+                              <p className="text-xs text-amber-700 mt-0.5">
+                                Cooldown active. {cooldownRetryText}
+                                {entry?.retryAfter ? ` (${new Date(entry.retryAfter).toLocaleTimeString()})` : ""}
+                              </p>
+                            )}
                             {hasFailed && failError && (
                               <p className="text-xs text-red-600 mt-0.5 break-words line-clamp-2" title={failError}>{failError}</p>
                             )}
-                            {!connected && !isPosted && !isScheduled && !isDeleted && !isUploading && !hasFailed && (
+                            {!connected && !isPosted && !isScheduled && !isDeleted && !isUploading && !isCooldown && !hasFailed && (
                               <p className="text-xs text-muted-foreground">Not connected</p>
                             )}
                           </div>
@@ -2063,6 +2091,13 @@ export default function VideoDetailPage() {
                                   <Send className="h-3 w-3" /> Post Now
                                 </Button>
                               </div>
+                            ) : isCooldown ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="flex items-center gap-1 text-xs text-amber-700 font-medium">
+                                  <Clock className="h-3.5 w-3.5" /> Cooldown
+                                </span>
+                                <span className="text-[11px] text-amber-700">{cooldownRetryText}</span>
+                              </div>
                             ) : isPublishing ? (
                               <Button size="sm" variant="outline" className="gap-1 text-xs" disabled>
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Scheduling...
@@ -2120,7 +2155,7 @@ export default function VideoDetailPage() {
                         )}
 
                         {/* "Already posted? Add link" for non-posted platforms */}
-                        {!isPosted && !isUploading && !isEditingThisLink && !isPublishing && (
+                        {!isPosted && !isUploading && !isCooldown && !isEditingThisLink && !isPublishing && (
                           <div className="mt-1.5 pl-8">
                             <button
                               type="button"
