@@ -352,6 +352,7 @@ export async function enqueueReconcileCheck(
   }
   const queue = getReconcileQueue();
   const jobId = `reconcile-${videoId}-${attempt}`;
+  const overdueNow = reconcileAt.getTime() <= Date.now();
 
   try {
     const existing = await queue.getJob(jobId);
@@ -360,7 +361,20 @@ export async function enqueueReconcileCheck(
       if (["failed", "completed", "unknown", "waiting", "delayed"].includes(state)) {
         await existing.remove();
       } else if (state === "active") {
-        return null;
+        // Stale active reconcile jobs can block promotion forever after worker restarts.
+        // For overdue checks, force-replace the active job so reconciliation resumes.
+        if (overdueNow) {
+          try {
+            await existing.moveToFailed(new Error("Replaced by overdue reconcile"), "0", true);
+            await existing.remove();
+            log.warn(`Replaced active reconcile job ${jobId} for overdue video ${videoId}`);
+          } catch (e) {
+            log.warn(`Could not replace active reconcile job ${jobId}:`, e);
+            return null;
+          }
+        } else {
+          return null;
+        }
       }
     }
   } catch {

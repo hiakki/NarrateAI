@@ -7,6 +7,42 @@ import path from "path";
 import { IMAGE_TO_VIDEO_PROVIDERS } from "@/config/image-to-video-providers";
 import { getDurationRangeForNiche } from "@/config/niches";
 import { resolveVideoFile } from "@/lib/video-paths";
+import { CLIP_NICHE_META } from "@/config/clip-niches";
+
+function parseMinuteOfDay(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map((v) => Number.parseInt(v, 10));
+  const hh = Number.isFinite(h) ? h : 0;
+  const mm = Number.isFinite(m) ? m : 0;
+  return hh * 60 + mm;
+}
+
+function circularMinuteDistance(a: number, b: number): number {
+  const diff = Math.abs(a - b);
+  return Math.min(diff, 1440 - diff);
+}
+
+async function appendSchedulerLog(automationId: string, outcome: string, message: string, videoId?: string) {
+  await db.schedulerLog.create({
+    data: {
+      automationId,
+      outcome,
+      message,
+      durationMs: 0,
+      videoId,
+    },
+  });
+  const oldest = await db.schedulerLog.findMany({
+    where: { automationId },
+    orderBy: { createdAt: "desc" },
+    skip: 30,
+    select: { id: true },
+  });
+  if (oldest.length > 0) {
+    await db.schedulerLog.deleteMany({
+      where: { id: { in: oldest.map((o) => o.id) } },
+    });
+  }
+}
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -153,6 +189,23 @@ export async function PATCH(
       }
     }
 
+    const currentAutomation = await db.automation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        userId: true,
+        enabled: true,
+        automationType: true,
+        clipConfig: true,
+        postTime: true,
+        timezone: true,
+      },
+    });
+    if (!currentAutomation) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
     const data: Record<string, unknown> = {};
     if (input.name !== undefined) data.name = input.name;
     if (input.niche !== undefined) data.niche = input.niche;
@@ -190,6 +243,37 @@ export async function PATCH(
     if (input.postTime !== undefined) data.postTime = input.postTime;
     if (input.timezone !== undefined) data.timezone = input.timezone;
 
+    if (
+      input.enabled === true &&
+      currentAutomation.enabled === false &&
+      currentAutomation.automationType === "clip-repurpose" &&
+      input.postTime === undefined
+    ) {
+      const clipConfig = (currentAutomation.clipConfig ?? {}) as Record<string, unknown>;
+      const clipNiche = (clipConfig.clipNiche as string) ?? "auto";
+      const preferredTimes = CLIP_NICHE_META[clipNiche]?.bestTimesUTC ?? [currentAutomation.postTime ?? "07:00"];
+      const gapMins = Math.max(15, Number.parseInt(process.env.PLATFORM_POST_GAP_MINUTES ?? "60", 10));
+      const otherEnabled = await db.automation.findMany({
+        where: {
+          userId: currentAutomation.userId,
+          enabled: true,
+          automationType: "clip-repurpose",
+          id: { not: id },
+        },
+        select: { postTime: true },
+      });
+      const occupied = otherEnabled
+        .map((a) => (a.postTime ?? "").split(",").map((t) => t.trim()))
+        .flat()
+        .filter((t) => /^\d{2}:\d{2}$/.test(t))
+        .map(parseMinuteOfDay);
+      const chosen = preferredTimes.find((candidate) => {
+        const minute = parseMinuteOfDay(candidate);
+        return occupied.every((o) => circularMinuteDistance(minute, o) >= gapMins);
+      }) ?? preferredTimes[0];
+      data.postTime = chosen;
+    }
+
     const scheduleFieldsSent =
       input.postTime !== undefined ||
       input.frequency !== undefined ||
@@ -207,6 +291,26 @@ export async function PATCH(
     }
 
     const updated = await db.automation.update({ where: { id }, data });
+
+    if (input.enabled !== undefined && input.enabled !== currentAutomation.enabled) {
+      const nowIso = new Date().toISOString();
+      if (input.enabled) {
+        const activationReason = updated.automationType === "clip-repurpose"
+          ? `Activated niche automation. postTime=${updated.postTime}, timezone=${updated.timezone}`
+          : `Activated automation. postTime=${updated.postTime}, timezone=${updated.timezone}`;
+        await appendSchedulerLog(
+          id,
+          "activated",
+          `[MANUAL_ENABLE] [${nowIso}] ${activationReason}`,
+        );
+      } else {
+        await appendSchedulerLog(
+          id,
+          "deactivated",
+          `[MANUAL_DISABLE] [${nowIso}] Automation paused by user`,
+        );
+      }
+    }
 
     // Keep linked series in sync so retries use the same providers (no fallbacks)
     const providerKeys = ["llmProvider", "ttsProvider", "imageProvider"] as const;

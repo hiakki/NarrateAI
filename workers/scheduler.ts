@@ -702,6 +702,27 @@ async function planDailyBuilds(trigger: string = "manual") {
   }
 }
 
+async function runBuildWindowPipeline(trigger: string) {
+  log(`[PIPELINE] ${trigger}: reconcile → optimize → build`);
+  sfl.action(`PIPELINE: ${trigger} reconcile → optimize → build`);
+
+  try {
+    await reconcileScheduledPosts();
+  } catch (e) {
+    err(`[PIPELINE] ${trigger}: reconcile failed`, e);
+    sfl.error(`PIPELINE ${trigger}: reconcile failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  try {
+    await optimizeClipAutomations();
+  } catch (e) {
+    err(`[PIPELINE] ${trigger}: optimize failed`, e);
+    sfl.error(`PIPELINE ${trigger}: optimize failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  await planDailyBuilds(trigger);
+}
+
 // checkReadyVideosForPosting — REMOVED: replaced by post-video BullMQ delayed queue
 
 // checkDeferredInstagramPosts — REMOVED: replaced by native IG scheduling + post-video BullMQ queue
@@ -1214,6 +1235,9 @@ async function catchUpOverdueScheduledPostsOnStartup() {
         await enqueueReconcileCheck(video.id, new Date(), 0);
         reconcileQueued++;
         fl?.poster(`STARTUP CATCH-UP: overdue native scheduled post detected; enqueued immediate reconcile check`);
+        // Also run immediate in-process reconcile pass so UI can recover even if queue had stale active job state.
+        await reconcileScheduledPosts();
+        fl?.poster(`STARTUP CATCH-UP: immediate reconcile pass executed for overdue native scheduled post`);
       }
     }
 
@@ -1639,7 +1663,7 @@ const [buildH, buildM] = BUILD_ALL_TIME.split(":").map(Number);
 cron.schedule(`${buildM} ${buildH} * * *`, () => {
   log(`planDailyBuilds: BUILD_ALL_TIME (${BUILD_ALL_TIME} ${BUILD_ALL_TIMEZONE}) triggered`);
   sfl.action(`CRON: planDailyBuilds triggered (BUILD_ALL_TIME ${BUILD_ALL_TIME})`);
-  planDailyBuilds("build-window-cron");
+  runBuildWindowPipeline("build-window-cron");
 });
 
 // Catch-up cron: 2 hours after build window, pick up anything missed
@@ -1850,6 +1874,52 @@ async function optimizeClipAutomations() {
     const schedule = computeStaggeredSchedule(selected, PLATFORM_POST_GAP_MINUTES);
 
     // Step 6: Enable selected automations, update postTime + targetPlatforms
+    const selectedByNiche = new Map(selected.map((entry) => [entry.niche, entry]));
+    let activatedCount = 0;
+    let deactivatedCount = 0;
+
+    const allClipAutos = await db.automation.findMany({
+      where: { automationType: "clip-repurpose" },
+      select: {
+        id: true,
+        name: true,
+        userId: true,
+        enabled: true,
+        clipConfig: true,
+      },
+    });
+
+    for (const auto of allClipAutos) {
+      const clipNiche = ((auto.clipConfig as Record<string, unknown>)?.clipNiche as string) ?? "";
+      const isSelected = selectedByNiche.has(clipNiche);
+      if (auto.enabled && !isSelected) {
+        deactivatedCount++;
+        await db.schedulerLog.create({
+          data: {
+            automationId: auto.id,
+            outcome: "deactivated",
+            message: `[OPTIMIZER_DEACTIVATE] [${new Date().toISOString()}] Niche not selected in today's top set`,
+            durationMs: 0,
+          },
+        });
+      }
+      if (!auto.enabled && isSelected) {
+        activatedCount++;
+        const chosen = schedule.get(clipNiche) ?? selectedByNiche.get(clipNiche)?.bestTimesUTC[0] ?? "07:00";
+        await db.schedulerLog.create({
+          data: {
+            automationId: auto.id,
+            outcome: "activated",
+            message: `[OPTIMIZER_ACTIVATE] [${new Date().toISOString()}] Niche selected by scorecard rank; assigned postTime=${chosen}`,
+            durationMs: 0,
+          },
+        });
+      }
+    }
+
+    log(`[OPTIMIZE] Activation changes: activated=${activatedCount}, deactivated=${deactivatedCount}`);
+    sfl.action(`OPTIMIZE: activation changes activated=${activatedCount}, deactivated=${deactivatedCount}`);
+
     for (const entry of selected) {
       const postTime = schedule.get(entry.niche) ?? entry.bestTimesUTC[0];
       const platforms = entry.assignedPlatforms;
@@ -1909,7 +1979,6 @@ backfillLastRunAt()
     // Deterministic startup sequence so overdue scheduled posts are reconciled
     // before normal planning begins.
     await catchUpOverdueScheduledPostsOnStartup();
-    await reconcileScheduledPosts();
-    await planDailyBuilds("startup");
+    await runBuildWindowPipeline("startup");
     await safetyNet();
   });
