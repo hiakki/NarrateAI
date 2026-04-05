@@ -229,8 +229,8 @@ export function getPostVideoQueue(): Queue<PostVideoJobData> {
 
 export async function clearPostQueueJobsForVideo(videoId: string): Promise<void> {
   const queue = getPostQueue();
-  const jobIds = [`post-${videoId}`, `post-${videoId}-ig`];
-  for (const jobId of jobIds) {
+  const staticJobIds = [`post-${videoId}`, `post-${videoId}-ig`];
+  for (const jobId of staticJobIds) {
     try {
       const existing = await queue.getJob(jobId);
       if (!existing) continue;
@@ -244,6 +244,24 @@ export async function clearPostQueueJobsForVideo(videoId: string): Promise<void>
     } catch (e) {
       log.warn(`Could not clear post queue job ${jobId}:`, e);
     }
+  }
+
+  // Also clear timestamped IG delayed jobs: post-<videoId>-ig-<ts>
+  const igPrefix = `post-${videoId}-ig-`;
+  try {
+    const delayed = await queue.getDelayed();
+    const waiting = await queue.getWaiting();
+    const failed = await queue.getFailed();
+    const completed = await queue.getCompleted();
+    const all = [...delayed, ...waiting, ...failed, ...completed];
+    for (const job of all) {
+      const id = String(job.id ?? "");
+      if (!id.startsWith(igPrefix)) continue;
+      await job.remove().catch(() => {});
+      log.log(`Removed timestamped IG post job ${id}`);
+    }
+  } catch (e) {
+    log.warn(`Could not clear timestamped IG jobs for ${videoId}:`, e);
   }
 }
 
@@ -420,13 +438,39 @@ export async function enqueueScheduledPost(
   }
 
   if (igPlatforms.length > 0) {
-    const jobId = `post-${videoId}-ig`;
-    const ok = await clearExistingJob(queue, jobId, { replaceActive: true });
+    const nowMs = Date.now();
+    const delayMs = scheduledPostTime ? Math.max(0, scheduledPostTime.getTime() - nowMs) : 0;
+    const isFutureDelayed = delayMs > 1000;
+    const jobId = isFutureDelayed
+      ? `post-${videoId}-ig-${scheduledPostTime!.getTime()}`
+      : `post-${videoId}-ig`;
+
+    // For delayed IG jobs, use timestamped IDs and clear stale queued/delayed siblings.
+    // This avoids replacing the currently-active IG job from inside its own cooldown path.
+    if (isFutureDelayed) {
+      const igPrefix = `post-${videoId}-ig-`;
+      try {
+        const delayed = await queue.getDelayed();
+        const waiting = await queue.getWaiting();
+        const all = [...delayed, ...waiting];
+        for (const job of all) {
+          const id = String(job.id ?? "");
+          if (!id.startsWith(igPrefix) || id === jobId) continue;
+          await job.remove().catch(() => {});
+          log.log(`Removed stale IG delayed job ${id}`);
+        }
+      } catch (e) {
+        log.warn(`Could not cleanup stale IG delayed jobs for ${videoId}:`, e);
+      }
+    }
+
+    const ok = await clearExistingJob(
+      queue,
+      jobId,
+      isFutureDelayed ? undefined : { replaceActive: true },
+    );
     if (ok) {
-      const delay = scheduledPostTime
-        ? Math.max(0, scheduledPostTime.getTime() - Date.now())
-        : 0;
-      const delaySec = Math.round(delay / 1000);
+      const delaySec = Math.round(delayMs / 1000);
       const at = scheduledPostTime?.toISOString() ?? "immediate";
       log.log(`Enqueuing ${jobId}: IG appSchedule=${at} (delay=${delaySec}s)`);
       log.log(`Scheduling INSTAGRAM for video=${videoId} at ${at} (app-level delayed post job)`);
@@ -435,7 +479,7 @@ export async function enqueueScheduledPost(
       const job = await queue.add("post-video", {
         videoId,
         platforms: igPlatforms,
-      }, { jobId, delay });
+      }, { jobId, delay: delayMs });
       ids.push(job.id ?? jobId);
     }
   }
