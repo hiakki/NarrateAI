@@ -450,7 +450,7 @@ async function processAutomation(
         triggeredAt: new Date().toISOString(),
       });
 
-      const msg = `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued clip-repurpose, post at ${scheduledPostTime.toISOString()}`;
+      const msg = `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued clip-repurpose for platforms [${((auto.targetPlatforms ?? []) as string[]).join(", ")}], post at ${scheduledPostTime.toISOString()}`;
       log(`[ENQUEUE]`, `Queued clip-repurpose ${video.id}`);
       fl.scheduler(`ENQUEUE: clip-repurpose video=${video.id}, postAt=${scheduledPostTime.toISOString()}`);
       await writeSchedulerLog(auto.id, "enqueued", msg, { durationMs: Date.now() - runStart, videoId: video.id });
@@ -610,7 +610,7 @@ async function processAutomation(
     await writeSchedulerLog(
       auto.id,
       "enqueued",
-      `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued AI video, post at ${origScheduledPostTime.toISOString()}`,
+      `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued AI video for platforms [${((auto.targetPlatforms ?? []) as string[]).join(", ")}], post at ${origScheduledPostTime.toISOString()}`,
       { durationMs: Date.now() - runStart, videoId: video.id },
     );
   } catch (e) {

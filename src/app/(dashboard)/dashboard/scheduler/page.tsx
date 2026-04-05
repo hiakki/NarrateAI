@@ -136,6 +136,34 @@ function outcomePillClass(outcome: string): string {
   }
 }
 
+function isNoiseSkip(entry: SchedulerLogEntry): boolean {
+  const msg = (entry.message || "").toLowerCase();
+  return entry.outcome === "skipped" && msg.includes("outside build window");
+}
+
+function isLifecycleEntry(entry: SchedulerLogEntry): boolean {
+  if (entry.outcome === "enqueued" || entry.outcome === "posted" || entry.outcome === "error") return true;
+  const msg = (entry.message || "").toLowerCase();
+  return msg.includes("status promotion") || msg.includes("reconcile pending");
+}
+
+function summarizePlatformsFromMessage(message: string | null): string | null {
+  if (!message) return null;
+  const p = message.match(/platforms \[([^\]]+)\]/i);
+  if (p?.[1]) return p[1];
+  const o = message.match(/outcomes:\s*([a-z0-9_=,\s-]+)/i);
+  if (o?.[1]) {
+    const names = o[1]
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((kv) => kv.split("=")[0])
+      .filter(Boolean);
+    return names.length > 0 ? names.join(", ") : null;
+  }
+  return null;
+}
+
 function statusBadge(status: string) {
   const map: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; icon: typeof AlertTriangle }> = {
     FAILED:     { variant: "destructive", icon: XCircle },
@@ -350,7 +378,8 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
   const nextRunLabel = useCountdown(auto.nextRunAt);
   const nextPostLabel = useCountdown(auto.nextPostAt);
   const lastError = auto.schedulerLogs.find((l) => l.outcome === "error");
-  const latestLog = auto.schedulerLogs[0];
+  const visibleLogs = auto.schedulerLogs.filter((l) => !isNoiseSkip(l));
+  const latestLog = visibleLogs.find(isLifecycleEntry) ?? visibleLogs[0];
 
   const borderCls = hasIssues ? "border-red-300"
     : missed === "critical" ? "border-red-400"
@@ -395,6 +424,11 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
               <span className="text-muted-foreground truncate" title={latestLog.message}>
                 {latestLog.message}
               </span>
+              {(() => {
+                const plats = summarizePlatformsFromMessage(latestLog.message);
+                if (!plats) return null;
+                return <span className="text-[10px] text-blue-700 shrink-0">[{plats}]</span>;
+              })()}
             </div>
           )}
         </div>
@@ -549,7 +583,7 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
                   <span className="block mt-1">Last known run was {timeAgo(auto.lastRunAt)} (before logging was added).</span>
                 )}
               </div>
-            ) : auto.schedulerLogs.length === 0 ? (
+            ) : visibleLogs.length === 0 ? (
               <div className="text-xs text-muted-foreground italic py-2">No scheduler runs recorded yet. Logs will appear after the next scheduler tick.</div>
             ) : (
               <>
@@ -569,7 +603,7 @@ function AutomationCard({ auto }: { auto: SchedulerAutomation }) {
                   </div>
                 )}
                 <div className="space-y-0">
-                  {auto.schedulerLogs.map((entry, idx) => {
+                  {visibleLogs.map((entry, idx) => {
                     const isLatest = idx === 0;
                     return (
                       <SchedulerLogRow
