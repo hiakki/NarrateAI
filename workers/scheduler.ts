@@ -43,17 +43,23 @@ import {
 } from "../src/lib/niche-optimizer";
 
 const db = new PrismaClient();
-const DAILY_CLIP_POSTS_PER_PLATFORM = parseInt(process.env.DAILY_CLIP_POSTS_PER_PLATFORM ?? "6", 10);
 const logger = createLogger("Scheduler");
 const { log, warn, error: err, debug } = logger;
 const sfl = getSchedulerFileLogger();
-const SCHEDULER_CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY ?? "3", 10);
 
 function parseIntWithDefault(value: string | undefined, fallback: number): number {
   const n = Number.parseInt(value ?? "", 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
+const DAILY_CLIP_POSTS_PER_PLATFORM = Math.max(
+  1,
+  parseIntWithDefault(process.env.DAILY_CLIP_POSTS_PER_PLATFORM, 6),
+);
+const SCHEDULER_CONCURRENCY = Math.max(
+  1,
+  parseIntWithDefault(process.env.SCHEDULER_CONCURRENCY, 3),
+);
 const RECONCILE_FORCE_PROMOTE_MINUTES = Math.max(
   5,
   parseIntWithDefault(process.env.RECONCILE_FORCE_PROMOTE_MINUTES, 15),
@@ -1821,19 +1827,14 @@ async function bootstrapClipAutomations() {
 
 // ── Optimize: daily scorecard-driven enable/disable of clip automations ──
 
-const PLATFORM_POST_GAP_MINUTES = parseInt(process.env.PLATFORM_POST_GAP_MINUTES ?? "60", 10);
+const PLATFORM_POST_GAP_MINUTES = Math.max(
+  15,
+  parseIntWithDefault(process.env.PLATFORM_POST_GAP_MINUTES, 60),
+);
 
 async function optimizeClipAutomations() {
   try {
-    // Step 1: Disable ALL clip-repurpose automations
-    const { count: disabledCount } = await db.automation.updateMany({
-      where: { automationType: "clip-repurpose" },
-      data: { enabled: false },
-    });
-    log(`[OPTIMIZE] Reset ${disabledCount} clip automation(s) to disabled`);
-    sfl.action(`OPTIMIZE: reset ${disabledCount} clip automation(s) to disabled`);
-
-    // Step 2: Read today's NicheTrending data
+    // Step 1: Read today's NicheTrending data
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
 
@@ -1858,25 +1859,41 @@ async function optimizeClipAutomations() {
       return;
     }
 
-    // Step 3: Rank niches
+    // Step 2: Rank niches
     const ranked = rankNichesFromTrending([...latestByNiche.values()]);
     if (ranked.length === 0) {
       log(`[OPTIMIZE] No rankable niches, skipping`);
       return;
     }
 
-    // Step 4: Pick top N to fill DAILY_CLIP_POSTS_PER_PLATFORM per platform
+    // Step 3: Pick top N to fill DAILY_CLIP_POSTS_PER_PLATFORM per platform
     const selected = pickTopNichesForTarget(ranked, DAILY_CLIP_POSTS_PER_PLATFORM);
+    if (selected.length === 0) {
+      log(`[OPTIMIZE] Selected 0 niches; skipping activation/deactivation to avoid destructive state changes`);
+      sfl.action(`OPTIMIZE: selected 0 niches, no state changes applied`);
+      return;
+    }
     log(`[OPTIMIZE] Selected ${selected.length} niche(s) for ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform`);
     sfl.action(`OPTIMIZE: selected ${selected.length} niche(s) for ${DAILY_CLIP_POSTS_PER_PLATFORM} posts/platform`);
 
-    // Step 5: Compute staggered schedule
+    // Step 4: Compute staggered schedule
     const schedule = computeStaggeredSchedule(selected, PLATFORM_POST_GAP_MINUTES);
 
-    // Step 6: Enable selected automations, update postTime + targetPlatforms
+    // Step 5: Apply activation/deactivation only after valid selection is computed
     const selectedByNiche = new Map(selected.map((entry) => [entry.niche, entry]));
     let activatedCount = 0;
     let deactivatedCount = 0;
+    const totalKnownNiches = Object.keys(CLIP_NICHE_META).filter((k) => k !== "auto").length;
+    const coverage = totalKnownNiches > 0 ? latestByNiche.size / totalKnownNiches : 0;
+    const allowDeactivation = coverage >= 0.6 && selected.length >= 3;
+    if (!allowDeactivation) {
+      log(
+        `[OPTIMIZE] Low confidence for deactivation (coverage=${Math.round(coverage * 100)}%, selected=${selected.length}); preserving existing enabled niches`,
+      );
+      sfl.action(
+        `OPTIMIZE: preserving existing enabled niches (coverage=${Math.round(coverage * 100)}%, selected=${selected.length})`,
+      );
+    }
 
     const allClipAutos = await db.automation.findMany({
       where: { automationType: "clip-repurpose" },
@@ -1892,7 +1909,11 @@ async function optimizeClipAutomations() {
     for (const auto of allClipAutos) {
       const clipNiche = ((auto.clipConfig as Record<string, unknown>)?.clipNiche as string) ?? "";
       const isSelected = selectedByNiche.has(clipNiche);
-      if (auto.enabled && !isSelected) {
+      if (allowDeactivation && auto.enabled && !isSelected) {
+        await db.automation.update({
+          where: { id: auto.id },
+          data: { enabled: false },
+        });
         deactivatedCount++;
         await db.schedulerLog.create({
           data: {
@@ -1920,6 +1941,7 @@ async function optimizeClipAutomations() {
     log(`[OPTIMIZE] Activation changes: activated=${activatedCount}, deactivated=${deactivatedCount}`);
     sfl.action(`OPTIMIZE: activation changes activated=${activatedCount}, deactivated=${deactivatedCount}`);
 
+    // Step 6: Enable selected automations, update postTime + targetPlatforms
     for (const entry of selected) {
       const postTime = schedule.get(entry.niche) ?? entry.bestTimesUTC[0];
       const platforms = entry.assignedPlatforms;
