@@ -1404,12 +1404,34 @@ export default function AutomationDetailPage() {
           <ScrollText className="h-5 w-5" /> Automation End-to-End Logs
         </h2>
 
-        {auto.schedulerLogs && auto.schedulerLogs.length > 0 && (
+        {auto.schedulerLogs && auto.schedulerLogs.length > 0 && (() => {
+          const actionableLogs = auto.schedulerLogs.filter((entry) => {
+            const msg = (entry.message || "").toLowerCase();
+            // Hide repetitive startup/catch-up "outside build window" noise.
+            if (
+              entry.outcome === "skipped" &&
+              msg.includes("outside build window")
+            ) {
+              return false;
+            }
+            // Keep everything else: enqueued/ran/posted/promoted/errors/manual toggles and meaningful skips.
+            return true;
+          });
+          return (
           <Card>
             <CardContent className="p-4 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Why videos were generated / skipped</p>
+              <p className="text-xs font-medium text-muted-foreground">Build-time runs, posting/reconciliation outcomes, and meaningful skip reasons</p>
+              {actionableLogs.length < auto.schedulerLogs.length && (
+                <p className="text-[11px] text-muted-foreground">
+                  Showing {actionableLogs.length} actionable entries (hidden {auto.schedulerLogs.length - actionableLogs.length} repetitive outside-window skips).
+                </p>
+              )}
               <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                {auto.schedulerLogs.map((entry) => (
+                {actionableLogs.length === 0 ? (
+                  <div className="text-xs rounded border p-2 text-muted-foreground">
+                    No actionable events yet. Next update will appear at build/post/reconcile time.
+                  </div>
+                ) : actionableLogs.map((entry) => (
                   <div key={entry.id} className="text-xs rounded border p-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium uppercase">{entry.outcome}</span>
@@ -1426,7 +1448,8 @@ export default function AutomationDetailPage() {
               </div>
             </CardContent>
           </Card>
-        )}
+          );
+        })()}
 
         <Card>
           <CardContent className="p-4 space-y-3">

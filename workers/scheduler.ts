@@ -175,6 +175,7 @@ const SCHEDULER_REASON_CODES = {
 function getReasonCode(reason: string): string {
   if (reason.includes("new automation")) return SCHEDULER_REASON_CODES.NEW_AUTOMATION_DUE;
   if (reason.includes("waiting for build window")) return SCHEDULER_REASON_CODES.WAIT_BUILD_WINDOW;
+  if (reason.includes("outside build window")) return SCHEDULER_REASON_CODES.WAIT_BUILD_WINDOW;
   if (reason.includes("post time passed")) return SCHEDULER_REASON_CODES.POST_TIME_PASSED;
   if (reason.includes("need")) return SCHEDULER_REASON_CODES.NOT_DUE;
   if (reason.includes("build window active")) return SCHEDULER_REASON_CODES.BUILD_WINDOW_DUE;
