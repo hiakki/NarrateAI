@@ -2016,6 +2016,18 @@ export default function VideoDetailPage() {
                                 <span className="flex items-center gap-1 text-xs text-blue-700 font-medium">
                                   <Clock className="h-4 w-4" /> Scheduled
                                 </span>
+                                {key === "INSTAGRAM" && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="gap-1 text-xs"
+                                    disabled={isPublishing}
+                                    onClick={() => handlePublishPlatform(key, true)}
+                                    title="Post now (override schedule)"
+                                  >
+                                    <Send className="h-3.5 w-3.5" /> Post Now
+                                  </Button>
+                                )}
                                 <Button
                                   size="icon-xs"
                                   variant="ghost"
@@ -2097,6 +2109,18 @@ export default function VideoDetailPage() {
                                   <Clock className="h-3.5 w-3.5" /> Cooldown
                                 </span>
                                 <span className="text-[11px] text-amber-700">{cooldownRetryText}</span>
+                                {key === "INSTAGRAM" && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="gap-1 text-xs"
+                                    disabled={isPublishing}
+                                    onClick={() => handlePublishPlatform(key, true)}
+                                    title="Post now (override cooldown)"
+                                  >
+                                    <Send className="h-3.5 w-3.5" /> Post Now
+                                  </Button>
+                                )}
                               </div>
                             ) : isPublishing ? (
                               <Button size="sm" variant="outline" className="gap-1 text-xs" disabled>

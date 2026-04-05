@@ -1218,7 +1218,7 @@ async function catchUpOverdueScheduledPostsOnStartup() {
         : null;
 
       const overdueScheduled = entries.filter((e) => {
-        if (e.success !== "scheduled") return false;
+        if (e.success !== "scheduled" && e.success !== "cooldown") return false;
         const schedMs = e.scheduledFor
           ? new Date(e.scheduledFor).getTime()
           : (video.scheduledPostTime ? new Date(video.scheduledPostTime).getTime() : 0);
@@ -1234,7 +1234,7 @@ async function catchUpOverdueScheduledPostsOnStartup() {
       if (hasOverdueIg) {
         await enqueueScheduledPost(video.id, new Date(), ["INSTAGRAM"]);
         igQueued++;
-        fl?.poster(`STARTUP CATCH-UP: overdue INSTAGRAM schedule detected; enqueued immediate IG post`);
+        fl?.poster(`STARTUP CATCH-UP: overdue INSTAGRAM scheduled/cooldown detected; enqueued immediate IG post`);
       }
 
       if (hasOverdueNative) {

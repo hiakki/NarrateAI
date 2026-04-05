@@ -62,7 +62,11 @@ const STALE_UPLOAD_MS = 10 * 60 * 1000; // 10 minutes
 const POST_COOLDOWN_MS = 10_000; // wait after video becomes READY before posting
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 10_000;
-const PLATFORM_POST_GAP_MINUTES = parseInt(process.env.PLATFORM_POST_GAP_MINUTES ?? "60", 10);
+function parseIntWithDefault(value: string | undefined, fallback: number): number {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+const PLATFORM_POST_GAP_MINUTES = Math.max(0, parseIntWithDefault(process.env.PLATFORM_POST_GAP_MINUTES, 60));
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -424,8 +428,10 @@ export async function postVideoToSocials(
     }
 
     const isDeferred = !!scheduledAt;
+    const isSchedulerDrivenIgDelayedJob = platform === "INSTAGRAM" && isIgOnlyImmediateJob;
     const gapMs = Math.max(0, PLATFORM_POST_GAP_MINUTES) * 60 * 1000;
-    if (gapMs > 0 && !isDeferred) {
+    const shouldApplyGapCooldown = gapMs > 0 && !isDeferred && !isSchedulerDrivenIgDelayedJob;
+    if (shouldApplyGapCooldown) {
       const latestSuccessAt = await getLatestPlatformSuccessTime(
         video!.series.user.id,
         platform,
