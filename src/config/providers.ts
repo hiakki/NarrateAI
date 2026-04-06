@@ -254,6 +254,14 @@ export const IMAGE_PROVIDERS: Record<string, ProviderInfo> = {
     qualityLabel: "Great",
     envVar: "HUGGINGFACE_API_KEY",
   },
+  FLOW_TV: {
+    id: "FLOW_TV",
+    name: "Google Flow TV (Headless)",
+    description: "Headless browser automation for labs.google/fx/tools/flow using uploaded cookies. Generates 1 image + 1 clip per scene with chaining.",
+    costEstimate: "Subscription/credits based",
+    qualityLabel: "Best",
+    envVar: "",
+  },
   LOCAL_BACKEND: {
     id: "LOCAL_BACKEND",
     name: "Local Backend Image",

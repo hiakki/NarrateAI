@@ -23,6 +23,7 @@ import { generateScript } from "../src/services/script-generator";
 import { generateBGM } from "../src/services/providers/audio/musicgen";
 import { generateAllSFX } from "../src/services/providers/audio/audiogen";
 import { createSfxTrack } from "../src/services/providers/audio/sfx-mixer";
+import { generateFlowStoryAssets } from "../src/services/flow-tv";
 import path from "path";
 import fs from "fs/promises";
 import type { VideoJobData } from "../src/services/queue";
@@ -33,6 +34,22 @@ const db = new PrismaClient();
 const redis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
   maxRetriesPerRequest: null,
 });
+
+function sanitizeSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function takeWords(text: string, maxWords: number): string {
+  return text
+    .trim()
+    .split(/\s+/)
+    .slice(0, maxWords)
+    .join(" ");
+}
 
 interface Checkpoint {
   audioPath?: string;
@@ -120,6 +137,10 @@ const worker = new Worker<VideoJobData>(
       aspectRatio: jobAspectRatio,
     } = job.data;
     const aspectRatio = jobAspectRatio ?? "9:16";
+    const flowMode = imageProvider === "FLOW_TV" || imageToVideoProvider === "FLOW_TV";
+    if (imageToVideoProvider === "FLOW_TV" && imageProvider !== "FLOW_TV") {
+      throw new Error("FLOW_TV image-to-video requires imageProvider=FLOW_TV for chained scene generation.");
+    }
 
     const fl: AutomationFileLogger | null = automationId
       ? getAutomationFileLogger(userId, userName ?? "user", automationId, automationName ?? "automation")
@@ -174,24 +195,50 @@ const worker = new Worker<VideoJobData>(
       }
       const varietySeed = `${Date.now()}-${videoId.slice(-6)}`;
 
+      let flowTopic: string | undefined;
+      if (flowMode) {
+        try {
+          const flowPromptPath = process.env.FLOW_TV_STORY_PROMPT_FILE
+            ? path.resolve(process.env.FLOW_TV_STORY_PROMPT_FILE)
+            : path.join(process.cwd(), "sample_prompt");
+          const content = await fs.readFile(flowPromptPath, "utf-8");
+          if (content.trim()) flowTopic = `${content.trim()}\n\nStrict output: exactly 2 scenes, each concise and visual, total narration suited for 1-15 seconds video.`;
+        } catch {
+          flowTopic = "Create a concise visual story with exactly 2 scenes and very short narration suitable for a 1-15 second cinematic video.";
+        }
+      }
+
       const scriptInput = {
         niche: niche ?? "",
         tone: tone ?? "dramatic",
         artStyle: artStyle ?? "",
-        duration: job.data.duration,
+        duration: flowMode ? Math.min(job.data.duration, 15) : job.data.duration,
         language: language ?? "en",
         avoidThemes: avoidThemes.length > 0 ? avoidThemes : undefined,
         varietySeed,
+        topic: flowTopic,
         videoId,
       };
       const script = await generateScript(
         scriptInput,
-        llmProvider,
+        flowMode ? "GEMINI_FLASH" : llmProvider,
         characterPrompt,
       );
       title = script.title;
-      scriptText = script.fullScript;
-      scenes = script.scenes;
+      if (flowMode) {
+        const slimScenes = script.scenes
+          .slice(0, 2)
+          .map((s) => ({
+            ...s,
+            text: takeWords(s.text, 22),
+            visualDescription: s.visualDescription,
+          }));
+        scenes = slimScenes;
+        scriptText = slimScenes.map((s) => s.text).join(" ");
+      } else {
+        scriptText = script.fullScript;
+        scenes = script.scenes;
+      }
       await db.video.update({
         where: { id: videoId },
         data: { title, scriptText, scenesJson: scenes as never },
@@ -225,6 +272,7 @@ const worker = new Worker<VideoJobData>(
     let durationMs = checkpoint.durationMs;
     let sceneTimings = checkpoint.sceneTimings;
     let imagePaths = checkpoint.imagePaths;
+    let flowGeneratedClipPaths: string[] | null = null;
 
     const ctx: string[] = [];
     const sep = "═".repeat(70);
@@ -347,35 +395,69 @@ const worker = new Worker<VideoJobData>(
         log.log(`[IMG]`, `IMAGES generating ${targetImageCount} (${imageProvider})`);
         fl?.worker(`IMAGES: generating ${targetImageCount} (${imageProvider})`);
 
-        const imageChain = getImageProviderFallbackChain(imageProvider);
-        let imgResult: { imagePaths: string[] } | null = null;
-        let actualImageProvider = imageProvider;
-        for (const providerId of imageChain) {
-          try {
-            const img = getImageProvider(providerId);
-            imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
-              const ext = path.extname(srcPath) || ".png";
-              const dest = path.join(scDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
-              await fs.copyFile(srcPath, dest);
-            }, { aspectRatio });
-            actualImageProvider = providerId;
-            if (providerId !== imageProvider) {
-              log.log(`[IMG]`, `Fallback: ${providerId} succeeded (primary ${imageProvider} failed)`);
+        if (imageProvider === "FLOW_TV") {
+          const maxFlowScenesRaw = parseInt(process.env.FLOW_TV_MAX_SCENES ?? "2", 10);
+          const maxFlowScenes = Math.max(2, Math.min(Number.isFinite(maxFlowScenesRaw) ? maxFlowScenesRaw : 2, 2));
+          const flowDurationRaw = parseInt(process.env.FLOW_TV_CLIP_DURATION_SEC ?? "6", 10);
+          const flowDurationSec = Math.max(1, Math.min(Number.isFinite(flowDurationRaw) ? flowDurationRaw : 6, 15));
+          const flowScenes = enhancedSlots.slice(0, maxFlowScenes);
+          const flowClipPrompts = flowScenes.map((s, i) =>
+            buildImageToVideoPrompt(s.visualDescription, i, flowScenes.length),
+          );
+          const projectName = `narrateai-${videoId.slice(0, 8)}-${sanitizeSlug(title ?? "video")}`;
+          fl?.worker(`FLOW_TV: project=${projectName}, scenes=${flowScenes.length}, duration=${flowDurationSec}s`);
+
+          const flowResults = await generateFlowStoryAssets({
+            videoId,
+            projectName,
+            outputDir: scDir,
+            maxScenes: maxFlowScenes,
+            scenes: flowScenes.map((s, i) => ({
+              sceneIndex: i,
+              sceneName: `scene-${String(i + 1).padStart(2, "0")}`,
+              imagePrompt: s.visualDescription,
+              clipPrompt: flowClipPrompts[i],
+              durationSec: flowDurationSec,
+            })),
+          });
+          imagePaths = flowResults.map((r) => r.sceneImagePath);
+          flowGeneratedClipPaths = flowResults.map((r) => r.clipPath);
+          checkpoint.usedProviders = {
+            ...checkpoint.usedProviders,
+            image: "FLOW_TV",
+            i2v: "FLOW_TV",
+          };
+        } else {
+          const imageChain = getImageProviderFallbackChain(imageProvider);
+          let imgResult: { imagePaths: string[] } | null = null;
+          let actualImageProvider = imageProvider;
+          for (const providerId of imageChain) {
+            try {
+              const img = getImageProvider(providerId);
+              imgResult = await img.generateImages(enhancedSlots, artStylePrompt, resolvedNeg, async (index, srcPath) => {
+                const ext = path.extname(srcPath) || ".png";
+                const dest = path.join(scDir, `scene-${index.toString().padStart(3, "0")}${ext}`);
+                await fs.copyFile(srcPath, dest);
+              }, { aspectRatio });
+              actualImageProvider = providerId;
+              if (providerId !== imageProvider) {
+                log.log(`[IMG]`, `Fallback: ${providerId} succeeded (primary ${imageProvider} failed)`);
+              }
+              break;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              const isExhausted = /exhaust|quota|limit|balance|402|429|503/i.test(msg);
+              if (isExhausted && imageChain.indexOf(providerId) < imageChain.length - 1) {
+                log.warn(`[IMG]`, `${providerId} exhausted, trying next image provider... (${msg.slice(0, 120)})`);
+                continue;
+              }
+              throw err;
             }
-            break;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            const isExhausted = /exhaust|quota|limit|balance|402|429|503/i.test(msg);
-            if (isExhausted && imageChain.indexOf(providerId) < imageChain.length - 1) {
-              log.warn(`[IMG]`, `${providerId} exhausted, trying next image provider... (${msg.slice(0, 120)})`);
-              continue;
-            }
-            throw err;
           }
+          if (!imgResult) throw new Error("All image providers exhausted");
+          imagePaths = imgResult.imagePaths;
+          checkpoint.usedProviders = { ...checkpoint.usedProviders, image: actualImageProvider };
         }
-        if (!imgResult) throw new Error("All image providers exhausted");
-        imagePaths = imgResult.imagePaths;
-        checkpoint.usedProviders = { ...checkpoint.usedProviders, image: actualImageProvider };
 
         recordStageEnd(checkpoint, "IMAGES");
         completed.add("IMAGES");
@@ -410,7 +492,11 @@ const worker = new Worker<VideoJobData>(
 
       // ── Optional: image-to-video (per-scene clips) ──
       let sceneInputs: Array<{ type: "image"; path: string } | { type: "video"; path: string }> | undefined;
-      if (imageToVideoProvider && !reviewMode && imagePaths!.length > 0) {
+      if (flowGeneratedClipPaths && flowGeneratedClipPaths.length > 0) {
+        sceneInputs = flowGeneratedClipPaths.map((p) => ({ type: "video" as const, path: p }));
+        log.log(`[I2V]`, `FLOW_TV chained clips ready: ${sceneInputs.length}`);
+        fl?.worker(`I2V DONE: FLOW_TV chained clips ${sceneInputs.length}`);
+      } else if (imageToVideoProvider && !reviewMode && imagePaths!.length > 0) {
         recordStageStart(checkpoint, "I2V");
         await updateStage(videoId, "I2V");
         fl?.worker(`I2V START: provider=${imageToVideoProvider}, scenes=${imagePaths!.length}`);

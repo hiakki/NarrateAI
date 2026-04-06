@@ -32,6 +32,7 @@ import { IdeogramImageProvider } from "./image/ideogram";
 import { PollinationsImageProvider } from "./image/pollinations";
 import { LocalBackendImageProvider } from "./image/local-backend";
 import { HuggingFaceImageProvider } from "./image/huggingface";
+import { FlowTvImageProvider } from "./image/flow-tv";
 
 const LLM_MAP: Record<string, () => LlmProviderInterface> = {
   GEMINI_FLASH: () => new GeminiLlmProvider(),
@@ -73,6 +74,7 @@ const IMAGE_MAP: Record<string, () => ImageProviderInterface> = {
   POLLINATIONS: () => new PollinationsImageProvider(),
   LOCAL_BACKEND: () => new LocalBackendImageProvider(),
   HF_IMAGE: () => new HuggingFaceImageProvider(),
+  FLOW_TV: () => new FlowTvImageProvider(),
 };
 
 export function getLlmProvider(provider: string): LlmProviderInterface {

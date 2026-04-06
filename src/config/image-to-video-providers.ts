@@ -17,7 +17,7 @@ export interface ImageToVideoProviderInfo {
   id: string;
   name: string;
   description: string;
-  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi" | "pixverse" | "leonardo" | "gemini-veo";
+  type: "replicate" | "huggingface" | "local" | "pollinations" | "freepik" | "gradio-space" | "wavespeed" | "fal" | "siliconflow" | "deapi" | "pixverse" | "leonardo" | "gemini-veo" | "flow-tv";
   /** "one-time" = signup credits that never reset; "daily-reset" = credits replenish daily */
   creditType: "one-time" | "daily-reset";
   /** Base URL for local backend (e.g. http://localhost:8000) when type === "local" */
@@ -50,6 +50,15 @@ export interface ImageToVideoProviderInfo {
 
 /** Providers we can call from the pipeline. */
 export const IMAGE_TO_VIDEO_PROVIDERS: Record<string, ImageToVideoProviderInfo> = {
+  FLOW_TV: {
+    id: "FLOW_TV",
+    name: "Google Flow TV (Headless)",
+    description: "Headless Flow automation using uploaded cookies. Generates chained clips where prior clip last frame drives next clip start.",
+    type: "flow-tv",
+    creditType: "one-time",
+    costEstimate: "Subscription/credits based",
+    envVar: "FLOW_TV_COOKIES_FILE",
+  },
   SVD_REPLICATE: {
     id: "SVD_REPLICATE",
     name: "Stable Video Diffusion (Replicate)",

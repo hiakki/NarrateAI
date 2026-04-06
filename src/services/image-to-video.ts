@@ -188,6 +188,9 @@ async function dispatchToProvider(
       options.aspectRatio ?? "9:16",
     );
   }
+  if (provider.type === "flow-tv") {
+    throw new Error("FLOW_TV runs as an end-to-end scene pipeline (image+clip chaining) via worker and is not callable as generic I2V provider here.");
+  }
   throw new Error(`Missing config for image-to-video provider: ${provider.id}`);
 }
 

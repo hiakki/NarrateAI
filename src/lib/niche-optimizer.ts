@@ -32,6 +32,25 @@ export interface RankedNiche {
   bestTimesUTC: string[];
 }
 
+function dominates(
+  a: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+  b: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+): boolean {
+  const ge =
+    a.avgViews >= b.avgViews &&
+    a.maxViews >= b.maxViews &&
+    a.predictedMid >= b.predictedMid &&
+    a.score >= b.score &&
+    a.candidateCount >= b.candidateCount;
+  const gt =
+    a.avgViews > b.avgViews ||
+    a.maxViews > b.maxViews ||
+    a.predictedMid > b.predictedMid ||
+    a.score > b.score ||
+    a.candidateCount > b.candidateCount;
+  return ge && gt;
+}
+
 /**
  * Rank niches by a weighted composite score — same formula as the
  * Scorecard UI so what users see matches what the optimizer picks.
@@ -99,7 +118,17 @@ export function rankNichesFromTrending(
         bestTimesUTC: meta.bestTimesUTC,
       };
     })
-    .sort((a, b) => b.rankScore - a.rankScore);
+    .sort((a, b) => {
+      // Keep optimizer ordering consistent with scorecard:
+      // strict dominance must outrank dominated rows.
+      if (dominates(a, b)) return -1;
+      if (dominates(b, a)) return 1;
+      if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
+      if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.candidateCount !== a.candidateCount) return b.candidateCount - a.candidateCount;
+      return b.maxViews - a.maxViews;
+    });
 }
 
 const ALL_PLATFORMS = ["YOUTUBE", "FACEBOOK", "INSTAGRAM"];

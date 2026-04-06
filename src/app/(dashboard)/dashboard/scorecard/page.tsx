@@ -55,6 +55,15 @@ interface NicheEntry {
 
 type SortKey = "score" | "views" | "predicted" | "name";
 
+type RankBreakdown = {
+  avgViewsPart: number;
+  predictedPart: number;
+  scorePart: number;
+  maxViewsPart: number;
+  candidatesPart: number;
+  total: number;
+};
+
 const DAY_OPTIONS = [
   { label: "Today", value: 1 },
   { label: "3 Days", value: 3 },
@@ -155,6 +164,25 @@ function BestPlatformIcon({ bestPlatforms }: { bestPlatforms?: string[] }) {
   );
 }
 
+function dominates(
+  a: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+  b: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+): boolean {
+  const ge =
+    a.avgViews >= b.avgViews &&
+    a.maxViews >= b.maxViews &&
+    a.predictedMid >= b.predictedMid &&
+    a.score >= b.score &&
+    a.candidateCount >= b.candidateCount;
+  const gt =
+    a.avgViews > b.avgViews ||
+    a.maxViews > b.maxViews ||
+    a.predictedMid > b.predictedMid ||
+    a.score > b.score ||
+    a.candidateCount > b.candidateCount;
+  return ge && gt;
+}
+
 export default function ScorecardPage() {
   const [data, setData] = useState<Record<string, NicheEntry> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -208,21 +236,41 @@ export default function ScorecardPage() {
 
     return entries
       .map((e) => {
-        const rankScore =
-          (e.avgViews / maxAV) * 30 +
-          (e.predictedMid / maxP) * 25 +
-          (e.score / maxS) * 20 +
-          (e.maxViews / maxMV) * 15 +
-          (e.candidateCount / maxC) * 10;
-        return { ...e, rankScore };
+        const breakdown: RankBreakdown = {
+          avgViewsPart: (e.avgViews / maxAV) * 30,
+          predictedPart: (e.predictedMid / maxP) * 25,
+          scorePart: (e.score / maxS) * 20,
+          maxViewsPart: (e.maxViews / maxMV) * 15,
+          candidatesPart: (e.candidateCount / maxC) * 10,
+          total: 0,
+        };
+        breakdown.total =
+          breakdown.avgViewsPart +
+          breakdown.predictedPart +
+          breakdown.scorePart +
+          breakdown.maxViewsPart +
+          breakdown.candidatesPart;
+        return { ...e, rankScore: breakdown.total, breakdown };
       })
-      .sort((a, b) => b.rankScore - a.rankScore)
+      .sort((a, b) => {
+        // Hard guarantee: if one niche is >= across all ranking metrics,
+        // it cannot appear below the dominated niche.
+        if (dominates(a, b)) return -1;
+        if (dominates(b, a)) return 1;
+        if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
+        if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.candidateCount !== a.candidateCount) return b.candidateCount - a.candidateCount;
+        return b.maxViews - a.maxViews;
+      })
       .map((e, i) => ({ ...e, rank: i + 1 }));
   }, [entries]);
 
   const rankedMap = useMemo(() => {
-    const m = new Map<string, { rank: number; rankScore: number }>();
-    for (const r of ranked) m.set(r.key, { rank: r.rank, rankScore: r.rankScore });
+    const m = new Map<string, { rank: number; rankScore: number; breakdown: RankBreakdown }>();
+    for (const r of ranked) {
+      m.set(r.key, { rank: r.rank, rankScore: r.rankScore, breakdown: r.breakdown });
+    }
     return m;
   }, [ranked]);
 
@@ -230,7 +278,19 @@ export default function ScorecardPage() {
     const q = search.toLowerCase();
     let list = entries.map((e) => {
       const r = rankedMap.get(e.key);
-      return { ...e, rank: r?.rank ?? entries.length, rankScore: r?.rankScore ?? 0 };
+      return {
+        ...e,
+        rank: r?.rank ?? entries.length,
+        rankScore: r?.rankScore ?? 0,
+        breakdown: r?.breakdown ?? {
+          avgViewsPart: 0,
+          predictedPart: 0,
+          scorePart: 0,
+          maxViewsPart: 0,
+          candidatesPart: 0,
+          total: 0,
+        },
+      };
     });
     if (q) {
       list = list.filter(
@@ -421,7 +481,7 @@ export default function ScorecardPage() {
       {/* Niche grid */}
       {filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(({ key, entry, stats, score, rank, rankScore }) => {
+          {filtered.map(({ key, entry, stats, score, rank, rankScore, breakdown }) => {
             const meta = entry.meta;
             const trend = trendIndicator(entry.history);
             const TrendIcon = trend?.icon ?? Minus;
@@ -477,6 +537,15 @@ export default function ScorecardPage() {
                       </div>
                     )}
 
+                    {rankScore > 0 && (
+                      <p
+                        className="text-[10px] text-muted-foreground/80 leading-tight"
+                        title={`Rank score ${breakdown.total.toFixed(2)} = Views ${breakdown.avgViewsPart.toFixed(2)} + Pred ${breakdown.predictedPart.toFixed(2)} + Score ${breakdown.scorePart.toFixed(2)} + Max ${breakdown.maxViewsPart.toFixed(2)} + Cand ${breakdown.candidatesPart.toFixed(2)}`}
+                      >
+                        Why #{rank}: V {breakdown.avgViewsPart.toFixed(1)} • P {breakdown.predictedPart.toFixed(1)} • S {breakdown.scorePart.toFixed(1)} • M {breakdown.maxViewsPart.toFixed(1)} • C {breakdown.candidatesPart.toFixed(1)}
+                      </p>
+                    )}
+
                     {/* Stats row */}
                     {stats ? (
                       <div className="grid grid-cols-3 gap-2 text-xs">
@@ -513,23 +582,25 @@ export default function ScorecardPage() {
 
                     {/* Platform + Bottom row */}
                     <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/60">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 min-w-0 overflow-hidden">
                         {/* Source platforms */}
                         <PlatformIcons platforms={stats?.platforms} />
                         {/* Trend */}
                         {trend && (
                           <span
-                            className={`flex items-center gap-0.5 text-[11px] font-medium ${trend.color}`}
+                            className={`flex items-center gap-0.5 text-[11px] font-medium shrink-0 whitespace-nowrap ${trend.color}`}
                           >
                             <TrendIcon className="h-3 w-3" />
                             {trend.label}
                           </span>
                         )}
                         {/* Sparkline */}
-                        {miniSparkline(entry.history)}
+                        <span className="hidden sm:inline-flex shrink-0">
+                          {miniSparkline(entry.history)}
+                        </span>
                       </div>
 
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
                         {/* Best platform to post */}
                         <BestPlatformIcon bestPlatforms={meta?.bestPlatforms} />
                         {/* Best time */}
