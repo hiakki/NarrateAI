@@ -100,11 +100,25 @@ function postTimeReachableToday(postTime: string, tz: string): boolean {
   return todayPost.getTime() >= Date.now() + 15 * 60 * 1000;
 }
 
+/**
+ * Returns true when the next post slot (from now) lands within 24h.
+ * Used to decide whether a daily automation should run in the build window.
+ */
+function nextPostWithin24Hours(postTime: string, tz: string): boolean {
+  const postSlot = postTime.split(",")[0].trim();
+  let nextPost = localTimeToUTC(postSlot, tz);
+  if (nextPost.getTime() <= Date.now()) {
+    nextPost = new Date(nextPost.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return (nextPost.getTime() - Date.now()) <= 24 * 60 * 60 * 1000;
+}
+
 export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: string } {
   const gapDays = FREQ_DAYS[auto.frequency] ?? 1;
   const tz = auto.timezone || BUILD_ALL_TIMEZONE;
   const daysSince = calendarDaysSinceRun(auto.lastRunAt, tz);
   const reachable = auto.postTime ? postTimeReachableToday(auto.postTime, tz) : true;
+  const within24h = auto.postTime ? nextPostWithin24Hours(auto.postTime, tz) : false;
 
   if (auto.lastRunAt === null) {
     if (isInBuildWindow()) {
@@ -114,6 +128,16 @@ export function shouldBuildNow(auto: BuildCheckAuto): { build: boolean; reason: 
       return { build: false, reason: "new automation — waiting for build window" };
     }
     return { build: false, reason: "new automation — post time passed, will build tomorrow" };
+  }
+
+  // Explicit business rule:
+  // At BUILD_ALL_TIME window, daily automations should run when their next
+  // post slot is within the next 24 hours from the build window.
+  if (isInBuildWindow() && auto.frequency === "daily" && within24h) {
+    return {
+      build: true,
+      reason: `build window active, next scheduled post is within 24h`,
+    };
   }
 
   if (daysSince < gapDays) {
