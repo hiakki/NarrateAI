@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Obtain production TLS certificates from Let's Encrypt using certbot.
 # Supports:
-#   1) HTTP-01 via nginx plugin (default)
-#   2) DNS-01 manual mode (required for wildcard certs)
+#   1) HTTP-01 via nginx plugin
+#   2) DNS-01 manual mode (DNS provider agnostic; works with Route53 or any DNS)
 
 set -euo pipefail
 
@@ -16,6 +16,7 @@ DEFAULT_DOMAINS=("narrateai.online" "*.narrateai.online")
 DEFAULT_CERT_NAME="narrateai-online-wildcard"
 DEFAULT_WILDCARD_DOMAINS=("narrateai.online" "*.narrateai.online")
 DEFAULT_WILDCARD_CERT_NAME="narrateai-online-wildcard"
+DNS_CACHE_FILE="${DNS_CACHE_FILE:-/tmp/narrateai-last-dns-challenge.txt}"
 
 declare -a PORT80_PIDS=()
 declare -a STOPPED_SERVICES=()
@@ -279,6 +280,72 @@ print_restart_reminders() {
   fi
 }
 
+extract_and_cache_dns_challenges() {
+  local output_file="$1"
+  [[ -f "$output_file" ]] || return 0
+
+  awk '
+    /Please deploy a DNS TXT record under the name:/ {
+      getline
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      name=$0
+    }
+    /with the following value:/ {
+      getline
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      value=$0
+      if (name != "" && value != "") {
+        print name "\t" value
+        name=""
+        value=""
+      }
+    }
+  ' "$output_file" > "$DNS_CACHE_FILE.tmp" || true
+
+  if [[ -s "$DNS_CACHE_FILE.tmp" ]]; then
+    mv "$DNS_CACHE_FILE.tmp" "$DNS_CACHE_FILE"
+    echo "Saved DNS challenge hints to: $DNS_CACHE_FILE"
+  else
+    rm -f "$DNS_CACHE_FILE.tmp"
+  fi
+}
+
+lookup_txt_values() {
+  local fqdn="$1"
+  if command -v dig >/dev/null 2>&1; then
+    dig +short TXT "$fqdn" 2>/dev/null | sed 's/^"//; s/"$//'
+    return
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup -type=TXT "$fqdn" 2>/dev/null | sed -n 's/.*text = "\(.*\)"/\1/p'
+    return
+  fi
+  echo "No TXT lookup tool found (install dnsutils/bind-utils)." >&2
+}
+
+check_cached_dns_challenges() {
+  if [[ ! -f "$DNS_CACHE_FILE" ]]; then
+    echo "No cached DNS challenge file found at $DNS_CACHE_FILE"
+    return 1
+  fi
+
+  local all_ok=true
+  echo "Checking cached DNS TXT entries..."
+  while IFS=$'\t' read -r name value; do
+    [[ -n "$name" && -n "$value" ]] || continue
+    local hits
+    hits="$(lookup_txt_values "$name" || true)"
+    if grep -Fqx "$value" <<<"$hits"; then
+      echo "  ✓ $name has expected TXT value"
+    else
+      echo "  ✗ $name missing expected TXT value"
+      all_ok=false
+    fi
+  done < "$DNS_CACHE_FILE"
+
+  $all_ok
+}
+
 main() {
   print_banner
 
@@ -288,6 +355,7 @@ main() {
   local wildcard_mode=false
   local challenge_mode="http"
   local manual_dns=false
+  local non_interactive=true
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -304,6 +372,8 @@ main() {
         challenge_mode="dns"
         manual_dns=true
         shift ;;
+      --interactive)
+        non_interactive=false; shift ;;
       --dry-run)
         DRY_RUN=true; shift ;;
       --help|-h)
@@ -315,7 +385,8 @@ Options:
   -m, --email <email>     Email address used for Let's Encrypt registration (required)
   --cert-name <name>      Certbot certificate name (default: $DEFAULT_CERT_NAME)
   --wildcard              Use wildcard defaults: ${DEFAULT_WILDCARD_DOMAINS[*]}
-  --dns-manual            Use manual DNS-01 challenge (required for wildcard)
+  --dns-manual            Use DNS-01 manual challenge (required for wildcard)
+  --interactive           Ask for y/N confirmation (default is non-interactive)
   --dry-run               Perform a dry-run against Let's Encrypt staging CA
   -h, --help              Show this help
 
@@ -349,7 +420,7 @@ USAGE
   fi
 
   if printf '%s\n' "${domains[@]}" | grep -q '^\*\.' && [[ "$challenge_mode" != "dns" ]]; then
-    echo "Wildcard domain detected; switching challenge mode to DNS (manual)."
+    echo "Wildcard domain detected; switching challenge mode to DNS."
     challenge_mode="dns"
     manual_dns=true
   fi
@@ -377,10 +448,12 @@ USAGE
   fi
   echo ""
 
-  read -rp "Proceed with these settings? [y/N] " confirm
-  if [[ "${confirm,,}" != "y" ]]; then
-    echo "Aborted."
-    exit 0
+  if [[ "$non_interactive" == false ]]; then
+    read -rp "Proceed with these settings? [y/N] " confirm
+    if [[ "${confirm,,}" != "y" ]]; then
+      echo "Aborted."
+      exit 0
+    fi
   fi
 
   ensure_certbot
@@ -388,7 +461,7 @@ USAGE
   if [[ "$challenge_mode" == "http" ]]; then
     if ! command -v nginx >/dev/null 2>&1; then
       echo "nginx binary not found. certbot's nginx plugin won't work." >&2
-      echo "Install nginx or use --dns-manual challenge." >&2
+      echo "Either install nginx or re-run with certbot manually (e.g., standalone or DNS challenge)." >&2
       exit 1
     fi
 
@@ -400,6 +473,31 @@ USAGE
     ensure_port80_clear
   fi
 
+  if [[ "$challenge_mode" == "dns" && -t 0 ]]; then
+    if [[ -f "$DNS_CACHE_FILE" ]]; then
+      echo ""
+      echo "Cached DNS challenge data found: $DNS_CACHE_FILE"
+      echo "Choose an option:"
+      echo "  1) Check previous DNS TXT propagation"
+      echo "  2) Generate new DNS challenge entries now"
+      local mode_choice
+      read -rp "Enter choice [1/2] (default 2): " mode_choice || true
+      case "${mode_choice:-2}" in
+        1)
+          check_cached_dns_challenges || true
+          echo ""
+          read -rp "Continue to generate a NEW challenge anyway? [y/N] " continue_new || true
+          if [[ "${continue_new,,}" != "y" ]]; then
+            echo "Stopped after DNS check."
+            exit 0
+          fi
+          ;;
+        *)
+          ;;
+      esac
+    fi
+  fi
+
   local certbot_args=(
     certbot certonly --agree-tos --no-eff-email
     --email "$email"
@@ -407,7 +505,8 @@ USAGE
   )
 
   if [[ "$challenge_mode" == "http" ]]; then
-    certbot_args+=( --non-interactive --nginx )
+    certbot_args+=( --non-interactive )
+    certbot_args+=( --nginx )
   else
     # Manual DNS challenge is interactive by design.
     certbot_args+=( --manual --preferred-challenges dns --manual-public-ip-logging-ok )
@@ -424,11 +523,18 @@ USAGE
     echo "Requesting production certificate from Let's Encrypt..."
   fi
 
-  if ! "${certbot_args[@]}"; then
+  local certbot_output
+  certbot_output="$(mktemp /tmp/narrateai-certbot-output.XXXXXX.log)"
+  if ! "${certbot_args[@]}" 2>&1 | tee "$certbot_output"; then
+    if [[ "$challenge_mode" == "dns" ]]; then
+      extract_and_cache_dns_challenges "$certbot_output"
+    fi
     echo "certbot failed. Review the output above." >&2
+    rm -f "$certbot_output"
     print_restart_reminders
     exit 1
   fi
+  rm -f "$certbot_output"
 
   if [[ ${DRY_RUN:-false} == true ]]; then
     echo "Dry-run complete (no certificates saved)."
@@ -456,12 +562,7 @@ NGINX
   echo "Replace NAME with $cert_name."
   echo ""
   echo "To verify renewal pipeline:"
-  if [[ "$challenge_mode" == "dns" ]]; then
-    echo "  Note: --dns-manual certificates do not auto-renew without hooks/plugin."
-    echo "  Prefer DNS provider plugin for unattended renewal."
-  else
-    echo "  sudo certbot renew --dry-run"
-  fi
+  echo "  sudo certbot renew --dry-run"
   echo ""
   echo "Remember to set up a cron/systemd timer for certbot renew (if not already provided by the package)."
 

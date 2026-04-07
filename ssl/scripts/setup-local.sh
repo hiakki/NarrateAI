@@ -121,7 +121,8 @@ obtain_production_certs() {
   fi
 
   echo "==> Let's Encrypt (production certificates)"
-  sudo "$LE_HELPER_SCRIPT" --email "$LE_EMAIL"
+  # Wildcard-first, DNS-provider-agnostic manual DNS challenge.
+  sudo "$LE_HELPER_SCRIPT" --wildcard --dns-manual --email "$LE_EMAIL"
 
   # Helper restarts nginx; stop it again so we can launch with this config
   stop_existing_nginx
