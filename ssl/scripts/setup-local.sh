@@ -370,7 +370,7 @@ main() {
   fi
   echo "Stop:    sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -s quit"
   echo "Debug:   sudo nginx -p \"$ROOT\" -c \"$ROOT/nginx.conf\" -g 'daemon off;'"
-  echo "Ensure backends are running: app :3000, chat :5173"
+  echo "Ensure backends are running: app :3000, chat :5173, arb :8877"
 }
 
 main "$@"
