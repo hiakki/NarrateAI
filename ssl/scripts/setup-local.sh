@@ -16,6 +16,7 @@ CERT_RENEW_THRESHOLD_SECONDS=${CERT_RENEW_THRESHOLD_SECONDS:-2592000}
 LE_DNS_MANUAL=false
 LE_INTERACTIVE=false
 LE_FORCE_NEW_CHALLENGE=false
+RESTART_ONLY=false
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -32,9 +33,11 @@ parse_args() {
         LE_INTERACTIVE=true; shift ;;
       --force-new-challenge)
         LE_FORCE_NEW_CHALLENGE=true; shift ;;
+      --restart-only)
+        RESTART_ONLY=true; shift ;;
       --help|-h)
         cat <<'USAGE'
-Usage: ./scripts/setup-local.sh [--production] [--email you@example.com] [--dns-manual] [--interactive] [--force-new-challenge]
+Usage: ./scripts/setup-local.sh [--production] [--email you@example.com] [--dns-manual] [--interactive] [--force-new-challenge] [--restart-only]
 
 Options:
   --production           Obtain Let's Encrypt certificates (requires DNS + public access)
@@ -42,6 +45,7 @@ Options:
   --dns-manual           Force DNS manual challenge mode for Let's Encrypt helper
   --interactive          Enable helper confirmation prompts
   --force-new-challenge Skip cached DNS check and request fresh DNS challenge values
+  --restart-only         Restart nginx only; skip cert issuance/copy and hosts/cert steps
   --help                 Show this message
 
 Without --production, mkcert/self-signed certificates are generated for local development.
@@ -146,10 +150,7 @@ obtain_production_certs() {
   fi
 
   local helper_status=0
-  set +e
-  sudo "$LE_HELPER_SCRIPT" "${helper_args[@]}"
-  helper_status=$?
-  set -e
+  sudo "$LE_HELPER_SCRIPT" "${helper_args[@]}" || helper_status=$?
 
   case "$helper_status" in
     0)
@@ -345,7 +346,9 @@ maybe_add_hosts() {
 main() {
   parse_args "$@"
   echo "==> contrib/nginx setup (root: $ROOT)"
-  if $USE_PRODUCTION; then
+  if $RESTART_ONLY; then
+    echo "Mode: restart-only (nginx reload/start, no certbot)"
+  elif $USE_PRODUCTION; then
     echo "Mode: production (Let's Encrypt)"
   else
     echo "Mode: local development (mkcert/self-signed)"
@@ -355,7 +358,9 @@ main() {
   install_nginx
   ensure_nginx_prefix_dirs
 
-  if $USE_PRODUCTION; then
+  if $RESTART_ONLY; then
+    echo "Skipping certificate workflow (--restart-only)."
+  elif $USE_PRODUCTION; then
     if cert_needs_renewal; then
       echo "Existing Let's Encrypt certificate missing or expiring soon — requesting new issuance."
       local le_status=0
@@ -396,8 +401,10 @@ main() {
     "$ROOT/scripts/gen-local-ssl.sh"
   fi
 
-  echo "==> /etc/hosts"
-  maybe_add_hosts
+  if ! $RESTART_ONLY; then
+    echo "==> /etc/hosts"
+    maybe_add_hosts
+  fi
 
   echo "==> nginx config test"
   nginx -t -p "$ROOT" -c "$ROOT/nginx.conf"
