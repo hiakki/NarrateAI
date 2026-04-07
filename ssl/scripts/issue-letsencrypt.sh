@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Obtain production TLS certificates from Let's Encrypt using certbot.
-# Requires the domains to resolve to this server and TCP/80 reachable from the internet.
-# For nginx-based setups, certbot's nginx plugin is used to solve the HTTP-01 challenge.
+# Supports:
+#   1) HTTP-01 via nginx plugin (default)
+#   2) DNS-01 manual mode (required for wildcard certs)
 
 set -euo pipefail
 
@@ -11,8 +12,10 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_DOMAINS=("app.narrateai.online" "chat.narrateai.online" "narrateai.online" "www.narrateai.online")
-DEFAULT_CERT_NAME="narrateai-online"
+DEFAULT_DOMAINS=("narrateai.online" "*.narrateai.online")
+DEFAULT_CERT_NAME="narrateai-online-wildcard"
+DEFAULT_WILDCARD_DOMAINS=("narrateai.online" "*.narrateai.online")
+DEFAULT_WILDCARD_CERT_NAME="narrateai-online-wildcard"
 
 declare -a PORT80_PIDS=()
 declare -a STOPPED_SERVICES=()
@@ -282,6 +285,9 @@ main() {
   local cert_name="$DEFAULT_CERT_NAME"
   local email=""
   local domains=()
+  local wildcard_mode=false
+  local challenge_mode="http"
+  local manual_dns=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -291,6 +297,13 @@ main() {
         cert_name="$2"; shift 2 ;;
       -m|--email)
         email="$2"; shift 2 ;;
+      --wildcard)
+        wildcard_mode=true
+        shift ;;
+      --dns-manual)
+        challenge_mode="dns"
+        manual_dns=true
+        shift ;;
       --dry-run)
         DRY_RUN=true; shift ;;
       --help|-h)
@@ -301,11 +314,14 @@ Options:
   -d, --domain <domain>   Add a domain (may be repeated). Defaults: ${DEFAULT_DOMAINS[*]}
   -m, --email <email>     Email address used for Let's Encrypt registration (required)
   --cert-name <name>      Certbot certificate name (default: $DEFAULT_CERT_NAME)
+  --wildcard              Use wildcard defaults: ${DEFAULT_WILDCARD_DOMAINS[*]}
+  --dns-manual            Use manual DNS-01 challenge (required for wildcard)
   --dry-run               Perform a dry-run against Let's Encrypt staging CA
   -h, --help              Show this help
 
 Examples:
   sudo $0 --email admin@example.com
+  sudo $0 --wildcard --dns-manual --email admin@example.com
   sudo $0 -d api.example.com -d www.example.com --email ops@example.com --cert-name example-cert
 
 USAGE
@@ -315,8 +331,27 @@ USAGE
     esac
   done
 
+  if [[ "$wildcard_mode" == true && ${#domains[@]} -eq 0 ]]; then
+    domains=("${DEFAULT_WILDCARD_DOMAINS[@]}")
+    if [[ "$cert_name" == "$DEFAULT_CERT_NAME" ]]; then
+      cert_name="$DEFAULT_WILDCARD_CERT_NAME"
+    fi
+  fi
+
   if [[ ${#domains[@]} -eq 0 ]]; then
     domains=("${DEFAULT_DOMAINS[@]}")
+  fi
+
+  if [[ "$wildcard_mode" == true ]]; then
+    # Wildcard is only possible with DNS challenge.
+    challenge_mode="dns"
+    manual_dns=true
+  fi
+
+  if printf '%s\n' "${domains[@]}" | grep -q '^\*\.' && [[ "$challenge_mode" != "dns" ]]; then
+    echo "Wildcard domain detected; switching challenge mode to DNS (manual)."
+    challenge_mode="dns"
+    manual_dns=true
   fi
 
   if [[ -z "$email" ]]; then
@@ -330,11 +365,16 @@ USAGE
   echo "Certificate name : $cert_name"
   echo "Domains          : $(join_by ', ' "${domains[@]}")"
   echo "Email            : $email"
+  echo "Challenge mode   : $challenge_mode"
   echo "Root config dir  : $ROOT"
   echo ""
   echo "Prerequisites:" 
   echo "  • DNS for each domain must point to this server's public IP"
-  echo "  • Port 80 must be open to the internet (HTTP-01 challenge)"
+  if [[ "$challenge_mode" == "http" ]]; then
+    echo "  • Port 80 must be open to the internet (HTTP-01 challenge)"
+  else
+    echo "  • You must be able to add TXT records for _acme-challenge.<domain> (DNS-01)"
+  fi
   echo ""
 
   read -rp "Proceed with these settings? [y/N] " confirm
@@ -345,25 +385,33 @@ USAGE
 
   ensure_certbot
 
-  if ! command -v nginx >/dev/null 2>&1; then
-    echo "nginx binary not found. certbot's nginx plugin won't work." >&2
-    echo "Either install nginx or re-run with certbot manually (e.g., standalone or DNS challenge)." >&2
-    exit 1
-  fi
+  if [[ "$challenge_mode" == "http" ]]; then
+    if ! command -v nginx >/dev/null 2>&1; then
+      echo "nginx binary not found. certbot's nginx plugin won't work." >&2
+      echo "Install nginx or use --dns-manual challenge." >&2
+      exit 1
+    fi
 
-  if ! nginx -t >/dev/null 2>&1; then
-    echo "nginx configuration test failed. Ensure nginx installs cleanly before running certbot." >&2
-    exit 1
-  fi
+    if ! nginx -t >/dev/null 2>&1; then
+      echo "nginx configuration test failed. Ensure nginx installs cleanly before running certbot." >&2
+      exit 1
+    fi
 
-  ensure_port80_clear
+    ensure_port80_clear
+  fi
 
   local certbot_args=(
-    certbot certonly --non-interactive --agree-tos --no-eff-email
+    certbot certonly --agree-tos --no-eff-email
     --email "$email"
     --cert-name "$cert_name"
-    --nginx
   )
+
+  if [[ "$challenge_mode" == "http" ]]; then
+    certbot_args+=( --non-interactive --nginx )
+  else
+    # Manual DNS challenge is interactive by design.
+    certbot_args+=( --manual --preferred-challenges dns --manual-public-ip-logging-ok )
+  fi
 
   for d in "${domains[@]}"; do
     certbot_args+=( -d "$d" )
@@ -408,7 +456,12 @@ NGINX
   echo "Replace NAME with $cert_name."
   echo ""
   echo "To verify renewal pipeline:"
-  echo "  sudo certbot renew --dry-run"
+  if [[ "$challenge_mode" == "dns" ]]; then
+    echo "  Note: --dns-manual certificates do not auto-renew without hooks/plugin."
+    echo "  Prefer DNS provider plugin for unattended renewal."
+  else
+    echo "  sudo certbot renew --dry-run"
+  fi
   echo ""
   echo "Remember to set up a cron/systemd timer for certbot renew (if not already provided by the package)."
 
