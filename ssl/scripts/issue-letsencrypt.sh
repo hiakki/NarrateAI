@@ -287,15 +287,24 @@ extract_and_cache_dns_challenges() {
   [[ -f "$output_file" ]] || return 0
 
   awk '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
     /Please deploy a DNS TXT record under the name:/ {
-      getline
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
-      name=$0
+      want_name=1
+      next
     }
     /with the following value:/ {
-      getline
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
-      value=$0
+      want_value=1
+      next
+    }
+    {
+      line=trim($0)
+      if (want_name && line != "") {
+        name=line
+        want_name=0
+      } else if (want_value && line != "") {
+        value=line
+        want_value=0
+      }
       if (name != "" && value != "") {
         print name "\t" value
         name=""
