@@ -13,9 +13,7 @@ LE_CERT_NAME="narrateai-online-wildcard"
 REQUIRED_PROD_DOMAINS=("narrateai.online" "*.narrateai.online")
 LE_HELPER_SCRIPT="$ROOT/scripts/issue-letsencrypt.sh"
 CERT_RENEW_THRESHOLD_SECONDS=${CERT_RENEW_THRESHOLD_SECONDS:-2592000}
-LE_DNS_MANUAL=false
 LE_INTERACTIVE=false
-LE_FORCE_NEW_CHALLENGE=false
 RESTART_ONLY=false
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -27,24 +25,18 @@ parse_args() {
         USE_PRODUCTION=true; shift ;;
       --email)
         LE_EMAIL="${2:-}"; shift 2 ;;
-      --dns-manual)
-        LE_DNS_MANUAL=true; shift ;;
       --interactive)
         LE_INTERACTIVE=true; shift ;;
-      --force-new-challenge)
-        LE_FORCE_NEW_CHALLENGE=true; shift ;;
       --restart-only)
         RESTART_ONLY=true; shift ;;
       --help|-h)
         cat <<'USAGE'
-Usage: ./scripts/setup-local.sh [--production] [--email you@example.com] [--dns-manual] [--interactive] [--force-new-challenge] [--restart-only]
+Usage: ./scripts/setup-local.sh [--production] [--email you@example.com] [--interactive] [--restart-only]
 
 Options:
   --production           Obtain Let's Encrypt certificates (requires DNS + public access)
   --email <address>      Email used for Let's Encrypt registration (required with --production)
-  --dns-manual           Force DNS manual challenge mode for Let's Encrypt helper
   --interactive          Enable helper confirmation prompts
-  --force-new-challenge Skip cached DNS check and request fresh DNS challenge values
   --restart-only         Restart nginx only; skip cert issuance/copy and hosts/cert steps
   --help                 Show this message
 
@@ -139,37 +131,11 @@ obtain_production_certs() {
   echo "==> Let's Encrypt (production certificates)"
   # Wildcard-first, DNS-provider-agnostic manual DNS challenge.
   local helper_args=( --wildcard --email "$LE_EMAIL" )
-  if $LE_DNS_MANUAL; then
-    helper_args+=( --dns-manual )
-  fi
   if $LE_INTERACTIVE; then
     helper_args+=( --interactive )
   fi
-  if $LE_FORCE_NEW_CHALLENGE; then
-    helper_args+=( --force-new-challenge )
-  fi
 
-  local helper_status=0
-  sudo "$LE_HELPER_SCRIPT" "${helper_args[@]}" || helper_status=$?
-
-  case "$helper_status" in
-    0)
-      ;;
-    20)
-      echo "DNS TXT verified from cached challenge values."
-      echo "If cert is still missing/expired, rerun with --force-new-challenge to request fresh certbot values."
-      return 20
-      ;;
-    21)
-      echo "Cached DNS TXT verification failed."
-      echo "Fix DNS TXT records and rerun, or use --force-new-challenge for fresh certbot values."
-      return 21
-      ;;
-    *)
-      echo "Let's Encrypt helper failed with exit code: $helper_status" >&2
-      return "$helper_status"
-      ;;
-  esac
+  sudo "$LE_HELPER_SCRIPT" "${helper_args[@]}"
 
   # Helper restarts nginx; stop it again so we can launch with this config
   stop_existing_nginx
@@ -363,33 +329,7 @@ main() {
   elif $USE_PRODUCTION; then
     if cert_needs_renewal; then
       echo "Existing Let's Encrypt certificate missing or expiring soon — requesting new issuance."
-      local le_status=0
-      set +e
       obtain_production_certs
-      le_status=$?
-      set -e
-
-      case "$le_status" in
-        0)
-          ;;
-        20)
-          if [[ -f "/etc/letsencrypt/live/$LE_CERT_NAME/fullchain.pem" && -f "/etc/letsencrypt/live/$LE_CERT_NAME/privkey.pem" ]]; then
-            echo "Cached DNS verified; using existing Let's Encrypt certificate files."
-          else
-            echo "Cached DNS is verified, but certificate issuance has not been completed yet." >&2
-            echo "Run again with --force-new-challenge to complete certificate issuance." >&2
-            exit 1
-          fi
-          ;;
-        21)
-          echo "Cached DNS TXT verification failed; certificate issuance not attempted." >&2
-          exit 1
-          ;;
-        *)
-          echo "Certificate issuance failed with exit code: $le_status" >&2
-          exit "$le_status"
-          ;;
-      esac
     else
       echo "Existing Let's Encrypt certificate is valid for at least $(($CERT_RENEW_THRESHOLD_SECONDS/86400)) days; skipping issuance."
     fi

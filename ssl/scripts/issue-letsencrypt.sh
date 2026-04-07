@@ -17,8 +17,6 @@ DEFAULT_CERT_NAME="narrateai-online-wildcard"
 DEFAULT_WILDCARD_DOMAINS=("narrateai.online" "*.narrateai.online")
 DEFAULT_WILDCARD_CERT_NAME="narrateai-online-wildcard"
 DNS_CACHE_FILE="${DNS_CACHE_FILE:-/tmp/narrateai-last-dns-challenge.txt}"
-CHECK_ONLY_VERIFIED_EXIT_CODE=20
-CHECK_ONLY_FAILED_EXIT_CODE=21
 
 declare -a PORT80_PIDS=()
 declare -a STOPPED_SERVICES=()
@@ -321,51 +319,6 @@ extract_and_cache_dns_challenges() {
   fi
 }
 
-lookup_txt_values() {
-  local fqdn="$1"
-  if command -v dig >/dev/null 2>&1; then
-    dig +short TXT "$fqdn" 2>/dev/null | sed 's/^"//; s/"$//'
-    return
-  fi
-  if command -v nslookup >/dev/null 2>&1; then
-    nslookup -type=TXT "$fqdn" 2>/dev/null | sed -n 's/.*text = "\(.*\)"/\1/p'
-    return
-  fi
-  echo "No TXT lookup tool found (install dnsutils/bind-utils)." >&2
-}
-
-check_cached_dns_challenges() {
-  if [[ ! -f "$DNS_CACHE_FILE" ]]; then
-    echo "No cached DNS challenge file found at $DNS_CACHE_FILE"
-    return 1
-  fi
-
-  local all_ok=true
-  echo "Checking cached DNS TXT entries..."
-  while IFS=$'\t' read -r name value; do
-    [[ -n "$name" && -n "$value" ]] || continue
-    local hits
-    hits="$(lookup_txt_values "$name" || true)"
-    echo "  dig +short TXT $name"
-    if [[ -n "$hits" ]]; then
-      while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        echo "    -> \"$line\""
-      done <<<"$hits"
-    else
-      echo "    -> <no TXT answer>"
-    fi
-    if grep -Fqx "$value" <<<"$hits"; then
-      echo "  ✓ $name has expected TXT value"
-    else
-      echo "  ✗ $name missing expected TXT value: \"$value\""
-      all_ok=false
-    fi
-  done < "$DNS_CACHE_FILE"
-
-  $all_ok
-}
-
 main() {
   print_banner
 
@@ -374,9 +327,7 @@ main() {
   local domains=()
   local wildcard_mode=false
   local challenge_mode="http"
-  local manual_dns=false
   local non_interactive=true
-  local force_new_challenge=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -389,14 +340,8 @@ main() {
       --wildcard)
         wildcard_mode=true
         shift ;;
-      --dns-manual)
-        challenge_mode="dns"
-        manual_dns=true
-        shift ;;
       --interactive)
         non_interactive=false; shift ;;
-      --force-new-challenge)
-        force_new_challenge=true; shift ;;
       --dry-run)
         DRY_RUN=true; shift ;;
       --help|-h)
@@ -408,15 +353,13 @@ Options:
   -m, --email <email>     Email address used for Let's Encrypt registration (required)
   --cert-name <name>      Certbot certificate name (default: $DEFAULT_CERT_NAME)
   --wildcard              Use wildcard defaults: ${DEFAULT_WILDCARD_DOMAINS[*]}
-  --dns-manual            Use DNS-01 manual challenge (required for wildcard)
   --interactive           Ask for y/N confirmation (default is non-interactive)
-  --force-new-challenge   Skip cache verification and create fresh DNS challenge
   --dry-run               Perform a dry-run against Let's Encrypt staging CA
   -h, --help              Show this help
 
 Examples:
   sudo $0 --email admin@example.com
-  sudo $0 --wildcard --dns-manual --email admin@example.com
+  sudo $0 --wildcard --email admin@example.com
   sudo $0 -d api.example.com -d www.example.com --email ops@example.com --cert-name example-cert
 
 USAGE
@@ -440,13 +383,11 @@ USAGE
   if [[ "$wildcard_mode" == true ]]; then
     # Wildcard is only possible with DNS challenge.
     challenge_mode="dns"
-    manual_dns=true
   fi
 
   if printf '%s\n' "${domains[@]}" | grep -q '^\*\.' && [[ "$challenge_mode" != "dns" ]]; then
     echo "Wildcard domain detected; switching challenge mode to DNS."
     challenge_mode="dns"
-    manual_dns=true
   fi
 
   if [[ -z "$email" ]]; then
@@ -495,19 +436,6 @@ USAGE
     fi
 
     ensure_port80_clear
-  fi
-
-  if [[ "$challenge_mode" == "dns" && "$force_new_challenge" != true && -f "$DNS_CACHE_FILE" ]]; then
-    echo ""
-    echo "Cached DNS challenge data found: $DNS_CACHE_FILE"
-    if check_cached_dns_challenges; then
-      echo "Verified: cached DNS TXT records are visible."
-      echo "Rerun with --force-new-challenge to request new certbot DNS values."
-      exit "$CHECK_ONLY_VERIFIED_EXIT_CODE"
-    fi
-    echo "Verification failed: cached DNS TXT records are not fully visible yet."
-    echo "Fix DNS TXT entries, then rerun. If you want fresh values, rerun with --force-new-challenge."
-    exit "$CHECK_ONLY_FAILED_EXIT_CODE"
   fi
 
   local certbot_args=(
