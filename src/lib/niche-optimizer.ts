@@ -1,4 +1,5 @@
 import { CLIP_NICHE_META, computeViewPrediction } from "../config/clip-niches";
+import { buildTrendingBounds, computeTrendingRankBreakdown } from "./trending-rank";
 
 export interface NicheTrendingStats {
   candidateCount: number;
@@ -27,26 +28,27 @@ export interface RankedNiche {
   maxViews: number;
   predictedMid: number;
   score: number;
+  finalProbability: number;
   candidateCount: number;
   bestPlatforms: string[];
   bestTimesUTC: string[];
 }
 
 function dominates(
-  a: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
-  b: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+  a: { avgViews: number; maxViews: number; predictedMid: number; finalProbability: number; candidateCount: number },
+  b: { avgViews: number; maxViews: number; predictedMid: number; finalProbability: number; candidateCount: number },
 ): boolean {
   const ge =
     a.avgViews >= b.avgViews &&
     a.maxViews >= b.maxViews &&
     a.predictedMid >= b.predictedMid &&
-    a.score >= b.score &&
+    a.finalProbability >= b.finalProbability &&
     a.candidateCount >= b.candidateCount;
   const gt =
     a.avgViews > b.avgViews ||
     a.maxViews > b.maxViews ||
     a.predictedMid > b.predictedMid ||
-    a.score > b.score ||
+    a.finalProbability > b.finalProbability ||
     a.candidateCount > b.candidateCount;
   return ge && gt;
 }
@@ -95,25 +97,29 @@ export function rankNichesFromTrending(
 
   if (entries.length === 0) return [];
 
-  const ceil = (arr: number[]) => Math.max(...arr, 1);
-  const maxAV = ceil(entries.map((e) => e.avgViews));
-  const maxMV = ceil(entries.map((e) => e.maxViews));
-  const maxP = ceil(entries.map((e) => e.predictedMid));
-  const maxS = ceil(entries.map((e) => e.score));
-  const maxC = ceil(entries.map((e) => e.candidateCount));
+  const bounds = buildTrendingBounds(entries.map((e) => ({
+    avgViews: e.avgViews,
+    maxViews: e.maxViews,
+    predictedMid: e.predictedMid,
+    avgScore: e.score,
+    candidateCount: e.candidateCount,
+  })));
 
   return entries
     .map((e) => {
-      const rankScore =
-        (e.avgViews / maxAV) * 30 +
-        (e.predictedMid / maxP) * 25 +
-        (e.score / maxS) * 20 +
-        (e.maxViews / maxMV) * 15 +
-        (e.candidateCount / maxC) * 10;
+      const rank = computeTrendingRankBreakdown({
+        avgViews: e.avgViews,
+        maxViews: e.maxViews,
+        predictedMid: e.predictedMid,
+        avgScore: e.score,
+        candidateCount: e.candidateCount,
+      }, bounds);
+      const rankScore = rank.raw * 100;
       const meta = CLIP_NICHE_META[e.niche]!;
       return {
         ...e,
         rankScore,
+        finalProbability: rank.probability,
         bestPlatforms: meta.bestPlatforms,
         bestTimesUTC: meta.bestTimesUTC,
       };
@@ -123,9 +129,10 @@ export function rankNichesFromTrending(
       // strict dominance must outrank dominated rows.
       if (dominates(a, b)) return -1;
       if (dominates(b, a)) return 1;
+      if (b.finalProbability !== a.finalProbability) return b.finalProbability - a.finalProbability;
       if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
-      if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
       if (b.score !== a.score) return b.score - a.score;
+      if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
       if (b.candidateCount !== a.candidateCount) return b.candidateCount - a.candidateCount;
       return b.maxViews - a.maxViews;
     });

@@ -11,6 +11,7 @@ import {
   Minus, Youtube, Facebook, Instagram,
 } from "lucide-react";
 import { formatNumber } from "@/lib/format-utils";
+import { buildTrendingBounds, computeTrendingRankBreakdown } from "@/lib/trending-rank";
 
 interface NicheTrendingStats {
   candidateCount: number;
@@ -62,6 +63,7 @@ type RankBreakdown = {
   maxViewsPart: number;
   candidatesPart: number;
   total: number;
+  probability: number;
 };
 
 const DAY_OPTIONS = [
@@ -165,20 +167,20 @@ function BestPlatformIcon({ bestPlatforms }: { bestPlatforms?: string[] }) {
 }
 
 function dominates(
-  a: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
-  b: { avgViews: number; maxViews: number; predictedMid: number; score: number; candidateCount: number },
+  a: { avgViews: number; maxViews: number; predictedMid: number; finalProbability: number; candidateCount: number },
+  b: { avgViews: number; maxViews: number; predictedMid: number; finalProbability: number; candidateCount: number },
 ): boolean {
   const ge =
     a.avgViews >= b.avgViews &&
     a.maxViews >= b.maxViews &&
     a.predictedMid >= b.predictedMid &&
-    a.score >= b.score &&
+    a.finalProbability >= b.finalProbability &&
     a.candidateCount >= b.candidateCount;
   const gt =
     a.avgViews > b.avgViews ||
     a.maxViews > b.maxViews ||
     a.predictedMid > b.predictedMid ||
-    a.score > b.score ||
+    a.finalProbability > b.finalProbability ||
     a.candidateCount > b.candidateCount;
   return ge && gt;
 }
@@ -227,39 +229,44 @@ export default function ScorecardPage() {
   const ranked = useMemo(() => {
     if (entries.length === 0) return [];
 
-    const ceil = (arr: number[]) => Math.max(...arr, 1);
-    const maxS = ceil(entries.map((e) => e.score));
-    const maxAV = ceil(entries.map((e) => e.avgViews));
-    const maxMV = ceil(entries.map((e) => e.maxViews));
-    const maxP = ceil(entries.map((e) => e.predictedMid));
-    const maxC = ceil(entries.map((e) => e.candidateCount));
+    const bounds = buildTrendingBounds(entries.map((e) => ({
+      avgViews: e.avgViews,
+      maxViews: e.maxViews,
+      predictedMid: e.predictedMid,
+      avgScore: e.score,
+      candidateCount: e.candidateCount,
+    })));
 
     return entries
       .map((e) => {
+        const b = computeTrendingRankBreakdown({
+          avgViews: e.avgViews,
+          maxViews: e.maxViews,
+          predictedMid: e.predictedMid,
+          avgScore: e.score,
+          candidateCount: e.candidateCount,
+        }, bounds);
         const breakdown: RankBreakdown = {
-          avgViewsPart: (e.avgViews / maxAV) * 30,
-          predictedPart: (e.predictedMid / maxP) * 25,
-          scorePart: (e.score / maxS) * 20,
-          maxViewsPart: (e.maxViews / maxMV) * 15,
-          candidatesPart: (e.candidateCount / maxC) * 10,
-          total: 0,
+          avgViewsPart: b.avgViewsPart,
+          predictedPart: b.predictedPart,
+          scorePart: b.scorePart,
+          maxViewsPart: b.maxViewsPart,
+          candidatesPart: b.candidatesPart,
+          total: b.raw * 100,
+          probability: b.probability,
         };
-        breakdown.total =
-          breakdown.avgViewsPart +
-          breakdown.predictedPart +
-          breakdown.scorePart +
-          breakdown.maxViewsPart +
-          breakdown.candidatesPart;
-        return { ...e, rankScore: breakdown.total, breakdown };
+        return { ...e, rankScore: breakdown.total, finalProbability: b.probability, breakdown };
       })
       .sort((a, b) => {
         // Hard guarantee: if one niche is >= across all ranking metrics,
         // it cannot appear below the dominated niche.
         if (dominates(a, b)) return -1;
         if (dominates(b, a)) return 1;
+        // Primary rank key: final probability of higher views.
+        if (b.finalProbability !== a.finalProbability) return b.finalProbability - a.finalProbability;
         if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
-        if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
         if (b.score !== a.score) return b.score - a.score;
+        if (b.avgViews !== a.avgViews) return b.avgViews - a.avgViews;
         if (b.candidateCount !== a.candidateCount) return b.candidateCount - a.candidateCount;
         return b.maxViews - a.maxViews;
       })
@@ -267,9 +274,14 @@ export default function ScorecardPage() {
   }, [entries]);
 
   const rankedMap = useMemo(() => {
-    const m = new Map<string, { rank: number; rankScore: number; breakdown: RankBreakdown }>();
+    const m = new Map<string, { rank: number; rankScore: number; finalProbability: number; breakdown: RankBreakdown }>();
     for (const r of ranked) {
-      m.set(r.key, { rank: r.rank, rankScore: r.rankScore, breakdown: r.breakdown });
+      m.set(r.key, {
+        rank: r.rank,
+        rankScore: r.rankScore,
+        finalProbability: r.finalProbability,
+        breakdown: r.breakdown,
+      });
     }
     return m;
   }, [ranked]);
@@ -282,6 +294,7 @@ export default function ScorecardPage() {
         ...e,
         rank: r?.rank ?? entries.length,
         rankScore: r?.rankScore ?? 0,
+        finalProbability: r?.finalProbability ?? 0,
         breakdown: r?.breakdown ?? {
           avgViewsPart: 0,
           predictedPart: 0,
@@ -289,6 +302,7 @@ export default function ScorecardPage() {
           maxViewsPart: 0,
           candidatesPart: 0,
           total: 0,
+          probability: 0,
         },
       };
     });
@@ -481,7 +495,7 @@ export default function ScorecardPage() {
       {/* Niche grid */}
       {filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(({ key, entry, stats, score, rank, rankScore, breakdown }) => {
+          {filtered.map(({ key, entry, stats, score, rank, rankScore, finalProbability, breakdown }) => {
             const meta = entry.meta;
             const trend = trendIndicator(entry.history);
             const TrendIcon = trend?.icon ?? Minus;
@@ -514,8 +528,9 @@ export default function ScorecardPage() {
                         <Badge
                           variant="outline"
                           className={`text-xs font-bold tabular-nums ${scoreBadgeColor(score)}`}
+                          title={`Final probability score: ${finalProbability}%`}
                         >
-                          {score > 0 ? score.toFixed(1) : "—"}
+                          {finalProbability > 0 ? `${finalProbability}%` : "—"}
                         </Badge>
                         {rankScore > 0 && (
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border ${rankBadgeColor(rank)}`}>
@@ -540,9 +555,9 @@ export default function ScorecardPage() {
                     {rankScore > 0 && (
                       <p
                         className="text-[10px] text-muted-foreground/80 leading-tight"
-                        title={`Rank score ${breakdown.total.toFixed(2)} = Views ${breakdown.avgViewsPart.toFixed(2)} + Pred ${breakdown.predictedPart.toFixed(2)} + Score ${breakdown.scorePart.toFixed(2)} + Max ${breakdown.maxViewsPart.toFixed(2)} + Cand ${breakdown.candidatesPart.toFixed(2)}`}
+                        title={`Final probability ${breakdown.probability}% (raw ${breakdown.total.toFixed(2)}): Views ${breakdown.avgViewsPart.toFixed(2)} + Pred ${breakdown.predictedPart.toFixed(2)} + Score ${breakdown.scorePart.toFixed(2)} + Max ${breakdown.maxViewsPart.toFixed(2)} + Cand ${breakdown.candidatesPart.toFixed(2)}`}
                       >
-                        Why #{rank}: V {breakdown.avgViewsPart.toFixed(1)} • P {breakdown.predictedPart.toFixed(1)} • S {breakdown.scorePart.toFixed(1)} • M {breakdown.maxViewsPart.toFixed(1)} • C {breakdown.candidatesPart.toFixed(1)}
+                        Why #{rank}: P{breakdown.probability}% • V {breakdown.avgViewsPart.toFixed(1)} • Pr {breakdown.predictedPart.toFixed(1)} • S {breakdown.scorePart.toFixed(1)} • M {breakdown.maxViewsPart.toFixed(1)} • C {breakdown.candidatesPart.toFixed(1)} (raw {score.toFixed(1)})
                       </p>
                     )}
 
