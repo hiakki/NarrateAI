@@ -80,9 +80,9 @@ const PLATFORM_ICON_MAP: Record<string, { icon: typeof Youtube; color: string; a
   instagram: { icon: Instagram, color: "text-pink-600", abbr: "IG" },
 };
 
-function scoreBadgeColor(score: number): string {
-  if (score >= 70) return "bg-green-100 text-green-800 border-green-200";
-  if (score >= 45) return "bg-yellow-100 text-yellow-800 border-yellow-200";
+function probabilityBadgeColor(probability: number): string {
+  if (probability >= 70) return "bg-green-100 text-green-800 border-green-200";
+  if (probability >= 45) return "bg-yellow-100 text-yellow-800 border-yellow-200";
   return "bg-red-100 text-red-800 border-red-200";
 }
 
@@ -527,7 +527,7 @@ export default function ScorecardPage() {
                       <div className="flex flex-col items-end gap-1 shrink-0">
                         <Badge
                           variant="outline"
-                          className={`text-xs font-bold tabular-nums ${scoreBadgeColor(score)}`}
+                          className={`text-xs font-bold tabular-nums ${probabilityBadgeColor(finalProbability)}`}
                           title={`Final probability score: ${finalProbability}%`}
                         >
                           {finalProbability > 0 ? `${finalProbability}%` : "—"}

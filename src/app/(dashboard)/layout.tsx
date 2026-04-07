@@ -43,6 +43,7 @@ const navGroups: NavGroup[] = [
     items: [
       { href: "/dashboard/create", label: "Create", icon: Sparkles },
       { href: "/dashboard/automations", label: "Video Gen", icon: Bot },
+      { href: "/dashboard/flow-tv", label: "Flow TV", icon: Film },
       { href: "/dashboard/clip-repurpose", label: "Viral Clips", icon: Scissors },
       { href: "/dashboard/characters", label: "Characters", icon: Star },
     ],
