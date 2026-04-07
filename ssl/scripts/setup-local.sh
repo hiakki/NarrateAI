@@ -157,16 +157,16 @@ obtain_production_certs() {
     20)
       echo "DNS TXT verified from cached challenge values."
       echo "If cert is still missing/expired, rerun with --force-new-challenge to request fresh certbot values."
-      exit 0
+      return 20
       ;;
     21)
       echo "Cached DNS TXT verification failed."
       echo "Fix DNS TXT records and rerun, or use --force-new-challenge for fresh certbot values."
-      exit 1
+      return 21
       ;;
     *)
       echo "Let's Encrypt helper failed with exit code: $helper_status" >&2
-      exit "$helper_status"
+      return "$helper_status"
       ;;
   esac
 
@@ -358,7 +358,33 @@ main() {
   if $USE_PRODUCTION; then
     if cert_needs_renewal; then
       echo "Existing Let's Encrypt certificate missing or expiring soon — requesting new issuance."
+      local le_status=0
+      set +e
       obtain_production_certs
+      le_status=$?
+      set -e
+
+      case "$le_status" in
+        0)
+          ;;
+        20)
+          if [[ -f "/etc/letsencrypt/live/$LE_CERT_NAME/fullchain.pem" && -f "/etc/letsencrypt/live/$LE_CERT_NAME/privkey.pem" ]]; then
+            echo "Cached DNS verified; using existing Let's Encrypt certificate files."
+          else
+            echo "Cached DNS is verified, but certificate issuance has not been completed yet." >&2
+            echo "Run again with --force-new-challenge to complete certificate issuance." >&2
+            exit 1
+          fi
+          ;;
+        21)
+          echo "Cached DNS TXT verification failed; certificate issuance not attempted." >&2
+          exit 1
+          ;;
+        *)
+          echo "Certificate issuance failed with exit code: $le_status" >&2
+          exit "$le_status"
+          ;;
+      esac
     else
       echo "Existing Let's Encrypt certificate is valid for at least $(($CERT_RENEW_THRESHOLD_SECONDS/86400)) days; skipping issuance."
     fi
