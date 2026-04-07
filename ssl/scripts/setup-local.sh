@@ -9,7 +9,8 @@ HOSTS_LINE="127.0.0.1 app.narrateai.online chat.narrateai.online"
 CERT_DIR="$ROOT/certs"
 USE_PRODUCTION=false
 LE_EMAIL=""
-LE_CERT_NAME="narrateai-online"
+LE_CERT_NAME="narrateai-online-wildcard"
+REQUIRED_PROD_DOMAINS=("narrateai.online" "*.narrateai.online")
 LE_HELPER_SCRIPT="$ROOT/scripts/issue-letsencrypt.sh"
 CERT_RENEW_THRESHOLD_SECONDS=${CERT_RENEW_THRESHOLD_SECONDS:-2592000}
 
@@ -138,6 +139,15 @@ cert_needs_renewal() {
     echo "openssl not found; assuming certificate renewal is required." >&2
     return 0
   fi
+
+  local san
+  san=$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null || true)
+  for domain in "${REQUIRED_PROD_DOMAINS[@]}"; do
+    if ! grep -q "DNS:${domain}" <<<"$san"; then
+      echo "Certificate missing required SAN ${domain}; renewal required."
+      return 0
+    fi
+  done
 
   if openssl x509 -checkend "$threshold_seconds" -noout -in "$cert" >/dev/null 2>&1; then
     return 1
