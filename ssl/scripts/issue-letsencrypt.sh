@@ -17,6 +17,8 @@ DEFAULT_CERT_NAME="narrateai-online-wildcard"
 DEFAULT_WILDCARD_DOMAINS=("narrateai.online" "*.narrateai.online")
 DEFAULT_WILDCARD_CERT_NAME="narrateai-online-wildcard"
 DNS_CACHE_FILE="${DNS_CACHE_FILE:-/tmp/narrateai-last-dns-challenge.txt}"
+CHECK_ONLY_VERIFIED_EXIT_CODE=20
+CHECK_ONLY_FAILED_EXIT_CODE=21
 
 declare -a PORT80_PIDS=()
 declare -a STOPPED_SERVICES=()
@@ -335,10 +337,19 @@ check_cached_dns_challenges() {
     [[ -n "$name" && -n "$value" ]] || continue
     local hits
     hits="$(lookup_txt_values "$name" || true)"
+    echo "  dig +short TXT $name"
+    if [[ -n "$hits" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        echo "    -> \"$line\""
+      done <<<"$hits"
+    else
+      echo "    -> <no TXT answer>"
+    fi
     if grep -Fqx "$value" <<<"$hits"; then
       echo "  ✓ $name has expected TXT value"
     else
-      echo "  ✗ $name missing expected TXT value"
+      echo "  ✗ $name missing expected TXT value: \"$value\""
       all_ok=false
     fi
   done < "$DNS_CACHE_FILE"
@@ -356,6 +367,7 @@ main() {
   local challenge_mode="http"
   local manual_dns=false
   local non_interactive=true
+  local force_new_challenge=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -374,6 +386,8 @@ main() {
         shift ;;
       --interactive)
         non_interactive=false; shift ;;
+      --force-new-challenge)
+        force_new_challenge=true; shift ;;
       --dry-run)
         DRY_RUN=true; shift ;;
       --help|-h)
@@ -387,6 +401,7 @@ Options:
   --wildcard              Use wildcard defaults: ${DEFAULT_WILDCARD_DOMAINS[*]}
   --dns-manual            Use DNS-01 manual challenge (required for wildcard)
   --interactive           Ask for y/N confirmation (default is non-interactive)
+  --force-new-challenge   Skip cache verification and create fresh DNS challenge
   --dry-run               Perform a dry-run against Let's Encrypt staging CA
   -h, --help              Show this help
 
@@ -473,29 +488,17 @@ USAGE
     ensure_port80_clear
   fi
 
-  if [[ "$challenge_mode" == "dns" && -t 0 ]]; then
-    if [[ -f "$DNS_CACHE_FILE" ]]; then
-      echo ""
-      echo "Cached DNS challenge data found: $DNS_CACHE_FILE"
-      echo "Choose an option:"
-      echo "  1) Check previous DNS TXT propagation"
-      echo "  2) Generate new DNS challenge entries now"
-      local mode_choice
-      read -rp "Enter choice [1/2] (default 2): " mode_choice || true
-      case "${mode_choice:-2}" in
-        1)
-          check_cached_dns_challenges || true
-          echo ""
-          read -rp "Continue to generate a NEW challenge anyway? [y/N] " continue_new || true
-          if [[ "${continue_new,,}" != "y" ]]; then
-            echo "Stopped after DNS check."
-            exit 0
-          fi
-          ;;
-        *)
-          ;;
-      esac
+  if [[ "$challenge_mode" == "dns" && "$force_new_challenge" != true && -f "$DNS_CACHE_FILE" ]]; then
+    echo ""
+    echo "Cached DNS challenge data found: $DNS_CACHE_FILE"
+    if check_cached_dns_challenges; then
+      echo "Verified: cached DNS TXT records are visible."
+      echo "Rerun with --force-new-challenge to request new certbot DNS values."
+      exit "$CHECK_ONLY_VERIFIED_EXIT_CODE"
     fi
+    echo "Verification failed: cached DNS TXT records are not fully visible yet."
+    echo "Fix DNS TXT entries, then rerun. If you want fresh values, rerun with --force-new-challenge."
+    exit "$CHECK_ONLY_FAILED_EXIT_CODE"
   fi
 
   local certbot_args=(
@@ -509,7 +512,7 @@ USAGE
     certbot_args+=( --nginx )
   else
     # Manual DNS challenge is interactive by design.
-    certbot_args+=( --manual --preferred-challenges dns --manual-public-ip-logging-ok )
+    certbot_args+=( --manual --preferred-challenges dns )
   fi
 
   for d in "${domains[@]}"; do

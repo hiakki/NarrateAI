@@ -13,6 +13,9 @@ LE_CERT_NAME="narrateai-online-wildcard"
 REQUIRED_PROD_DOMAINS=("narrateai.online" "*.narrateai.online")
 LE_HELPER_SCRIPT="$ROOT/scripts/issue-letsencrypt.sh"
 CERT_RENEW_THRESHOLD_SECONDS=${CERT_RENEW_THRESHOLD_SECONDS:-2592000}
+LE_DNS_MANUAL=false
+LE_INTERACTIVE=false
+LE_FORCE_NEW_CHALLENGE=false
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -23,13 +26,22 @@ parse_args() {
         USE_PRODUCTION=true; shift ;;
       --email)
         LE_EMAIL="${2:-}"; shift 2 ;;
+      --dns-manual)
+        LE_DNS_MANUAL=true; shift ;;
+      --interactive)
+        LE_INTERACTIVE=true; shift ;;
+      --force-new-challenge)
+        LE_FORCE_NEW_CHALLENGE=true; shift ;;
       --help|-h)
         cat <<'USAGE'
-Usage: ./scripts/setup-local.sh [--production] [--email you@example.com]
+Usage: ./scripts/setup-local.sh [--production] [--email you@example.com] [--dns-manual] [--interactive] [--force-new-challenge]
 
 Options:
   --production           Obtain Let's Encrypt certificates (requires DNS + public access)
   --email <address>      Email used for Let's Encrypt registration (required with --production)
+  --dns-manual           Force DNS manual challenge mode for Let's Encrypt helper
+  --interactive          Enable helper confirmation prompts
+  --force-new-challenge Skip cached DNS check and request fresh DNS challenge values
   --help                 Show this message
 
 Without --production, mkcert/self-signed certificates are generated for local development.
@@ -122,7 +134,41 @@ obtain_production_certs() {
 
   echo "==> Let's Encrypt (production certificates)"
   # Wildcard-first, DNS-provider-agnostic manual DNS challenge.
-  sudo "$LE_HELPER_SCRIPT" --wildcard --dns-manual --email "$LE_EMAIL"
+  local helper_args=( --wildcard --email "$LE_EMAIL" )
+  if $LE_DNS_MANUAL; then
+    helper_args+=( --dns-manual )
+  fi
+  if $LE_INTERACTIVE; then
+    helper_args+=( --interactive )
+  fi
+  if $LE_FORCE_NEW_CHALLENGE; then
+    helper_args+=( --force-new-challenge )
+  fi
+
+  local helper_status=0
+  set +e
+  sudo "$LE_HELPER_SCRIPT" "${helper_args[@]}"
+  helper_status=$?
+  set -e
+
+  case "$helper_status" in
+    0)
+      ;;
+    20)
+      echo "DNS TXT verified from cached challenge values."
+      echo "If cert is still missing/expired, rerun with --force-new-challenge to request fresh certbot values."
+      exit 0
+      ;;
+    21)
+      echo "Cached DNS TXT verification failed."
+      echo "Fix DNS TXT records and rerun, or use --force-new-challenge for fresh certbot values."
+      exit 1
+      ;;
+    *)
+      echo "Let's Encrypt helper failed with exit code: $helper_status" >&2
+      exit "$helper_status"
+      ;;
+  esac
 
   # Helper restarts nginx; stop it again so we can launch with this config
   stop_existing_nginx
