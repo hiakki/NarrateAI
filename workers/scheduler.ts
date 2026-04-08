@@ -52,6 +52,16 @@ function parseIntWithDefault(value: string | undefined, fallback: number): numbe
   return Number.isFinite(n) ? n : fallback;
 }
 
+function isValidHm(value: string | undefined): value is string {
+  if (!value) return false;
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
+}
+
+function hmToCron(hm: string): string {
+  const [h, m] = hm.split(":").map((n) => Number.parseInt(n, 10));
+  return `${m} ${h} * * *`;
+}
+
 const DAILY_CLIP_POSTS_PER_PLATFORM = Math.max(
   1,
   parseIntWithDefault(process.env.DAILY_CLIP_POSTS_PER_PLATFORM, 6),
@@ -65,6 +75,28 @@ const RECONCILE_FORCE_PROMOTE_MINUTES = Math.max(
   parseIntWithDefault(process.env.RECONCILE_FORCE_PROMOTE_MINUTES, 15),
 );
 const RECONCILE_FORCE_PROMOTE_MS = RECONCILE_FORCE_PROMOTE_MINUTES * 60 * 1000;
+const SCHEDULER_SAFETY_NET_EVERY_HOURS = Math.max(
+  1,
+  parseIntWithDefault(process.env.SCHEDULER_SAFETY_NET_EVERY_HOURS, 4),
+);
+const SCHEDULER_INSIGHTS_TIME = isValidHm(process.env.SCHEDULER_INSIGHTS_TIME)
+  ? process.env.SCHEDULER_INSIGHTS_TIME
+  : "02:00";
+const SCHEDULER_NICHE_PROBE_TIME = isValidHm(process.env.SCHEDULER_NICHE_PROBE_TIME)
+  ? process.env.SCHEDULER_NICHE_PROBE_TIME
+  : "03:00";
+const SCHEDULER_NICHE_RETENTION_TIME = isValidHm(process.env.SCHEDULER_NICHE_RETENTION_TIME)
+  ? process.env.SCHEDULER_NICHE_RETENTION_TIME
+  : "03:30";
+const SCHEDULER_SAFETY_NET_CRON =
+  process.env.SCHEDULER_SAFETY_NET_CRON ?? `0 */${SCHEDULER_SAFETY_NET_EVERY_HOURS} * * *`;
+const SCHEDULER_INSIGHTS_CRON =
+  process.env.SCHEDULER_INSIGHTS_CRON ?? hmToCron(SCHEDULER_INSIGHTS_TIME);
+const SCHEDULER_NICHE_PROBE_CRON =
+  process.env.SCHEDULER_NICHE_PROBE_CRON ?? hmToCron(SCHEDULER_NICHE_PROBE_TIME);
+const SCHEDULER_NICHE_RETENTION_CRON =
+  process.env.SCHEDULER_NICHE_RETENTION_CRON ?? hmToCron(SCHEDULER_NICHE_RETENTION_TIME);
+const CLIP_POST_TIME_FALLBACK = process.env.CLIP_POST_TIME_FALLBACK ?? "07:00";
 
 const STUCK_GENERATING_MS = 15 * 60 * 1000; // 15 min
 const STUCK_QUEUED_MS = 30 * 60 * 1000;     // 30 min
@@ -1683,23 +1715,25 @@ cron.schedule(`${catchUpMin} ${catchUpH} * * *`, () => {
 });
 
 // Safety net: recover stuck generation jobs only (every 4h)
-cron.schedule("0 */4 * * *", () => {
+cron.schedule(SCHEDULER_SAFETY_NET_CRON, () => {
   debug("safetyNet: running recovery");
   sfl.action(`CRON: safetyNet triggered (every 4h)`);
   safetyNet();
 });
 
 // Run insights refresh once per day at 02:00 (server TZ)
-cron.schedule("0 2 * * *", () => {
+cron.schedule(SCHEDULER_INSIGHTS_CRON, () => {
   log("Running daily insights refresh...");
   sfl.action(`CRON: daily insights refresh triggered`);
   refreshInsightsDaily();
 });
 
-// Probe niche trending data at 03:00, then optimize clip automations from scorecard
-cron.schedule("0 3 * * *", async () => {
+// Probe niche trending data at 03:00 only.
+// Activation/deactivation is applied in the BUILD_ALL_TIME pipeline so that
+// activation and enqueue/build happen in the same run window.
+cron.schedule(SCHEDULER_NICHE_PROBE_CRON, async () => {
   log("Running daily niche trending probe...");
-  sfl.action(`CRON: daily niche probe + optimize triggered`);
+  sfl.action(`CRON: daily niche probe triggered`);
   try {
     await probeAllNicheTrends(db);
     sfl.action(`Niche trending probe completed`);
@@ -1707,12 +1741,10 @@ cron.schedule("0 3 * * *", async () => {
     err("probeAllNicheTrends error:", e);
     sfl.error(`probeAllNicheTrends: ${e instanceof Error ? e.message : String(e)}`);
   }
-  log("Optimizing clip automations from today's scorecard...");
-  await optimizeClipAutomations();
 });
 
 // Purge NicheTrending records older than 30 days (runs daily at 03:30)
-cron.schedule("30 3 * * *", async () => {
+cron.schedule(SCHEDULER_NICHE_RETENTION_CRON, async () => {
   try {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
@@ -1927,7 +1959,7 @@ async function optimizeClipAutomations() {
       }
       if (!auto.enabled && isSelected) {
         activatedCount++;
-        const chosen = schedule.get(clipNiche) ?? selectedByNiche.get(clipNiche)?.bestTimesUTC[0] ?? "07:00";
+        const chosen = schedule.get(clipNiche) ?? selectedByNiche.get(clipNiche)?.bestTimesUTC[0] ?? CLIP_POST_TIME_FALLBACK;
         await db.schedulerLog.create({
           data: {
             automationId: auto.id,
