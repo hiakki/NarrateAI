@@ -53,3 +53,13 @@ Next.js 14+ App Router, TypeScript, Tailwind CSS, Prisma, BullMQ.
 - PLAN.md — project plan, DB schema, API endpoints
 - ARCHITECTURE.md — system design, pipeline flow
 - TECH_STACK.md — technology decisions
+
+## Web App Testing Workflow (MANDATORY)
+When testing any web app (browser-based verification, UI checks, end-to-end runs):
+1. Always test in a NEW browser tab. List existing tabs first and CLOSE older tabs opened
+   in prior test runs before opening the new one.
+2. Bring the newly opened tab to the FRONT (focus/activate it) so the user can observe it live.
+3. Kill the previous dev/build server process (by pid from the terminal file), wait for the
+   port to free, then restart the server fresh. Never assume an old server is still healthy.
+4. Bring the server LOG terminal to the front after starting, so the user can read live output.
+Apply this workflow every time without being reminded.

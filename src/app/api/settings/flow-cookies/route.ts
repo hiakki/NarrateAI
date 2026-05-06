@@ -85,8 +85,11 @@ export async function GET() {
   let exists = false;
   let cookieCount = 0;
   let earliestExpiry: string | null = null;
+  let fileMtime: string | null = null;
 
   try {
+    const stat = await fs.stat(cookiePath);
+    fileMtime = stat.mtime.toISOString();
     const raw = await fs.readFile(cookiePath, "utf-8");
     const cookies = JSON.parse(raw) as BrowserCookie[];
     exists = Array.isArray(cookies) && cookies.length > 0;
@@ -102,11 +105,15 @@ export async function GET() {
   }
 
   const meta = await readMeta();
+  // Prefer the meta record (set by both the manual upload and the auto
+  // extract paths), but fall back to the cookie file's mtime so cookies
+  // saved before meta-tracking still surface a "saved <ago>" timestamp.
+  const savedAt = meta.savedAt ?? fileMtime ?? null;
   return NextResponse.json({
     data: {
       exists,
       cookieCount,
-      savedAt: meta.savedAt ?? null,
+      savedAt,
       earliestExpiry,
       envConfigured: !!process.env.FLOW_TV_COOKIES_FILE,
     },

@@ -407,6 +407,119 @@ export async function enqueueReconcileCheck(
 
 export { MAX_RECONCILE_ATTEMPTS, RECONCILE_INTERVAL_MS };
 
+// ---------------------------------------------------------------------------
+// Flow TV run queue — concurrency=1 so the browser is never shared between
+// runs/refreshes. Job kinds:
+//
+//   "advance"        — run the next non-gated stages of a Flow TV run
+//   "refresh-image"  — regenerate one Phase-1 asset (character or scene)
+//   "refresh-clip"   — regenerate one Phase-2 clip
+//
+// All kinds share the same queue + worker so they serialize naturally.
+// ---------------------------------------------------------------------------
+
+export interface FlowTvAdvanceJobData {
+  kind: "advance";
+  runId: string;
+}
+
+export interface FlowTvRefreshImageJobData {
+  kind: "refresh-image";
+  runId: string;
+  assetKind: "character" | "image";
+  index: number;
+}
+
+export interface FlowTvRefreshClipJobData {
+  kind: "refresh-clip";
+  runId: string;
+  index: number;
+}
+
+export type FlowTvJobData =
+  | FlowTvAdvanceJobData
+  | FlowTvRefreshImageJobData
+  | FlowTvRefreshClipJobData;
+
+let flowTvQueueInstance: Queue<FlowTvJobData> | null = null;
+
+function getFlowTvQueue(): Queue<FlowTvJobData> {
+  if (!flowTvQueueInstance) {
+    flowTvQueueInstance = new Queue<FlowTvJobData>("flow-tv-run", {
+      connection: createRedisConnection() as never,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
+      },
+    });
+  }
+  return flowTvQueueInstance;
+}
+
+export function getFlowTvRunQueue(): Queue<FlowTvJobData> {
+  return getFlowTvQueue();
+}
+
+/**
+ * Enqueue a Flow TV run-machine advance. If `runId` already has an `advance`
+ * job in the queue, returns the existing job id (idempotent — repeated
+ * enqueues from the API don't double-process).
+ */
+export async function enqueueFlowTvAdvance(runId: string): Promise<string> {
+  const queue = getFlowTvQueue();
+  const jobId = `advance-${runId}`;
+  try {
+    const existing = await queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === "waiting" || state === "delayed" || state === "active") {
+        log.log(`Flow TV advance ${runId} already ${state}, reusing`);
+        return existing.id ?? jobId;
+      }
+      if (state === "completed" || state === "failed" || state === "unknown") {
+        await existing.remove();
+      }
+    }
+  } catch (e) {
+    log.warn(`Could not check existing flow-tv advance ${runId}:`, e);
+  }
+  const job = await queue.add("advance", { kind: "advance", runId }, { jobId });
+  log.log(`Flow TV advance enqueued: ${jobId}`);
+  return job.id ?? jobId;
+}
+
+export async function enqueueFlowTvRefreshImage(opts: {
+  runId: string;
+  assetKind: "character" | "image";
+  index: number;
+}): Promise<string> {
+  const queue = getFlowTvQueue();
+  const jobId = `refresh-image-${opts.runId}-${opts.assetKind}-${opts.index}-${Date.now()}`;
+  const job = await queue.add(
+    "refresh-image",
+    { kind: "refresh-image", ...opts },
+    { jobId },
+  );
+  log.log(`Flow TV refresh-image enqueued: ${jobId}`);
+  return job.id ?? jobId;
+}
+
+export async function enqueueFlowTvRefreshClip(opts: {
+  runId: string;
+  index: number;
+}): Promise<string> {
+  const queue = getFlowTvQueue();
+  const jobId = `refresh-clip-${opts.runId}-${opts.index}-${Date.now()}`;
+  const job = await queue.add(
+    "refresh-clip",
+    { kind: "refresh-clip", ...opts },
+    { jobId },
+  );
+  log.log(`Flow TV refresh-clip enqueued: ${jobId}`);
+  return job.id ?? jobId;
+}
+
 export async function enqueueScheduledPost(
   videoId: string,
   scheduledPostTime: Date | null,

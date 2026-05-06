@@ -433,6 +433,40 @@ async function processAutomation(
   // ── Route by automationType BEFORE retry logic to avoid cross-pipeline retries ──
   const autoType = auto.automationType ?? "original";
 
+  if (autoType === "flow-tv") {
+    // Flow TV automations are driven by the run-machine. The scheduler's
+    // job is to spawn a fully-automated run (no approval gates) and let
+    // the dedicated worker carry it through to a finalised Video row.
+    try {
+      const { createRun } = await import("../src/services/flow-tv-run");
+      const { enqueueFlowTvAdvance } = await import("../src/services/queue");
+      const newRun = await createRun({
+        userId: auto.user.id,
+        niche: auto.niche,
+        approvalMode: "auto",
+        triggerSource: `scheduler:${trigger}`,
+      });
+      await enqueueFlowTvAdvance(newRun.id);
+      log(`[ENQUEUE]`, `Queued flow-tv run ${newRun.id}`);
+      fl.scheduler(`ENQUEUE: flow-tv run=${newRun.id}`);
+      await writeSchedulerLog(
+        auto.id,
+        "enqueued",
+        `[${SCHEDULER_REASON_CODES.ENQUEUED}] [trigger=${trigger}] Ran (${triggerText}): ${runReason}. Queued flow-tv run=${newRun.id} (auto mode)`,
+        { durationMs: Date.now() - runStart },
+      );
+    } catch (qErr: unknown) {
+      const errMsg = qErr instanceof Error ? qErr.message : String(qErr);
+      err(`[ERR]`, `Failed to enqueue flow-tv for "${auto.name}":`, qErr);
+      fl.scheduler(`ERROR: Failed to enqueue flow-tv — ${errMsg.slice(0, 500)}`);
+      await writeSchedulerLog(auto.id, "error", `Failed to enqueue flow-tv: ${errMsg.slice(0, 200)}`, {
+        errorDetail: qErr instanceof Error ? qErr.stack : errMsg,
+        durationMs: Date.now() - runStart,
+      });
+    }
+    return;
+  }
+
   if (autoType === "clip-repurpose") {
     const clipConfig = (auto.clipConfig as Record<string, unknown>) ?? {};
     const scheduledPostTime = computeAndGuardPostTime(auto.postTime, auto.timezone);

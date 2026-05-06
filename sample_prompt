@@ -1,0 +1,9 @@
+DEPRECATED — Flow TV's storyline prompt now lives in code at:
+
+  src/services/flow-tv-prompts.ts  (buildStorylinePrompt)
+
+Five niche-specific templates (zero-to-hero, funny, moral, horror,
+mythological) are composed at runtime from the run's options
+(language, character style, aspect ratio, dialogue/BGM/SFX toggles).
+
+This file is retained for reference only; runtime no longer reads it.
