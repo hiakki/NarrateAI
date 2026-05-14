@@ -31,12 +31,26 @@ import {
   Sparkles,
   AlertTriangle,
 } from "lucide-react";
+import { FlowTvSchedulesCard } from "./_components/schedules-card";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
+interface SceneDialogue {
+  speaker: string;
+  lineHi: string;
+  lineRoman: string;
+}
+interface SupportingCharacter {
+  role: string;
+  name: string;
+  description: string;
+}
 interface ImagePrompt {
   title: string;
   prompt: string;
+  /** New multi-speaker shape (preferred). */
+  dialogues?: SceneDialogue[];
+  /** Legacy single-speaker line — still populated by phase1 for backward compat. */
   dialogueHi?: string;
   dialogueRoman?: string;
   bgmCue?: string;
@@ -47,17 +61,19 @@ interface Storyline {
   logline: string;
   protagonist?: string;
   characterPrompt: string;
+  /** Optional non-protagonist characters that recur in dialogue. */
+  supportingCast?: SupportingCharacter[];
   imagePrompts: ImagePrompt[];
   imageCount: number;
   niche?: string;
   language?: "hindi" | "english";
-  characterStyle?: "cartoon_3d" | "photoreal";
+  characterStyle?: "cartoon_3d" | "hyperreal_3d" | "photoreal";
   aspectRatio?: "9:16" | "16:9";
 }
 
 type FlowLanguage = "hindi" | "english";
 type FlowNiche = "zero-to-hero" | "funny" | "moral" | "horror" | "mythological";
-type FlowCharacterStyle = "cartoon_3d" | "photoreal";
+type FlowCharacterStyle = "cartoon_3d" | "hyperreal_3d" | "photoreal";
 type FlowAspectRatio = "9:16" | "16:9";
 type FlowStorylineSource = "api" | "web";
 interface RunEvent {
@@ -113,8 +129,20 @@ interface FlowRun {
   sfx?: boolean;
   subtitles?: boolean;
   useRecurringCharacter?: boolean;
+  reuseCharacterId?: string;
   adoptedFromRunId?: string;
   storylineSource?: FlowStorylineSource;
+}
+
+interface FlowTvCharacter {
+  id: string;
+  name: string;
+  niche: string | null;
+  language: string | null;
+  characterStyle: string | null;
+  previewUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const NICHE_LABELS: Record<FlowNiche, string> = {
@@ -127,7 +155,8 @@ const NICHE_LABELS: Record<FlowNiche, string> = {
 
 const CHARACTER_STYLE_LABELS: Record<FlowCharacterStyle, string> = {
   cartoon_3d: "Cartoon 3D (Pixar-like)",
-  photoreal: "Photoreal",
+  hyperreal_3d: "Hyperreal 3D — anthro hybrid (BandarApnaDost-like)",
+  photoreal: "Photoreal (live-action look)",
 };
 
 const APPROVAL_MODES: Array<{
@@ -221,7 +250,7 @@ export default function FlowTvPage() {
   const [language, setLanguage] = useState<FlowLanguage>("hindi");
   const [niche, setNiche] = useState<FlowNiche>("funny");
   const [characterStyle, setCharacterStyle] =
-    useState<FlowCharacterStyle>("cartoon_3d");
+    useState<FlowCharacterStyle>("hyperreal_3d");
   const [aspectRatio, setAspectRatio] = useState<FlowAspectRatio>("9:16");
   const [dialogue, setDialogue] = useState(true);
   const [bgm, setBgm] = useState(true);
@@ -236,15 +265,39 @@ export default function FlowTvPage() {
   const [deletingAll, setDeletingAll] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
+  // Character library — thumbnails of prior Flow TV characters the user can
+  // re-pick instead of generating a fresh one.
+  const [characters, setCharacters] = useState<FlowTvCharacter[]>([]);
+  const [reuseCharacterId, setReuseCharacterId] = useState<string | null>(null);
+  const [charactersLoading, setCharactersLoading] = useState(false);
+
+  async function refreshCharacters(): Promise<void> {
+    try {
+      setCharactersLoading(true);
+      const res = await fetch("/api/dashboard/flow-tv/characters");
+      if (!res.ok) return;
+      const j = (await res.json()) as { data?: FlowTvCharacter[] };
+      setCharacters(j.data ?? []);
+    } catch {
+      // best-effort
+    } finally {
+      setCharactersLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshCharacters();
+  }, []);
+
   function applyBandarApnaDostPreset() {
     setLanguage("hindi");
     setNiche("funny");
-    setCharacterStyle("cartoon_3d");
+    setCharacterStyle("hyperreal_3d");
     setAspectRatio("9:16");
     setDialogue(true);
     setBgm(true);
     setSfx(true);
-    setSubtitles(true);
+    setSubtitles(false);
     setImageCount(5);
   }
 
@@ -402,6 +455,7 @@ export default function FlowTvPage() {
           sfx,
           subtitles,
           useRecurringCharacter,
+          reuseCharacterId: reuseCharacterId ?? undefined,
           storylineSource,
         }),
       });
@@ -505,6 +559,9 @@ export default function FlowTvPage() {
           gates for human-in-the-loop control.
         </p>
       </div>
+
+      {/* Daily schedules (multi-slot) */}
+      <FlowTvSchedulesCard />
 
       {/* Login */}
       <Card
@@ -829,6 +886,94 @@ export default function FlowTvPage() {
               </div>
             </div>
 
+            {/* Reuse-a-character picker */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs uppercase">
+                  Reuse a character (optional)
+                </Label>
+                <div className="flex items-center gap-2 text-xs">
+                  {reuseCharacterId ? (
+                    <button
+                      type="button"
+                      onClick={() => setReuseCharacterId(null)}
+                      className="text-muted-foreground underline-offset-2 hover:underline"
+                    >
+                      Clear selection
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void refreshCharacters()}
+                    disabled={charactersLoading}
+                    className="text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50"
+                  >
+                    {charactersLoading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </div>
+              </div>
+              {characters.length === 0 ? (
+                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  No saved characters yet. Run any Flow TV story; once the
+                  character image is generated, it will be saved here for
+                  reuse.
+                </div>
+              ) : (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {characters.map((c) => {
+                    const selected = reuseCharacterId === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() =>
+                          setReuseCharacterId(selected ? null : c.id)
+                        }
+                        className={`relative flex flex-col items-stretch gap-1 rounded-md border p-1 text-left text-[11px] shrink-0 w-24 transition ${
+                          selected
+                            ? "border-primary bg-primary/5 ring-2 ring-primary/40"
+                            : "border-border hover:bg-muted/40"
+                        }`}
+                        title={c.name}
+                      >
+                        <div className="aspect-[9/16] w-full overflow-hidden rounded-sm bg-muted">
+                          {c.previewUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={c.previewUrl}
+                              alt={c.name}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                              ?
+                            </div>
+                          )}
+                        </div>
+                        <div className="line-clamp-2 px-0.5 leading-tight">
+                          {c.name}
+                        </div>
+                        {(c.niche || c.characterStyle) && (
+                          <div className="px-0.5 text-[10px] text-muted-foreground line-clamp-1">
+                            {[c.niche, c.characterStyle]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {reuseCharacterId ? (
+                <p className="text-xs text-muted-foreground">
+                  This run will skip character generation and reuse the
+                  selected character (image + prompt). Storyline scenes still
+                  generate fresh.
+                </p>
+              ) : null}
+            </div>
+
             {/* Audio + caption toggles */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 pt-1">
               {(
@@ -986,7 +1131,16 @@ export default function FlowTvPage() {
                               {r.niche ?? "niche?"}
                               {r.language ? ` / ${r.language}` : ""}
                               {r.aspectRatio ? ` / ${r.aspectRatio}` : ""}
-                              {r.characterStyle === "cartoon_3d" ? " / cartoon" : ""}
+                              {r.characterStyle === "cartoon_3d"
+                                ? " / cartoon"
+                                : r.characterStyle === "hyperreal_3d"
+                                  ? " / hyperreal"
+                                  : r.characterStyle === "photoreal"
+                                    ? " / photoreal"
+                                    : ""}
+                              {r.reuseCharacterId
+                                ? ` / reused char ${r.reuseCharacterId.slice(0, 6)}…`
+                                : ""}
                             </span>
                           </>
                         ) : null}
@@ -1183,11 +1337,53 @@ function ActiveRunCard({
                 </span>
                 {run.storyline.characterPrompt}
               </div>
+              {run.storyline.supportingCast &&
+              run.storyline.supportingCast.length > 0 ? (
+                <div className="mt-1">
+                  <span className="font-mono uppercase text-muted-foreground">
+                    Supporting cast:{" "}
+                  </span>
+                  <ul className="list-disc pl-5 mt-0.5 space-y-0.5">
+                    {run.storyline.supportingCast.map((c, idx) => (
+                      <li key={idx}>
+                        <span className="font-mono">{c.name}</span>
+                        <span className="opacity-70">
+                          {" "}
+                          ({c.role})
+                        </span>{" "}
+                        — {c.description}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <ol className="list-decimal pl-5 mt-1 space-y-1">
                 {run.storyline.imagePrompts.map((p, i) => (
                   <li key={i}>
                     <span className="font-mono">{p.title}</span> — {p.prompt}
-                    {p.dialogueHi || p.dialogueRoman ? (
+                    {p.dialogues && p.dialogues.length > 0 ? (
+                      <div className="text-muted-foreground/80 ml-1 mt-0.5 space-y-0.5">
+                        <span className="font-mono uppercase text-[10px]">
+                          dialogue:
+                        </span>
+                        <ul className="list-none ml-0">
+                          {p.dialogues.map((d, di) => (
+                            <li key={di} className="leading-snug">
+                              <span className="font-mono opacity-80">
+                                {d.speaker}:
+                              </span>{" "}
+                              {d.lineHi}
+                              {d.lineRoman && d.lineRoman !== d.lineHi ? (
+                                <span className="opacity-70">
+                                  {" "}
+                                  · {d.lineRoman}
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : p.dialogueHi || p.dialogueRoman ? (
                       <div className="text-muted-foreground/80 ml-1 mt-0.5">
                         <span className="font-mono uppercase text-[10px]">
                           dialogue:{" "}

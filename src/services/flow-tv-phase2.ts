@@ -1198,13 +1198,42 @@ function buildTransitionPrompt(
   const startScene = storyline.imagePrompts[endIndex - 1];
 
   if (runOpts?.dialogue) {
-    const hi =
-      (endScene?.dialogueHi ?? startScene?.dialogueHi ?? "").trim();
-    if (hi) {
-      const langLabel = runOpts.language === "hindi" ? "Hindi" : "English";
+    const langLabel = runOpts.language === "hindi" ? "Hindi" : "English";
+    // Prefer the new multi-speaker `dialogues[]` shape when present; fall back
+    // to the legacy single-line `dialogueHi` field.
+    const multi = (endScene?.dialogues ?? startScene?.dialogues) ?? [];
+    if (multi.length > 0) {
+      // Resolve speaker labels: "main" → main character; otherwise look up the
+      // role in supportingCast so Veo gets a hint about who's talking.
+      const cast = storyline.supportingCast ?? [];
+      const speakerLabel = (speaker: string): string => {
+        const tag = (speaker ?? "").trim().toLowerCase();
+        if (!tag || tag === "main" || tag === "protagonist") {
+          return "Main character";
+        }
+        const found = cast.find(
+          (c) =>
+            c.role.toLowerCase() === tag ||
+            c.name.toLowerCase() === tag,
+        );
+        if (found) return found.name || found.role;
+        return speaker;
+      };
+
+      const formatted = multi
+        .map((d) => `${speakerLabel(d.speaker)} says: "${d.lineHi}"`)
+        .join(" Then, ");
       lines.push(
-        `Character speaks (lip-synced, ${langLabel}): "${hi}". Keep mouth movements natural and subtle.`,
+        `Conversational exchange (lip-synced, ${langLabel}): ${formatted}. Cut/cross-cut between speakers as needed; keep mouth movements natural and subtle for each speaker.`,
       );
+    } else {
+      const hi =
+        (endScene?.dialogueHi ?? startScene?.dialogueHi ?? "").trim();
+      if (hi) {
+        lines.push(
+          `Character speaks (lip-synced, ${langLabel}): "${hi}". Keep mouth movements natural and subtle.`,
+        );
+      }
     }
   }
   if (runOpts?.bgm) {

@@ -32,7 +32,12 @@ import {
   extractAssetIdFromUrl,
   type GalleryAssetEntry,
 } from "@/services/flow-tv-gallery";
-import { buildStorylinePrompt, type StorylineBuildOpts } from "@/services/flow-tv-prompts";
+import {
+  buildStorylinePrompt,
+  classifyProtagonist,
+  type StorylineBuildOpts,
+} from "@/services/flow-tv-prompts";
+import type { FlowNiche } from "@/services/flow-tv-run";
 
 const log = createLogger("FlowTV:Phase1");
 const execFileAsync = promisify(execFile);
@@ -129,12 +134,55 @@ export interface Phase1Progress {
   error?: string;
 }
 
+/**
+ * One spoken line in a scene. Supports multi-character conversations: a scene
+ * can have 1–4 of these, each tagged with the speaker's role.
+ */
+export interface SceneDialogue {
+  /**
+   * Who speaks. Use "main" for the protagonist (the consistent character),
+   * or the supporting character's `role` (matched against
+   * `Storyline.supportingCast[].role`). Free-form description allowed if
+   * the speaker is a one-off bystander (e.g. "passing chai-walla").
+   */
+  speaker: string;
+  /** Devanagari / scripted line (or English when language=english). */
+  lineHi: string;
+  /** Latin-script transliteration of lineHi (for subtitle burn-in). */
+  lineRoman: string;
+}
+
+/**
+ * A non-protagonist character that may appear in one or more scenes.
+ * Supporting cast are NOT visually consistent across scenes (they don't
+ * have their own reference image) — Gemini describes them inline in each
+ * scene's prompt and Veo renders them per-frame.
+ */
+export interface SupportingCharacter {
+  /** Short stable role label, kebab-case if possible (e.g. "wife", "rival-boss", "dadi"). */
+  role: string;
+  /** Human-readable display name shown in UI/logs (e.g. "Wife — Geeta"). */
+  name: string;
+  /**
+   * 30–60 word description: appearance, wardrobe, age band, vibe. Used by
+   * Gemini when expanding scene prompts and by humans inspecting cache.
+   * Not used to generate a separate reference image.
+   */
+  description: string;
+}
+
 export interface ImagePromptEntry {
   title: string;
   prompt: string;
-  /** Devanagari (or English when language=english) line the character speaks. */
+  /**
+   * Multi-speaker dialogues for this scene. Preferred new shape; if absent,
+   * downstream code falls back to `dialogueHi`/`dialogueRoman` (legacy
+   * single-speaker shape). Order matters — Veo bakes them in sequence.
+   */
+  dialogues?: SceneDialogue[];
+  /** LEGACY: single-speaker line (auto-derived from dialogues[0] if absent). */
   dialogueHi?: string;
-  /** Latin-script transliteration of dialogueHi for subtitle burn-in. */
+  /** LEGACY: Latin-script line (auto-derived from dialogues[0] if absent). */
   dialogueRoman?: string;
   /** Background music cue for this scene (Phase 2 appends to Veo prompt). */
   bgmCue?: string;
@@ -147,13 +195,19 @@ export interface Storyline {
   logline: string;
   protagonist: string;
   characterPrompt: string;
+  /**
+   * Optional non-protagonist characters that recur in dialogue. The MAIN
+   * character (described by `protagonist` + `characterPrompt`) is the only
+   * visually consistent character — supporting cast are scene-local.
+   */
+  supportingCast?: SupportingCharacter[];
   imagePrompts: ImagePromptEntry[];
   generatedAt: number;
   imageCount: number;
   /** Creative options frozen with the storyline (so cache hits stay coherent). */
   niche?: string;
   language?: "hindi" | "english";
-  characterStyle?: "cartoon_3d" | "photoreal";
+  characterStyle?: "cartoon_3d" | "hyperreal_3d" | "photoreal";
   aspectRatio?: "9:16" | "16:9";
   dialogue?: boolean;
   bgm?: boolean;
@@ -210,6 +264,83 @@ export async function saveStorylineCache(
 ): Promise<void> {
   await fs.mkdir(STORYLINES_DIR, { recursive: true });
   await fs.writeFile(storylineFileFor(storySlug), JSON.stringify(storyline, null, 2), "utf-8");
+}
+
+/**
+ * Scan the storyline cache directory and return the most recent N stories
+ * that match `niche`. Used to feed `avoidTitles` and `avoidArchetypes` to
+ * the Gemini prompt so consecutive generations don't keep landing on the
+ * same protagonist (e.g. always "uncle vs gadget").
+ */
+export async function loadRecentStorylinesForNiche(
+  niche: FlowNiche,
+  limit = 6,
+): Promise<Storyline[]> {
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(STORYLINES_DIR);
+  } catch {
+    return [];
+  }
+  const items: Array<{ s: Storyline; mtime: number }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const full = path.join(STORYLINES_DIR, name);
+    try {
+      const stat = await fs.stat(full);
+      const raw = await fs.readFile(full, "utf-8");
+      const s = JSON.parse(raw) as Storyline;
+      if ((s.niche ?? "zero-to-hero") !== niche) continue;
+      if (!s.title || !s.protagonist) continue;
+      items.push({ s, mtime: stat.mtimeMs });
+    } catch {
+      // skip corrupt files
+    }
+  }
+  items.sort((a, b) => b.mtime - a.mtime);
+  return items.slice(0, limit).map((x) => x.s);
+}
+
+/**
+ * Build avoid-title + avoid-archetype hints by scanning the most recent
+ * cached storylines for `niche`. Returns empty arrays if no prior stories
+ * exist for the niche. Designed to be sprinkled into any `StorylineGenOptions`
+ * before calling Gemini (API or Web).
+ */
+export async function buildVarietyHintsForNiche(
+  niche: FlowNiche,
+  limit = 6,
+): Promise<{
+  avoidTitles: string[];
+  avoidArchetypes: string[];
+  bannedCategories: string[];
+}> {
+  try {
+    const recent = await loadRecentStorylinesForNiche(niche, limit);
+    const protagonists = recent
+      .map((s) => s.protagonist?.trim())
+      .filter((p): p is string => Boolean(p && p.length > 0));
+    const characterPrompts = recent
+      .map((s) => s.characterPrompt?.trim())
+      .filter((p): p is string => Boolean(p && p.length > 0));
+
+    // Classify both protagonist sentences AND the longer characterPrompt so
+    // we catch categories reliably even when the `protagonist` field is
+    // terse. Dedupe across sources.
+    const cats = new Set<string>();
+    for (const text of [...protagonists, ...characterPrompts]) {
+      const c = classifyProtagonist(text);
+      if (c) cats.add(c);
+    }
+
+    return {
+      avoidTitles: recent.map((s) => s.title).filter(Boolean),
+      avoidArchetypes: protagonists,
+      bannedCategories: Array.from(cats),
+    };
+  } catch {
+    return { avoidTitles: [], avoidArchetypes: [], bannedCategories: [] };
+  }
 }
 
 export type StorylineGenOptions = StorylineBuildOpts;
@@ -332,14 +463,41 @@ export async function generateStorylineWithGemini(
     logline: String(parsed.logline ?? ""),
     protagonist: String(parsed.protagonist ?? ""),
     characterPrompt: String(parsed.characterPrompt).trim(),
+    supportingCast: normalizeSupportingCast(
+      (parsed as { supportingCast?: unknown }).supportingCast,
+    ),
     imagePrompts: parsed.imagePrompts.map((p, i) => {
       const e: ImagePromptEntry = {
         title: sanitizeFilename(String(p.title ?? `scene-${i + 1}`)),
         prompt: String(p.prompt ?? "").trim(),
       };
       if (opts.dialogue) {
-        e.dialogueHi = String(p.dialogueHi ?? "").trim();
-        e.dialogueRoman = String(p.dialogueRoman ?? "").trim();
+        const dlg = normalizeSceneDialogues(
+          (p as { dialogues?: unknown }).dialogues,
+        );
+        if (dlg.length > 0) {
+          e.dialogues = dlg;
+          // Keep legacy single-line fields populated from the first item so
+          // older code paths (Phase 2 fallback, subtitles fallback) keep
+          // working even on a multi-speaker scene.
+          e.dialogueHi = dlg[0].lineHi;
+          e.dialogueRoman = dlg[0].lineRoman;
+        } else {
+          // Gemini emitted only the legacy fields — keep them.
+          e.dialogueHi = String(p.dialogueHi ?? "").trim();
+          e.dialogueRoman = String(p.dialogueRoman ?? "").trim();
+          // Mirror legacy line into the new shape so all downstream code
+          // can treat `dialogues` as the single source of truth.
+          if (e.dialogueHi || e.dialogueRoman) {
+            e.dialogues = [
+              {
+                speaker: "main",
+                lineHi: e.dialogueHi ?? "",
+                lineRoman: e.dialogueRoman ?? e.dialogueHi ?? "",
+              },
+            ];
+          }
+        }
       }
       if (opts.bgm) {
         e.bgmCue = String(p.bgmCue ?? "").trim();
@@ -359,6 +517,72 @@ export async function generateStorylineWithGemini(
   };
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+//  Storyline shape normalizers (multi-character + multi-speaker dialogues)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Coerce Gemini's `supportingCast` field into the canonical
+ * `SupportingCharacter[]` shape, dropping malformed entries.
+ *
+ * Tolerated synonyms:
+ *   - `cast`, `characters`, `supportingCharacters` (top-level alias)
+ *   - per-entry: `name`/`role`/`description` already canonical;
+ *     also accepts `display`, `displayName`, `desc`, `details`, `appearance`.
+ */
+function normalizeSupportingCast(raw: unknown): SupportingCharacter[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: SupportingCharacter[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const role = String(o.role ?? o.tag ?? o.type ?? "").trim();
+    const name = String(o.name ?? o.display ?? o.displayName ?? role).trim();
+    const description = String(
+      o.description ?? o.desc ?? o.details ?? o.appearance ?? "",
+    ).trim();
+    if (!role || !description) continue;
+    out.push({
+      role: role.slice(0, 60),
+      name: (name || role).slice(0, 80),
+      description: description.slice(0, 600),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Coerce Gemini's `dialogues` field into the canonical `SceneDialogue[]`
+ * shape, dropping malformed entries.
+ *
+ * Tolerated synonyms:
+ *   - per-entry: `speaker`/`lineHi`/`lineRoman` already canonical;
+ *     also accepts `who`, `role`, `text`, `hindi`, `lineHindi`,
+ *     `roman`, `transliteration`, `english`, `lineEnglish`.
+ */
+function normalizeSceneDialogues(raw: unknown): SceneDialogue[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out: SceneDialogue[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const speaker = String(o.speaker ?? o.who ?? o.role ?? "main").trim() || "main";
+    const lineHi = String(
+      o.lineHi ?? o.hindi ?? o.lineHindi ?? o.text ?? o.line ?? "",
+    ).trim();
+    const lineRoman = String(
+      o.lineRoman ?? o.roman ?? o.transliteration ?? o.english ?? o.lineEnglish ?? lineHi,
+    ).trim();
+    if (!lineHi && !lineRoman) continue;
+    out.push({
+      speaker: speaker.slice(0, 50),
+      lineHi: (lineHi || lineRoman).slice(0, 240),
+      lineRoman: (lineRoman || lineHi).slice(0, 240),
+    });
+  }
+  return out;
+}
+
 /**
  * Get a cached storyline for `storySlug` or generate a fresh one. The slug
  * isolates each Flow TV video's storyline file (no cross-talk between runs).
@@ -372,9 +596,10 @@ export async function getOrGenerateStoryline(
   imageCount: number,
   opts?: Partial<StorylineGenOptions>,
 ): Promise<Storyline> {
+  const niche = opts?.niche ?? "zero-to-hero";
   const fullOpts: StorylineGenOptions = {
     imageCount,
-    niche: opts?.niche ?? "zero-to-hero",
+    niche,
     language: opts?.language ?? "english",
     characterStyle: opts?.characterStyle ?? "photoreal",
     aspectRatio: opts?.aspectRatio ?? "16:9",
@@ -382,6 +607,7 @@ export async function getOrGenerateStoryline(
     bgm: opts?.bgm ?? false,
     sfx: opts?.sfx ?? false,
     avoidTitles: opts?.avoidTitles,
+    avoidArchetypes: opts?.avoidArchetypes,
     storyTitleHint: opts?.storyTitleHint,
   };
 
@@ -390,6 +616,36 @@ export async function getOrGenerateStoryline(
     log.log(`Storyline cache hit (${storySlug}): "${cached.title}"`);
     return cached;
   }
+
+  // Auto-bias against recently-used titles AND protagonists in the same
+  // niche so consecutive generations don't keep landing on the same
+  // archetype (e.g. always "uncle vs gadget").
+  if (
+    !fullOpts.avoidTitles?.length ||
+    !fullOpts.avoidArchetypes?.length
+  ) {
+    try {
+      const recent = await loadRecentStorylinesForNiche(niche, 6);
+      if (recent.length > 0) {
+        if (!fullOpts.avoidTitles?.length) {
+          fullOpts.avoidTitles = recent.map((s) => s.title).filter(Boolean);
+        }
+        if (!fullOpts.avoidArchetypes?.length) {
+          fullOpts.avoidArchetypes = recent
+            .map((s) => s.protagonist?.trim())
+            .filter((p): p is string => Boolean(p && p.length > 0));
+        }
+        log.log(
+          `Variety hint: avoiding ${fullOpts.avoidTitles?.length ?? 0} title(s) and ${fullOpts.avoidArchetypes?.length ?? 0} protagonist(s) from prior ${niche} runs`,
+        );
+      }
+    } catch (e) {
+      log.warn(
+        `loadRecentStorylinesForNiche failed (continuing without variety hint): ${(e as Error).message}`,
+      );
+    }
+  }
+
   const draft = await generateStorylineWithGemini(fullOpts);
   const storyline: Storyline = { ...draft, generatedAt: Date.now(), imageCount };
   await saveStorylineCache(storySlug, storyline);

@@ -156,10 +156,45 @@ export async function burnSubtitles(
     const { durationSec } = await probeDuration(clipPath);
     const endScene = opts.storyline.imagePrompts[i + 1];
     const startScene = opts.storyline.imagePrompts[i];
-    const text =
+
+    // Multi-speaker subtitles: when the new `dialogues[]` shape is present,
+    // concatenate every speaker's romanized line for the clip with speaker
+    // tags so the viewer can follow who's talking. Fall back to the legacy
+    // single-line `dialogueRoman` field when the storyline pre-dates the
+    // multi-speaker schema.
+    const buildMulti = (
+      scene?: { dialogues?: { speaker: string; lineRoman: string }[] },
+    ): string => {
+      const arr = scene?.dialogues ?? [];
+      if (arr.length === 0) return "";
+      const cast = opts.storyline.supportingCast ?? [];
+      const tagFor = (speaker: string): string => {
+        const tag = (speaker ?? "").trim().toLowerCase();
+        if (!tag || tag === "main" || tag === "protagonist") return "";
+        const found = cast.find(
+          (c) =>
+            c.role.toLowerCase() === tag ||
+            c.name.toLowerCase() === tag,
+        );
+        return found ? (found.name || found.role) : speaker;
+      };
+      return arr
+        .map((d) => {
+          const line = (d.lineRoman ?? "").trim();
+          if (!line) return "";
+          const tag = tagFor(d.speaker);
+          return tag ? `${tag}: ${line}` : line;
+        })
+        .filter(Boolean)
+        .join(" — ");
+    };
+
+    const multi = buildMulti(endScene) || buildMulti(startScene);
+    const legacy =
       (endScene?.dialogueRoman ?? "").trim() ||
       (startScene?.dialogueRoman ?? "").trim() ||
       "";
+    const text = multi || legacy;
     entries.push({ durationSec, text });
   }
 

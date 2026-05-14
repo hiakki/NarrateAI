@@ -31,6 +31,8 @@ import {
   sanitizeFilename,
   type Storyline,
   type ImagePromptEntry,
+  type SceneDialogue,
+  type SupportingCharacter,
 } from "@/services/flow-tv-phase1";
 import { buildStorylinePrompt, type StorylineBuildOpts } from "@/services/flow-tv-prompts";
 
@@ -378,6 +380,203 @@ function extractJsonBlock(raw: string): string {
   return s;
 }
 
+/**
+ * Coerce Gemini's `supportingCast` (web flow) into the canonical
+ * `SupportingCharacter[]` shape, dropping malformed entries. Mirrors the
+ * helper in `flow-tv-phase1` so downstream code is uniform.
+ */
+function normalizeSupportingCastWeb(
+  raw: unknown,
+): SupportingCharacter[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: SupportingCharacter[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const role = String(o.role ?? o.tag ?? o.type ?? "").trim();
+    const name = String(o.name ?? o.display ?? o.displayName ?? role).trim();
+    const description = String(
+      o.description ?? o.desc ?? o.details ?? o.appearance ?? "",
+    ).trim();
+    if (!role || !description) continue;
+    out.push({
+      role: role.slice(0, 60),
+      name: (name || role).slice(0, 80),
+      description: description.slice(0, 600),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Coerce Gemini's `dialogues` (web flow) into the canonical
+ * `SceneDialogue[]` shape, dropping malformed entries.
+ */
+function normalizeSceneDialoguesWeb(raw: unknown): SceneDialogue[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out: SceneDialogue[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const speaker = String(o.speaker ?? o.who ?? o.role ?? "main").trim() || "main";
+    const lineHi = String(
+      o.lineHi ?? o.hindi ?? o.lineHindi ?? o.text ?? o.line ?? "",
+    ).trim();
+    const lineRoman = String(
+      o.lineRoman ?? o.roman ?? o.transliteration ?? o.english ?? o.lineEnglish ?? lineHi,
+    ).trim();
+    if (!lineHi && !lineRoman) continue;
+    out.push({
+      speaker: speaker.slice(0, 50),
+      lineHi: (lineHi || lineRoman).slice(0, 240),
+      lineRoman: (lineRoman || lineHi).slice(0, 240),
+    });
+  }
+  return out;
+}
+
+/**
+ * Map common Gemini field-name drift to our canonical schema. Gemini Web (3
+ * Fast) sometimes emits `character_summary` instead of `characterPrompt`,
+ * `scene_title` instead of `title`, `description` instead of `prompt`, etc.
+ * This is purely best-effort renaming — values are passed through unchanged.
+ */
+function normalizeStorylineShape(
+  raw: Record<string, unknown>,
+): Partial<Storyline> {
+  const out: Record<string, unknown> = { ...raw };
+
+  const aliasGroups: Array<[string, string[]]> = [
+    [
+      "characterPrompt",
+      [
+        "character_prompt",
+        "character_summary",
+        "characterSummary",
+        "character_description",
+        "characterDescription",
+        "character_reference_prompt",
+        "characterReferencePrompt",
+        "character",
+      ],
+    ],
+    [
+      "imagePrompts",
+      ["image_prompts", "scenes", "scene_prompts", "scenePrompts", "prompts"],
+    ],
+    ["title", ["story_title", "video_title", "name"]],
+    ["logline", ["log_line", "summary", "synopsis"]],
+    [
+      "protagonist",
+      [
+        "protagonist_summary",
+        "protagonistSummary",
+        "main_character",
+        "mainCharacter",
+        "lead",
+      ],
+    ],
+    [
+      "supportingCast",
+      [
+        "supporting_cast",
+        "supporting_characters",
+        "supportingCharacters",
+        "cast",
+        "characters",
+        "side_characters",
+        "sideCharacters",
+      ],
+    ],
+  ];
+
+  for (const [canonical, aliases] of aliasGroups) {
+    if (out[canonical] === undefined || out[canonical] === null) {
+      for (const alias of aliases) {
+        if (out[alias] !== undefined && out[alias] !== null) {
+          out[canonical] = out[alias];
+          break;
+        }
+      }
+    }
+  }
+
+  // Per-scene field aliases.
+  if (Array.isArray(out.imagePrompts)) {
+    out.imagePrompts = (out.imagePrompts as Array<Record<string, unknown>>).map(
+      (it) => {
+        const o: Record<string, unknown> = { ...it };
+        const sceneAliases: Array<[string, string[]]> = [
+          ["title", ["scene_title", "sceneTitle", "name", "label", "slug"]],
+          ["prompt", ["description", "scene_prompt", "scenePrompt", "image_prompt", "imagePrompt", "visual_prompt"]],
+          ["dialogueHi", ["dialogue_hi", "dialogue_devanagari", "dialogueDevanagari", "hindi_dialogue", "dialogue"]],
+          ["dialogueRoman", ["dialogue_roman", "dialogue_romanized", "dialogueRomanized", "romanized_dialogue", "transliteration"]],
+          ["dialogues", ["dialogue_lines", "dialogueLines", "lines", "spoken", "exchanges", "conversation"]],
+          ["bgmCue", ["bgm_cue", "bgm", "background_music", "music_cue", "musicCue"]],
+          ["sfxCue", ["sfx_cue", "sfx", "sound_effects", "soundEffects"]],
+        ];
+        for (const [canon, aliases] of sceneAliases) {
+          if (o[canon] === undefined || o[canon] === null) {
+            for (const a of aliases) {
+              if (o[a] !== undefined && o[a] !== null) {
+                o[canon] = o[a];
+                break;
+              }
+            }
+          }
+        }
+        // Normalize per-line synonyms inside dialogues[] so the per-entry
+        // aliasing in flow-tv-phase1's normalizeSceneDialogues already sees
+        // canonical-ish keys. (Defensive — phase1 also handles synonyms.)
+        if (Array.isArray(o.dialogues)) {
+          o.dialogues = (o.dialogues as Array<Record<string, unknown>>).map(
+            (d) => {
+              if (!d || typeof d !== "object") return d;
+              const dd: Record<string, unknown> = { ...d };
+              const dlgAliases: Array<[string, string[]]> = [
+                ["speaker", ["who", "role", "character", "by", "from"]],
+                ["lineHi", ["hindi", "line_hindi", "lineHindi", "text_hi", "textHi", "devanagari", "line"]],
+                ["lineRoman", ["roman", "line_roman", "lineRoman", "transliteration", "romanized", "line_romanized", "english", "line_english", "lineEnglish", "text_roman", "textRoman"]],
+              ];
+              for (const [canon, aliases] of dlgAliases) {
+                if (dd[canon] === undefined || dd[canon] === null) {
+                  for (const a of aliases) {
+                    if (dd[a] !== undefined && dd[a] !== null) {
+                      dd[canon] = dd[a];
+                      break;
+                    }
+                  }
+                }
+              }
+              return dd;
+            },
+          );
+        }
+        return o;
+      },
+    );
+  }
+
+  return out as Partial<Storyline>;
+}
+
+/**
+ * Build a one-shot follow-up message that asks Gemini to re-emit the JSON
+ * with strict canonical field names. Used when the first response was
+ * structurally close but has the wrong field names or missing
+ * characterPrompt / scene fields.
+ */
+function buildFixupPrompt(missing: string[]): string {
+  return `Your last response was almost correct but used the wrong field names. Re-emit the SAME JSON, no prose, with these EXACT keys at the top level:
+- "title"
+- "logline"
+- "protagonist"
+- "characterPrompt"   ← MUST be present, 40-80 word standalone reference-image prompt
+- "imagePrompts"      ← array of objects each with EXACTLY these keys: "title", "prompt"${missing.includes("dialogueHi") ? `, "dialogueHi", "dialogueRoman"` : ""}${missing.includes("bgmCue") ? `, "bgmCue"` : ""}${missing.includes("sfxCue") ? `, "sfxCue"` : ""}
+
+Do not use snake_case (e.g. "character_summary", "scene_title", "image_prompt"). Use the camelCase names above verbatim. Output ONLY valid JSON, no markdown fences, no commentary.`;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 //  Public entrypoint
 // ──────────────────────────────────────────────────────────────────────────────
@@ -452,10 +651,15 @@ export async function generateStorylineViaWeb(
       // best effort
     }
 
-    const jsonText = extractJsonBlock(raw);
+    const parseAndNormalize = (text: string): Partial<Storyline> => {
+      const json = extractJsonBlock(text);
+      const obj = JSON.parse(json) as Record<string, unknown>;
+      return normalizeStorylineShape(obj);
+    };
+
     let parsed: Partial<Storyline>;
     try {
-      parsed = JSON.parse(jsonText) as Partial<Storyline>;
+      parsed = parseAndNormalize(raw);
     } catch (e) {
       log.error(
         `Could not parse Gemini-web response as JSON. Raw (first 600 chars): ${raw.slice(0, 600)}`,
@@ -465,13 +669,59 @@ export async function generateStorylineViaWeb(
       );
     }
 
-    if (
-      !parsed.title ||
-      !Array.isArray(parsed.imagePrompts) ||
-      parsed.imagePrompts.length !== opts.imageCount ||
-      typeof parsed.characterPrompt !== "string" ||
-      parsed.characterPrompt.trim().length < 20
-    ) {
+    const isValid = (p: Partial<Storyline>): boolean =>
+      !!p.title &&
+      Array.isArray(p.imagePrompts) &&
+      p.imagePrompts.length === opts.imageCount &&
+      typeof p.characterPrompt === "string" &&
+      p.characterPrompt.trim().length >= 20;
+
+    // One-shot fix-up: if the response is structurally close but missing
+    // canonical fields (characterPrompt undefined, scene fields renamed),
+    // ask Gemini to re-emit with strict keys. We only retry once.
+    if (!isValid(parsed)) {
+      const missing: string[] = [];
+      if (!parsed.characterPrompt) missing.push("characterPrompt");
+      if (opts.dialogue) missing.push("dialogueHi");
+      if (opts.bgm) missing.push("bgmCue");
+      if (opts.sfx) missing.push("sfxCue");
+
+      log.warn(
+        `Gemini web first response shape invalid (title=${parsed.title}, prompts=${parsed.imagePrompts?.length}, characterPrompt=${typeof parsed.characterPrompt}); asking for a strict-keys fix-up.`,
+      );
+
+      try {
+        await pastePrompt(page, buildFixupPrompt(missing));
+        await snap(page, "05-fixup-sent");
+        const raw2 = await waitForResponseAndExtract(page);
+        await snap(page, "06-fixup-response-ready");
+        try {
+          await fs.mkdir(SCREENSHOTS_DIR, { recursive: true });
+          await fs.writeFile(
+            path.join(SCREENSHOTS_DIR, `${Date.now()}-fixup-raw-response.txt`),
+            raw2,
+            "utf-8",
+          );
+        } catch {
+          // best effort
+        }
+        const reparsed = parseAndNormalize(raw2);
+        if (isValid(reparsed)) {
+          parsed = reparsed;
+          log.log("Fix-up pass produced a valid storyline shape.");
+        } else {
+          log.warn(
+            `Fix-up pass still invalid (title=${reparsed.title}, prompts=${reparsed.imagePrompts?.length}, characterPrompt=${typeof reparsed.characterPrompt}).`,
+          );
+        }
+      } catch (e) {
+        log.warn(
+          `Fix-up pass failed: ${(e as Error).message?.slice(0, 200)}`,
+        );
+      }
+    }
+
+    if (!isValid(parsed)) {
       const shape = JSON.stringify(parsed)?.slice(0, 600);
       log.error(
         `Gemini web parsed but invalid. parsed shape: ${shape}; raw (first 400): ${raw.slice(0, 400)}`,
@@ -486,14 +736,35 @@ export async function generateStorylineViaWeb(
       logline: String(parsed.logline ?? ""),
       protagonist: String(parsed.protagonist ?? ""),
       characterPrompt: String(parsed.characterPrompt).trim(),
-      imagePrompts: parsed.imagePrompts.map((p, i) => {
+      supportingCast: normalizeSupportingCastWeb(
+        (parsed as { supportingCast?: unknown }).supportingCast,
+      ),
+      imagePrompts: (parsed.imagePrompts ?? []).map((p, i) => {
         const e: ImagePromptEntry = {
           title: sanitizeFilename(String(p.title ?? `scene-${i + 1}`)),
           prompt: String(p.prompt ?? "").trim(),
         };
         if (opts.dialogue) {
-          e.dialogueHi = String(p.dialogueHi ?? "").trim();
-          e.dialogueRoman = String(p.dialogueRoman ?? "").trim();
+          const dlg = normalizeSceneDialoguesWeb(
+            (p as { dialogues?: unknown }).dialogues,
+          );
+          if (dlg.length > 0) {
+            e.dialogues = dlg;
+            e.dialogueHi = dlg[0].lineHi;
+            e.dialogueRoman = dlg[0].lineRoman;
+          } else {
+            e.dialogueHi = String(p.dialogueHi ?? "").trim();
+            e.dialogueRoman = String(p.dialogueRoman ?? "").trim();
+            if (e.dialogueHi || e.dialogueRoman) {
+              e.dialogues = [
+                {
+                  speaker: "main",
+                  lineHi: e.dialogueHi ?? "",
+                  lineRoman: e.dialogueRoman ?? e.dialogueHi ?? "",
+                },
+              ];
+            }
+          }
         }
         if (opts.bgm) e.bgmCue = String(p.bgmCue ?? "").trim();
         if (opts.sfx) e.sfxCue = String(p.sfxCue ?? "").trim();

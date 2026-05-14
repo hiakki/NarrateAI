@@ -128,6 +128,12 @@ model User {
   defaultImageToVideoProvider String?
   lastCreatePrefs      Json?
 
+  // Master kill-switch for the entire viral-clips (clip-repurpose) feature.
+  // When false: scheduler optimizer ignores this user's clip-repurpose
+  // automations AND processAutomation refuses to run them — so a manual
+  // unpause won't be re-enabled by tomorrow's optimizer.
+  clipRepurposeAutomationEnabled Boolean @default(true)
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -205,6 +211,24 @@ model Automation {
 
   automationType  String        @default("original")
   clipConfig      Json?
+
+  // Flow-TV-specific config snapshot used by the scheduler when this
+  // automation fires (automationType === "flow-tv"). Shape:
+  //   {
+  //     imageCount: number,        // 2..12, scenes per video
+  //     veoVariant: "Fast"|"Lite",
+  //     language: "hindi"|"english",
+  //     characterStyle: "cartoon_3d"|"hyperreal_3d"|"photoreal",
+  //     aspectRatio: "9:16"|"16:9",
+  //     dialogue: boolean,
+  //     bgm: boolean,
+  //     sfx: boolean,
+  //     subtitles: boolean,
+  //     storylineSource: "api"|"web",
+  //     useRecurringCharacter: boolean,
+  //     storyTitleHint?: string
+  //   }
+  flowTvConfig    Json?
 
   targetPlatforms Json          @default("[]")
   enabled         Boolean       @default(true)

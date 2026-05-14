@@ -44,6 +44,7 @@ import {
   resetPhase1Cache,
   runPhase1,
   regeneratePhase1Asset,
+  buildVarietyHintsForNiche,
   type Storyline,
 } from "@/services/flow-tv-phase1";
 import {
@@ -52,6 +53,7 @@ import {
   stitchPhase2Clips,
   type VeoVariant,
 } from "@/services/flow-tv-phase2";
+import { classifyProtagonist } from "@/services/flow-tv-prompts";
 
 const log = createLogger("FlowTV:Run");
 
@@ -77,7 +79,7 @@ export type FlowNiche =
   | "horror"
   | "mythological";
 
-export type FlowCharacterStyle = "cartoon_3d" | "photoreal";
+export type FlowCharacterStyle = "cartoon_3d" | "hyperreal_3d" | "photoreal";
 
 export type FlowAspectRatio = "9:16" | "16:9";
 
@@ -137,7 +139,23 @@ export interface FlowRun {
   subtitles: boolean;                // ffmpeg burn-in (romanized) on final mp4
   useRecurringCharacter: boolean;    // adopt prior run's character
   adoptedFromRunId?: string;         // populated when recurring character was used
+  /**
+   * When set, this run will re-use the saved character (DB id from the
+   * Character library, type=flow_tv) instead of generating a new one. Phase 1
+   * copies that character's image into the run dir and overrides
+   * storyline.characterPrompt with the saved fullPrompt. Takes precedence
+   * over `useRecurringCharacter`.
+   */
+  reuseCharacterId?: string;
   storylineSource: FlowStorylineSource; // api (default) or web (gemini.google.com)
+
+  /**
+   * Optional Automation row id (automationType="flow-tv") that spawned this
+   * run. Set by the scheduler dispatch path so finalize attributes the
+   * resulting Video to THIS schedule's series instead of collapsing every
+   * scheduled run onto the singleton "Flow TV — Zero to Hero" automation.
+   */
+  automationId?: string;
 
   // Derived identity (set on first storyline generation).
   storySlug?: string;       // <title-slug>-DDMMYYYY
@@ -310,7 +328,14 @@ export interface CreateRunOpts {
   sfx?: boolean;
   subtitles?: boolean;
   useRecurringCharacter?: boolean;
+  reuseCharacterId?: string;
   storylineSource?: FlowStorylineSource;
+  /**
+   * If set, the resulting Video is attributed to this specific Automation row
+   * at finalize time (used by the multi-slot Flow TV scheduler). Falls back
+   * to the legacy "ensure singleton" path when undefined.
+   */
+  automationId?: string;
 }
 
 export async function createRun(opts: CreateRunOpts): Promise<FlowRun> {
@@ -325,13 +350,14 @@ export async function createRun(opts: CreateRunOpts): Promise<FlowRun> {
 
   const niche = opts.niche ?? "funny";
   const language = opts.language ?? "hindi";
-  const characterStyle = opts.characterStyle ?? "cartoon_3d";
+  const characterStyle = opts.characterStyle ?? "hyperreal_3d";
   const aspectRatio = opts.aspectRatio ?? "9:16";
   const dialogue = opts.dialogue ?? true;
   const bgm = opts.bgm ?? true;
   const sfx = opts.sfx ?? true;
   const subtitles = opts.subtitles ?? false;
   const useRecurringCharacter = opts.useRecurringCharacter ?? false;
+  const reuseCharacterId = opts.reuseCharacterId?.trim() || undefined;
   const storylineSource = opts.storylineSource ?? "web";
   const approvalMode = opts.approvalMode ?? "storyline+images+clips";
 
@@ -356,7 +382,9 @@ export async function createRun(opts: CreateRunOpts): Promise<FlowRun> {
     sfx,
     subtitles,
     useRecurringCharacter,
+    reuseCharacterId,
     storylineSource,
+    automationId: opts.automationId,
     runDir,
     phase1RunDir,
     phase2RunDir,
@@ -532,6 +560,13 @@ async function stepOnce(run: FlowRun): Promise<FlowRun> {
     case "generating_storyline": {
       // Generate (or retrieve cached) storyline; once we have it, derive the
       // storySlug and persist it to the per-slug cache.
+      const variety = await buildVarietyHintsForNiche(run.niche, 6);
+      if (variety.avoidArchetypes.length > 0 || variety.bannedCategories.length > 0) {
+        appendEvent(
+          run,
+          `Variety hint: avoiding ${variety.avoidArchetypes.length} prior protagonist(s) and ${variety.avoidTitles.length} title(s); banned categories: [${variety.bannedCategories.join(", ") || "none"}]`,
+        );
+      }
       const opts = {
         imageCount: run.imageCount,
         niche: run.niche,
@@ -541,6 +576,11 @@ async function stepOnce(run: FlowRun): Promise<FlowRun> {
         dialogue: run.dialogue,
         bgm: run.bgm,
         sfx: run.sfx,
+        avoidTitles: variety.avoidTitles.length > 0 ? variety.avoidTitles : undefined,
+        avoidArchetypes:
+          variety.avoidArchetypes.length > 0 ? variety.avoidArchetypes : undefined,
+        bannedCategories:
+          variety.bannedCategories.length > 0 ? variety.bannedCategories : undefined,
         storyTitleHint: run.storyTitleHint,
       };
       let partial: Awaited<ReturnType<typeof generateStorylineWithGemini>>;
@@ -600,17 +640,55 @@ async function stepOnce(run: FlowRun): Promise<FlowRun> {
       if (!run.storySlug || !run.projectName || !run.storyline) {
         throw new Error("generating_images: missing storySlug/projectName/storyline");
       }
-      // If recurring-character mode is on and we have a prior run with a
-      // matching niche+language+style, adopt its character image so we skip
-      // a Veo image-credit. The function returns the source path or null.
-      const adoptedCharacterPath = run.useRecurringCharacter
-        ? await tryAdoptRecurringCharacter(run)
-        : null;
-      if (adoptedCharacterPath) {
-        appendEvent(
-          run,
-          `Recurring character adopted from run ${run.adoptedFromRunId} → ${path.basename(adoptedCharacterPath)}`,
-        );
+
+      // 1) Library-picked reuse takes precedence: if the user explicitly chose
+      //    a saved character from the dashboard library, copy that file in
+      //    AND override storyline.characterPrompt with the saved prompt so
+      //    every scene's reference matches.
+      let adoptedCharacterPath: string | null = null;
+      if (run.reuseCharacterId) {
+        try {
+          const { loadFlowTvCharacter } = await import(
+            "@/services/flow-tv-character-library"
+          );
+          const saved = await loadFlowTvCharacter(
+            run.reuseCharacterId,
+            run.userId,
+          );
+          if (saved?.absolutePath) {
+            adoptedCharacterPath = saved.absolutePath;
+            run.adoptedFromRunId = `lib:${saved.id}`;
+            run.storyline.characterPrompt = saved.fullPrompt;
+            appendEvent(
+              run,
+              `Reusing character "${saved.name}" from library (id=${saved.id.slice(0, 8)}…); overriding characterPrompt.`,
+            );
+          } else {
+            appendEvent(
+              run,
+              `reuseCharacterId=${run.reuseCharacterId} not found / no preview on disk; falling back to fresh generation.`,
+              "warn",
+            );
+          }
+        } catch (e) {
+          appendEvent(
+            run,
+            `Library lookup failed (${(e as Error).message?.slice(0, 120)}); falling back to fresh generation.`,
+            "warn",
+          );
+        }
+      }
+
+      // 2) If recurring-character (auto-pick prior run) is on AND no library
+      //    pick, use that heuristic.
+      if (!adoptedCharacterPath && run.useRecurringCharacter) {
+        adoptedCharacterPath = await tryAdoptRecurringCharacter(run);
+        if (adoptedCharacterPath) {
+          appendEvent(
+            run,
+            `Recurring character adopted from run ${run.adoptedFromRunId} → ${path.basename(adoptedCharacterPath)}`,
+          );
+        }
       }
 
       const result = await runPhase1({
@@ -631,6 +709,38 @@ async function stepOnce(run: FlowRun): Promise<FlowRun> {
         run,
         `Phase 1 complete: ${result.imagePaths.length} scene images + character`,
       );
+
+      // Register the freshly-rendered character into the library — but only
+      // if it's a NEW one (the run didn't reuse from the library / a prior
+      // run). Best-effort; failures are logged inside the helper and we
+      // never abort the run on a registry write.
+      if (
+        result.characterPath &&
+        !run.reuseCharacterId &&
+        !run.adoptedFromRunId &&
+        run.storyline?.characterPrompt
+      ) {
+        try {
+          const { registerFlowTvCharacter } = await import(
+            "@/services/flow-tv-character-library"
+          );
+          await registerFlowTvCharacter({
+            userId: run.userId,
+            characterPath: result.characterPath,
+            name: run.storyline.title || "Untitled character",
+            fullPrompt: run.storyline.characterPrompt,
+            niche: run.niche,
+            language: run.language,
+            characterStyle: run.characterStyle,
+          });
+        } catch (e) {
+          appendEvent(
+            run,
+            `Library registration failed (non-fatal): ${(e as Error).message?.slice(0, 120)}`,
+            "warn",
+          );
+        }
+      }
       if (gateRequired(run, "images")) {
         setStage(run, "awaiting_images_approval", "Awaiting images approval");
       } else {
@@ -759,6 +869,23 @@ export async function refreshStoryline(runId: string): Promise<FlowRun> {
     await resetPhase1Cache({ storySlug: run.storySlug, storyline: true });
   }
   const oldTitle = run.storyline?.title;
+  const oldProtagonist = run.storyline?.protagonist?.trim();
+  const oldCharacterPrompt = run.storyline?.characterPrompt?.trim();
+  const variety = await buildVarietyHintsForNiche(run.niche, 6);
+  const avoidTitlesSet = new Set<string>(variety.avoidTitles);
+  if (oldTitle) avoidTitlesSet.add(oldTitle);
+  const avoidArchetypesSet = new Set<string>(variety.avoidArchetypes);
+  if (oldProtagonist) avoidArchetypesSet.add(oldProtagonist);
+
+  // Make sure we ban the just-rejected protagonist's category too — that's
+  // usually why the user pressed "refresh" in the first place.
+  const bannedCategoriesSet = new Set<string>(variety.bannedCategories);
+  for (const text of [oldProtagonist, oldCharacterPrompt]) {
+    if (!text) continue;
+    const cat = classifyProtagonist(text);
+    if (cat) bannedCategoriesSet.add(cat);
+  }
+
   const opts = {
     imageCount: run.imageCount,
     niche: run.niche,
@@ -768,7 +895,12 @@ export async function refreshStoryline(runId: string): Promise<FlowRun> {
     dialogue: run.dialogue,
     bgm: run.bgm,
     sfx: run.sfx,
-    avoidTitles: oldTitle ? [oldTitle] : undefined,
+    avoidTitles:
+      avoidTitlesSet.size > 0 ? Array.from(avoidTitlesSet) : undefined,
+    avoidArchetypes:
+      avoidArchetypesSet.size > 0 ? Array.from(avoidArchetypesSet) : undefined,
+    bannedCategories:
+      bannedCategoriesSet.size > 0 ? Array.from(bannedCategoriesSet) : undefined,
     storyTitleHint: run.storyTitleHint,
   };
   let partial: Awaited<ReturnType<typeof generateStorylineWithGemini>>;

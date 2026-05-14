@@ -105,15 +105,45 @@ export async function finalizeFlowRun(run: FlowRun): Promise<FinalizeResult> {
   // codebase-wide default. Real automations override this via UI input.
   const userTimezone = process.env.DEFAULT_TIMEZONE || "Asia/Kolkata";
 
-  // 1 + 2 — ensure Series + Automation exist (one per user). We use the
-  // automation's name as the dedup key so future runs land in the same row.
-  const { series, automation } = await ensureFlowTvSeriesAndAutomation({
-    userId: user.id,
-    timezone: userTimezone,
-    defaultLlm: user.defaultLlmProvider as never,
-    defaultTts: user.defaultTtsProvider as never,
-    defaultImage: user.defaultImageProvider as never,
-  });
+  // 1 + 2 — ensure Series + Automation exist.
+  //
+  // Scheduled multi-slot runs carry `run.automationId` (set by the scheduler
+  // when this run was spawned from a /api/dashboard/flow-tv/schedules row).
+  // When present, attach the Video to THAT schedule's series so each slot
+  // has its own clean history on /dashboard/automations and /dashboard/videos.
+  //
+  // For ad-hoc UI runs (manual "Create Run" button, no schedule attached)
+  // we fall back to the legacy "one singleton Flow TV automation per user"
+  // path so the existing dashboard layout doesn't churn.
+  const resolved = await (async () => {
+    if (run.automationId) {
+      const found = await db.automation.findFirst({
+        where: {
+          id: run.automationId,
+          userId: user.id,
+          automationType: "flow-tv",
+        },
+        include: { series: true },
+      });
+      if (found && found.series) {
+        log.log(
+          `[finalize] run ${run.id} attached to schedule automation=${found.id} (${found.name})`,
+        );
+        return { series: found.series, automation: found };
+      }
+      log.warn(
+        `[finalize] run ${run.id} carried automationId=${run.automationId} but no matching schedule row found; falling back to singleton.`,
+      );
+    }
+    return ensureFlowTvSeriesAndAutomation({
+      userId: user.id,
+      timezone: userTimezone,
+      defaultLlm: user.defaultLlmProvider as never,
+      defaultTts: user.defaultTtsProvider as never,
+      defaultImage: user.defaultImageProvider as never,
+    });
+  })();
+  const { series, automation } = resolved;
 
   // 3 — pre-allocate the Video row so we have an id for the path layout.
   const targetPlatforms = (automation.targetPlatforms as string[] | null) ?? [];

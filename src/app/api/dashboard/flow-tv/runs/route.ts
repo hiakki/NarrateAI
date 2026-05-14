@@ -15,13 +15,22 @@ const createSchema = z.object({
     .enum(["zero-to-hero", "funny", "moral", "horror", "mythological"])
     .default("funny"),
   language: z.enum(["hindi", "english"]).default("hindi"),
-  characterStyle: z.enum(["cartoon_3d", "photoreal"]).default("cartoon_3d"),
+  characterStyle: z
+    .enum(["cartoon_3d", "hyperreal_3d", "photoreal"])
+    .default("hyperreal_3d"),
   aspectRatio: z.enum(["9:16", "16:9"]).default("9:16"),
   dialogue: z.boolean().default(true),
   bgm: z.boolean().default(true),
   sfx: z.boolean().default(true),
   subtitles: z.boolean().default(false),
   useRecurringCharacter: z.boolean().default(false),
+  reuseCharacterId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
   storylineSource: z.enum(["api", "web"]).default("web"),
   triggerSource: z.string().default("ui"),
 });
@@ -53,6 +62,7 @@ export async function POST(req: NextRequest) {
     sfx: parsed.data.sfx,
     subtitles: parsed.data.subtitles,
     useRecurringCharacter: parsed.data.useRecurringCharacter,
+    reuseCharacterId: parsed.data.reuseCharacterId,
     storylineSource: parsed.data.storylineSource,
   });
 

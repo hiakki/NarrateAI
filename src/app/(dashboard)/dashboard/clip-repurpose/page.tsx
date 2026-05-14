@@ -20,6 +20,7 @@ import {
   Share2, Smartphone, Zap, AlertCircle, Pencil, Trash2, Save, X,
   CalendarClock, Heart, BarChart2, Search, ChevronDown, ChevronRight,
   CheckSquare, Square as SquareIcon, StopCircle,
+  PowerOff, Power,
 } from "lucide-react";
 import { timeAgo, formatNumber } from "@/lib/format-utils";
 import { PlatformEntry, parsePlatformEntries } from "@/lib/platform-utils";
@@ -184,6 +185,12 @@ export default function ClipRepurposePage() {
   const [pausingAll, setPausingAll] = useState(false);
   const [resumingAll, setResumingAll] = useState(false);
 
+  // Master kill-switch for the entire viral-clips feature. When false,
+  // the scheduler refuses to (re-)enable any of this user's clip
+  // automations. Loaded together with the rest of the page state.
+  const [masterEnabled, setMasterEnabled] = useState<boolean>(true);
+  const [masterToggling, setMasterToggling] = useState(false);
+
   /* ---- data fetching ---- */
 
   const fetchData = useCallback(async () => {
@@ -191,12 +198,48 @@ export default function ClipRepurposePage() {
       const res = await fetch("/api/clip-repurpose");
       const json = await res.json();
       setAutomations(json.data ?? []);
+      if (typeof json.masterEnabled === "boolean") {
+        setMasterEnabled(json.masterEnabled);
+      }
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const setMaster = useCallback(
+    async (enable: boolean) => {
+      setMasterToggling(true);
+      // Optimistic UI: if disabling, every row flips Paused immediately.
+      const previous = automations;
+      if (!enable) {
+        setAutomations((prev) => prev.map((a) => ({ ...a, enabled: false })));
+      }
+      setMasterEnabled(enable);
+      try {
+        const res = await fetch("/api/clip-repurpose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "set-master-enabled", enabled: enable }),
+        });
+        if (!res.ok) {
+          // Roll back optimism on failure.
+          setMasterEnabled(!enable);
+          setAutomations(previous);
+        } else {
+          await fetchData();
+        }
+      } catch (err) {
+        console.error("Master-switch error:", err);
+        setMasterEnabled(!enable);
+        setAutomations(previous);
+      } finally {
+        setMasterToggling(false);
+      }
+    },
+    [automations, fetchData],
+  );
 
   const fetchInsights = useCallback(async () => {
     try {
@@ -749,11 +792,17 @@ export default function ClipRepurposePage() {
           <div className="flex items-center gap-1.5 pt-1 flex-wrap">
             <button
               onClick={() => toggleEnabled(auto.id, !auto.enabled)}
+              disabled={!masterEnabled}
+              title={
+                masterEnabled
+                  ? undefined
+                  : "Disabled because the viral-clips master switch is OFF"
+              }
               className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 auto.enabled
                   ? "bg-green-100 text-green-700 hover:bg-green-200"
                   : "bg-muted text-muted-foreground hover:bg-muted/80"
-              }`}
+              } ${!masterEnabled ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               {auto.enabled ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
               {auto.enabled ? "Active" : "Paused"}
@@ -1213,6 +1262,95 @@ export default function ClipRepurposePage() {
           </Button>
         </div>
       </div>
+
+      {/* Master kill-switch banner */}
+      {masterEnabled ? (
+        <Card className="border-green-500/30 bg-green-500/5">
+          <CardContent className="py-3 px-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
+              <Power className="h-5 w-5 text-green-600 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">
+                  Viral clips automation is{" "}
+                  <span className="text-green-700 dark:text-green-400">ON</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  The scheduler can build, post, and re-optimize your viral clip niches automatically.
+                </div>
+              </div>
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                  disabled={masterToggling}
+                >
+                  {masterToggling ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PowerOff className="mr-1.5 h-4 w-4" />
+                  )}
+                  Disable viral clips
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Disable viral clips automation?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This pauses every viral-clip automation under your account
+                    and prevents the daily optimizer from re-enabling them.
+                    Any QUEUED or GENERATING clip video will be cancelled.
+                    You can turn this back on any time.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => setMaster(false)}
+                    className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                  >
+                    Yes, disable
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-red-500/40 bg-red-500/5">
+          <CardContent className="py-3 px-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
+              <PowerOff className="h-5 w-5 text-red-600 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">
+                  Viral clips automation is{" "}
+                  <span className="text-red-700 dark:text-red-400">OFF</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  The scheduler will skip every viral-clip automation under your account
+                  until you re-enable it. Per-row toggles below are disabled.
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="default"
+              size="sm"
+              className="bg-green-600 hover:bg-green-700"
+              disabled={masterToggling}
+              onClick={() => setMaster(true)}
+            >
+              {masterToggling ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Power className="mr-1.5 h-4 w-4" />
+              )}
+              Enable viral clips
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Create Form */}
       {showCreate && (

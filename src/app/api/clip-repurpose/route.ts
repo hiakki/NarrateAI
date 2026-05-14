@@ -8,6 +8,14 @@ export async function GET() {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    // Surface the user-level master kill-switch so the UI can show
+    // a Disable / Enable banner above the per-row toggles.
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { clipRepurposeAutomationEnabled: true },
+    });
+    const masterEnabled = user?.clipRepurposeAutomationEnabled ?? true;
+
     const automations = await db.automation.findMany({
       where: { userId: session.user.id, automationType: "clip-repurpose" },
       include: {
@@ -48,7 +56,7 @@ export async function GET() {
         : null,
     }));
 
-    return NextResponse.json({ data });
+    return NextResponse.json({ data, masterEnabled });
   } catch (error) {
     console.error("List clip-repurpose error:", error);
     return NextResponse.json({ error: "Failed to list" }, { status: 500 });
@@ -61,7 +69,15 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = (await req.json()) as {
-      action?: "create" | "trigger" | "toggle" | "update" | "delete" | "stop" | "clear-failed";
+      action?:
+        | "create"
+        | "trigger"
+        | "toggle"
+        | "update"
+        | "delete"
+        | "stop"
+        | "clear-failed"
+        | "set-master-enabled";
       automationId?: string;
       enabled?: boolean;
       name?: string;
@@ -77,6 +93,52 @@ export async function POST(req: NextRequest) {
       enableBgm?: boolean;
       enableHflip?: boolean;
     };
+
+    // Master kill-switch for the entire viral-clips feature for this user.
+    // - When disabling: also pauses every existing clip-repurpose automation
+    //   so the user sees the per-row toggles flip off as well. Cancels any
+    //   in-flight QUEUED/GENERATING videos so credits stop burning.
+    // - When enabling: ONLY flips the user flag back to true; we deliberately
+    //   do NOT re-enable individual rows (the optimizer will pick them back
+    //   up at the next planning window per its scorecard).
+    if (body.action === "set-master-enabled" && typeof body.enabled === "boolean") {
+      const targetEnabled = body.enabled;
+      await db.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: session.user.id },
+          data: { clipRepurposeAutomationEnabled: targetEnabled },
+        });
+        if (!targetEnabled) {
+          // Pause every clip-repurpose automation this user owns.
+          await tx.automation.updateMany({
+            where: { userId: session.user.id, automationType: "clip-repurpose" },
+            data: { enabled: false },
+          });
+          // Cancel in-flight videos on those automations' series.
+          const series = await tx.series.findMany({
+            where: {
+              userId: session.user.id,
+              automation: { is: { automationType: "clip-repurpose" } },
+            },
+            select: { id: true },
+          });
+          const seriesIds = series.map((s) => s.id);
+          if (seriesIds.length > 0) {
+            await tx.video.updateMany({
+              where: {
+                seriesId: { in: seriesIds },
+                status: { in: ["QUEUED", "GENERATING"] },
+              },
+              data: {
+                status: "FAILED",
+                errorMessage: "Cancelled by viral-clips master switch",
+              },
+            });
+          }
+        }
+      });
+      return NextResponse.json({ ok: true, masterEnabled: targetEnabled });
+    }
 
     if (body.action === "stop" && body.automationId) {
       const auto = await db.automation.findFirst({

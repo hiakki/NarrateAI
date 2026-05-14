@@ -16,6 +16,7 @@ import { refreshInsightsForUser } from "../src/services/insights";
 import { getYouTubeVideoPrivacy } from "../src/lib/social/youtube";
 import { getFacebookVideoPublished, getFreshFacebookToken } from "../src/lib/social/facebook";
 import { decrypt } from "../src/lib/social/encrypt";
+import type { FlowNiche } from "../src/services/flow-tv-run";
 
 import { getArtStyleById } from "../src/config/art-styles";
 import { getNicheById } from "../src/config/niches";
@@ -111,6 +112,10 @@ interface AutoUser {
   defaultTtsProvider: string | null;
   defaultImageProvider: string | null;
   defaultImageToVideoProvider: string | null;
+  // Master kill-switch for the viral-clips (clip-repurpose) feature.
+  // When false: scheduler refuses to run / re-enable this user's
+  // clip-repurpose automations.
+  clipRepurposeAutomationEnabled?: boolean;
 }
 
 interface AutoRow {
@@ -135,6 +140,10 @@ interface AutoRow {
   characterId?: string | null;
   automationType?: string;
   clipConfig?: unknown;
+  // Per-row Flow TV settings used when automationType === "flow-tv" fires
+  // from the scheduler. NULL ⇒ scheduler falls back to legacy hard-coded
+  // Flow TV defaults.
+  flowTvConfig?: unknown;
   enableBgm?: boolean;
   enableHflip?: boolean;
   user: AutoUser;
@@ -286,12 +295,40 @@ async function processAutomation(
     auto.name,
   );
 
+  const triggerText = triggerLabel(trigger);
+
+  // ── Master kill-switch: viral-clips (clip-repurpose) feature ──
+  // If the user has disabled clip-repurpose at the account level, refuse
+  // to run/recover any of their clip-repurpose automations. This guard
+  // sits BEFORE shouldBuildNow + pending-video checks so a disabled user
+  // can't be re-enabled by a single optimizer pass tomorrow.
+  if (
+    (auto.automationType ?? "original") === "clip-repurpose" &&
+    auto.user.clipRepurposeAutomationEnabled === false
+  ) {
+    const msg = `Did not run (${triggerText}): viral-clips automation disabled by user (master switch)`;
+    debug(`[SKIP]`, `"${auto.name}" — ${msg}`);
+    fl.scheduler(`SKIP: master switch off`);
+    await writeSchedulerLog(
+      auto.id,
+      "skipped",
+      `[CLIP_REPURPOSE_MASTER_OFF] [trigger=${trigger}] ${msg}`,
+      { durationMs: Date.now() - runStart },
+    );
+    // Best-effort: re-pause the row so a stale enabled=true doesn't keep
+    // showing in the UI. The master-switch API also bulk-pauses but a
+    // concurrent optimizer pass could re-enable; this re-asserts intent.
+    await db.automation
+      .update({ where: { id: auto.id }, data: { enabled: false } })
+      .catch(() => {});
+    return;
+  }
+
   // Use actual last video build time instead of scheduler's lastRunAt,
   // except when lastRunAt is intentionally reset (e.g. newly enabled niche).
   const lastVideoBuildAt = auto.series?.videos?.[0]?.createdAt ?? null;
   const effectiveLastRun = auto.lastRunAt === null ? null : (lastVideoBuildAt ?? auto.lastRunAt);
   const { build, reason } = shouldBuildNow({ ...auto, lastRunAt: effectiveLastRun, postTime: auto.postTime });
-  const triggerText = triggerLabel(trigger);
 
   if (!build) {
     debug(`[SKIP]`, `"${auto.name}" — ${reason}`);
@@ -440,9 +477,72 @@ async function processAutomation(
     try {
       const { createRun } = await import("../src/services/flow-tv-run");
       const { enqueueFlowTvAdvance } = await import("../src/services/queue");
+
+      // Pull per-row settings from flowTvConfig (set by /api/dashboard/
+      // flow-tv/schedules). NULL/legacy rows fall back to createRun's
+      // hard-coded defaults (funny / hindi / cartoon_3d / 9:16 / etc.).
+      const cfg = (auto.flowTvConfig ?? {}) as Record<string, unknown>;
+      const allowedNiches: readonly FlowNiche[] = [
+        "zero-to-hero",
+        "funny",
+        "moral",
+        "horror",
+        "mythological",
+      ];
+      const coerceNiche = (v: unknown): FlowNiche | undefined => {
+        if (typeof v !== "string") return undefined;
+        return (allowedNiches as readonly string[]).includes(v) ? (v as FlowNiche) : undefined;
+      };
+      const coerceEnum = <T extends string>(
+        v: unknown,
+        allowed: readonly T[],
+      ): T | undefined =>
+        typeof v === "string" && (allowed as readonly string[]).includes(v)
+          ? (v as T)
+          : undefined;
+
+      // Niche source priority:
+      //   1) flowTvConfig.niche (per-row override from schedules UI)
+      //   2) auto.niche if it parses as a FlowNiche
+      //   3) createRun's own default ("funny")
+      const niche =
+        coerceNiche(cfg.niche) ??
+        coerceNiche(auto.niche) ??
+        undefined;
+
       const newRun = await createRun({
         userId: auto.user.id,
-        niche: auto.niche,
+        automationId: auto.id,
+        niche,
+        imageCount:
+          typeof cfg.imageCount === "number"
+            ? Math.max(2, Math.min(12, cfg.imageCount))
+            : undefined,
+        veoVariant: coerceEnum(cfg.veoVariant, ["Fast", "Lite"] as const),
+        language: coerceEnum(cfg.language, ["hindi", "english"] as const),
+        characterStyle: coerceEnum(cfg.characterStyle, [
+          "cartoon_3d",
+          "hyperreal_3d",
+          "photoreal",
+        ] as const),
+        aspectRatio: coerceEnum(cfg.aspectRatio, ["9:16", "16:9"] as const),
+        dialogue: typeof cfg.dialogue === "boolean" ? cfg.dialogue : undefined,
+        bgm: typeof cfg.bgm === "boolean" ? cfg.bgm : undefined,
+        sfx: typeof cfg.sfx === "boolean" ? cfg.sfx : undefined,
+        subtitles:
+          typeof cfg.subtitles === "boolean" ? cfg.subtitles : undefined,
+        useRecurringCharacter:
+          typeof cfg.useRecurringCharacter === "boolean"
+            ? cfg.useRecurringCharacter
+            : undefined,
+        storylineSource: coerceEnum(cfg.storylineSource, [
+          "api",
+          "web",
+        ] as const),
+        storyTitleHint:
+          typeof cfg.storyTitleHint === "string"
+            ? cfg.storyTitleHint.trim() || undefined
+            : undefined,
         approvalMode: "auto",
         triggerSource: `scheduler:${trigger}`,
       });
@@ -547,6 +647,7 @@ async function processAutomation(
               id: true, name: true, email: true,
               defaultLlmProvider: true, defaultTtsProvider: true,
               defaultImageProvider: true, defaultImageToVideoProvider: true,
+              clipRepurposeAutomationEnabled: true,
             },
           },
         },
@@ -716,6 +817,7 @@ async function planDailyBuilds(trigger: string = "manual") {
             defaultTtsProvider: true,
             defaultImageProvider: true,
             defaultImageToVideoProvider: true,
+            clipRepurposeAutomationEnabled: true,
           },
         },
         series: {
@@ -829,6 +931,7 @@ async function recoverStuckVideos() {
                 defaultTtsProvider: true,
                 defaultImageProvider: true,
                 defaultImageToVideoProvider: true,
+                clipRepurposeAutomationEnabled: true,
               },
             },
           },
@@ -1970,10 +2073,32 @@ async function optimizeClipAutomations() {
         userId: true,
         enabled: true,
         clipConfig: true,
+        user: { select: { clipRepurposeAutomationEnabled: true } },
       },
     });
 
     for (const auto of allClipAutos) {
+      // Master kill-switch — never re-enable a clip automation for a user
+      // who has switched the feature off, regardless of scorecard.
+      if (auto.user?.clipRepurposeAutomationEnabled === false) {
+        if (auto.enabled) {
+          await db.automation
+            .update({ where: { id: auto.id }, data: { enabled: false } })
+            .catch(() => {});
+          deactivatedCount++;
+          await db.schedulerLog
+            .create({
+              data: {
+                automationId: auto.id,
+                outcome: "deactivated",
+                message:
+                  `[CLIP_REPURPOSE_MASTER_OFF] Niche skipped because user has disabled viral-clips automation at the account level.`,
+              },
+            })
+            .catch(() => {});
+        }
+        continue;
+      }
       const clipNiche = ((auto.clipConfig as Record<string, unknown>)?.clipNiche as string) ?? "";
       const isSelected = selectedByNiche.has(clipNiche);
       if (allowDeactivation && auto.enabled && !isSelected) {
